@@ -122,7 +122,43 @@
     (expect (pdf-text--dedup-adjacent '("a" "" "" "b"))
             :to-equal '("a" "" "" "b"))))
 
+(describe "pdf-text-join-small-caps"
+  (it "closes gaps in a multi-word small-caps line"
+    (expect (pdf-text-join-small-caps "H OW TO D ESIGN P ROGRAMS")
+            :to-equal "HOW TO DESIGN PROGRAMS"))
+
+  (it "joins a two-pair line"
+    (expect (pdf-text-join-small-caps "S ECOND E DITION")
+            :to-equal "SECOND EDITION"))
+
+  (it "joins chained single initials"
+    (expect (pdf-text-join-small-caps
+             "A N I NTRODUCTION TO P ROGRAMMING AND C OMPUTING")
+            :to-equal "AN INTRODUCTION TO PROGRAMMING AND COMPUTING"))
+
+  (it "joins a lone-pair heading line"
+    (expect (pdf-text-join-small-caps "P REFACE") :to-equal "PREFACE"))
+
+  (it "leaves a lone A or I pair alone (real one-letter words)"
+    (expect (pdf-text-join-small-caps "A DISCOURSE") :to-equal "A DISCOURSE")
+    (expect (pdf-text-join-small-caps "I AGREE") :to-equal "I AGREE"))
+
+  (it "leaves a single pair inside a longer caps line alone"
+    (expect (pdf-text-join-small-caps "U S NAVY") :to-equal "U S NAVY"))
+
+  (it "leaves lines containing lowercase alone"
+    (expect (pdf-text-join-small-caps "see EXHIBIT A NOW and SECTION B LATER")
+            :to-equal "see EXHIBIT A NOW and SECTION B LATER"))
+
+  (it "leaves ordinary prose alone"
+    (expect (pdf-text-join-small-caps "the quick brown fox")
+            :to-equal "the quick brown fox")))
+
 (describe "pdf-text-render-pages"
+  (it "closes small-caps gaps in the pipeline"
+    (expect (pdf-text-render-pages '("H OW TO D ESIGN P ROGRAMS\nS ECOND E DITION"))
+            :to-equal '("HOW TO DESIGN PROGRAMS SECOND EDITION")))
+
   (it "strips headers, joins paragraphs, collapses doubled titles"
     (expect (pdf-text-render-pages
              '("14 | ABSTRACT\nABSTRACT ABSTRACT\n\nbody one\ncontinues"

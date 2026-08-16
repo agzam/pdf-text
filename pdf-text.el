@@ -124,10 +124,34 @@ point lower, so gettext emits the same title on two adjacent lines."
                    (equal (string-trim line) (string-trim (car out))))
         (push line out)))))
 
+(defun pdf-text-join-small-caps (line)
+  "LINE with small-caps extraction gaps closed.
+A word typeset in small caps reaches gettext as its full-size initial,
+a spurious space from the font-size change, then the tail: \"S ECOND
+E DITION\".  Word gaps look identical, so joining takes line-level
+evidence: no lowercase anywhere (small caps extract as capitals), and
+the initial-gap pattern either twice or filling the whole line.  A
+lone \"A\" or \"I\" pair stays: those are the two real one-letter
+words (\"A DISCOURSE\"), while a heading like \"P REFACE\" cannot be
+anything but the artifact."
+  (let* ((case-fold-search nil)         ; [A-Z] must not match lowercase
+         (trimmed (string-trim line))
+         (pairs (let ((n 0) (start 0))
+                  (while (string-match "\\b[A-Z] [A-Z]\\{2,\\}\\b" trimmed start)
+                    (setq n (1+ n) start (match-end 0)))
+                  n)))
+    (if (and (not (string-match-p "[a-z]" trimmed))
+             (or (<= 2 pairs)
+                 (string-match-p "\\`[B-HJ-Z] [A-Z]\\{2,\\}\\'" trimmed)))
+        (replace-regexp-in-string "\\b\\([A-Z]\\) \\([A-Z]+\\)\\b" "\\1\\2" line)
+      line)))
+
 (defun pdf-text-clean-pages (pages)
-  "PAGES with running headers/footers stripped and adjacent dupes dropped."
+  "PAGES with headers stripped, dupes dropped, small-caps gaps closed."
   (mapcar (lambda (page)
-            (string-join (pdf-text--dedup-adjacent (split-string page "\n")) "\n"))
+            (string-join (mapcar #'pdf-text-join-small-caps
+                                 (pdf-text--dedup-adjacent (split-string page "\n")))
+                         "\n"))
           (pdf-text-remove-recurring-lines pages)))
 
 (defvar pdf-text-org-escape-re
