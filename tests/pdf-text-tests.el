@@ -9,6 +9,9 @@
 
 (load-module-file "modules/pdf/autoload/pdf-text.el")
 
+(require 'org)
+(require 'org-element)
+
 (describe "pdf-text-unfill"
   (it "joins hard-wrapped lines into one paragraph line"
     (expect (pdf-text-unfill "Lorem ipsum dolor\nsit amet, consectetur\nadipiscing elit")
@@ -135,6 +138,114 @@
     (expect (pdf-text-render-pages
              '("PATTERNS OF CONFLICT\nPATTERNS OF\nCONFLICT\n\nbody"))
             :to-equal '("PATTERNS OF CONFLICT\n\nbody"))))
+
+(describe "pdf-text--escape-org-lines"
+  (it "neutralizes headline-looking bullet lines"
+    (expect (pdf-text--escape-org-lines "* item\n** sub")
+            :to-equal "\u200B* item\n\u200B** sub"))
+
+  (it "neutralizes keyword and block lines, indented too"
+    (expect (pdf-text--escape-org-lines "#+TITLE: x\n  #+end_src")
+            :to-equal "\u200B#+TITLE: x\n\u200B  #+end_src"))
+
+  (it "neutralizes drawer and property lines"
+    (expect (pdf-text--escape-org-lines ":PROPERTIES:\n  :END:")
+            :to-equal "\u200B:PROPERTIES:\n\u200B  :END:"))
+
+  (it "leaves prose, inline stars, and bare star runs alone"
+    (expect (pdf-text--escape-org-lines
+             "a * b\n*emphasis* text\n***\nplain :not a drawer: here")
+            :to-equal "a * b\n*emphasis* text\n***\nplain :not a drawer: here"))
+
+  (it "yields no org headlines once inserted into an org buffer"
+    (with-temp-buffer
+      (insert (pdf-text--escape-org-lines "* item\n** sub\nbody"))
+      (org-mode)
+      (font-lock-ensure)
+      (expect (org-element-map (org-element-parse-buffer 'headline)
+                  'headline #'identity)
+              :to-equal nil)))
+
+  (it "keeps the escaped line searchable as typed"
+    (with-temp-buffer
+      (insert (pdf-text--escape-org-lines "* item one"))
+      (goto-char (point-min))
+      (expect (search-forward "* item one" nil t) :to-be-truthy))))
+
+(describe "pdf-text--interleave-outline"
+  (it "prepends a heading of the entry's depth at its page start"
+    (expect (pdf-text--interleave-outline
+             '("front" "chapter body")
+             '(((depth . 1) (type . goto-dest) (title . "One") (page . 2))))
+            :to-equal '("front" "* One\nchapter body")))
+
+  (it "stacks several entries landing on one page in outline order"
+    (expect (pdf-text--interleave-outline
+             '("body")
+             '(((depth . 1) (title . "Ch") (page . 1))
+               ((depth . 2) (title . "Sec") (page . 1))))
+            :to-equal '("* Ch\n** Sec\nbody")))
+
+  (it "drops entries without a usable page or title, trims the rest"
+    (expect (pdf-text--interleave-outline
+             '("a" "b")
+             '(((depth . 1) (type . uri) (title . "Site") (uri . "x"))
+               ((depth . 1) (title . "Broken") (page . 0))
+               ((depth . 1) (title . "  ") (page . 1))
+               ((depth . 3) (title . " Deep ") (page . 2))))
+            :to-equal '("a" "*** Deep\nb")))
+
+  (it "returns pages unchanged without an outline"
+    (expect (pdf-text--interleave-outline '("a" "b") nil)
+            :to-equal '("a" "b"))))
+
+(describe "pdf-text org structure"
+  (it "builds headings matching the outline, escaped bullets staying text"
+    (with-temp-buffer
+      (let ((inhibit-read-only t))
+        (pdf-text-mode)
+        (pdf-text--insert-pages
+         (pdf-text--interleave-outline
+          (pdf-text-render-pages
+           '("Front matter" "Alpha starts\n\n* bullet stays text" "Beta starts"))
+          '(((depth . 1) (title . "Alpha") (page . 2))
+            ((depth . 2) (title . "Detail") (page . 2))
+            ((depth . 1) (title . "Beta") (page . 3))))))
+      (font-lock-ensure)
+      (expect (org-element-map (org-element-parse-buffer 'headline) 'headline
+                (lambda (h) (list (org-element-property :level h)
+                                  (org-element-property :raw-value h))))
+              :to-equal '((1 "Alpha") (2 "Detail") (1 "Beta")))))
+
+  (it "keeps the page map round-tripping with headings interleaved"
+    (with-temp-buffer
+      (let ((inhibit-read-only t))
+        (pdf-text-mode)
+        (pdf-text--insert-pages
+         (pdf-text--interleave-outline
+          '("front" "alpha body" "beta body")
+          '(((depth . 1) (title . "Alpha") (page . 2))
+            ((depth . 1) (title . "Beta") (page . 3))))))
+      (dolist (page '(1 2 3))
+        (goto-char (pdf-text--page-start page))
+        (expect (pdf-text-page-at-point) :to-equal page))))
+
+  (it "overview-folds chapter bodies, leaving front matter visible"
+    (with-temp-buffer
+      (let ((inhibit-read-only t))
+        (pdf-text-mode)
+        (pdf-text--insert-pages
+         (pdf-text--interleave-outline
+          '("front matter" "alpha body" "beta body")
+          '(((depth . 1) (title . "Alpha") (page . 2))
+            ((depth . 1) (title . "Beta") (page . 3)))))
+        (org-cycle-overview))
+      (goto-char (point-min))
+      (search-forward "alpha body")
+      (expect (invisible-p (1- (point))) :to-be-truthy)
+      (goto-char (point-min))
+      (search-forward "front matter")
+      (expect (invisible-p (1- (point))) :to-equal nil))))
 
 (describe "pdf-text--insert-pages"
   (it "separates pages with form-feed lines"

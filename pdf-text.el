@@ -1,9 +1,10 @@
 ;;; modules/pdf/autoload/pdf-text.el -*- lexical-binding: t; -*-
 
-;; Reflowed plain-text reading view for PDFs.  Text comes from the
-;; already-running epdfinfo (`pdf-info-gettext' per page); everything
-;; below the two entry commands is pure text transformation, testable
-;; without a PDF or pdf-tools on the load path.
+;; Reflowed reading view for PDFs.  Text comes from the already-running
+;; epdfinfo (`pdf-info-gettext' per page), the document outline
+;; (`pdf-info-outline') becomes foldable org headings; everything below
+;; the two entry commands is pure text transformation, testable without
+;; a PDF or pdf-tools on the load path.
 
 (require 'cl-lib)
 
@@ -129,16 +130,64 @@ point lower, so gettext emits the same title on two adjacent lines."
             (string-join (pdf-text--dedup-adjacent (split-string page "\n")) "\n"))
           (pdf-text-remove-recurring-lines pages)))
 
+(defvar pdf-text-org-escape-re
+  (rx bos (or (seq (+ "*") " ")
+              (seq (* (in " \t")) "#+")
+              (seq (* (in " \t")) ":" (+ (in alnum "_@#%-")) ":" (* (in " \t")) eos)))
+  "Extracted lines that org would parse as document structure.
+Headlines, keyword/block lines, drawer and property lines.")
+
+(defun pdf-text--escape-org-lines (text)
+  "TEXT with org-structural lines neutralized by a zero-width space.
+The buffer derives from `org-mode' only so the interleaved outline
+headings fold; a PDF bullet line starting `* ' must not become a real
+headline and corrupt that folding.  The invisible prefix keeps the
+line visually identical, and a plain-text search still matches it
+whole."
+  (string-join
+   (mapcar (lambda (line)
+             (if (string-match-p pdf-text-org-escape-re line)
+                 (concat "\u200B" line)
+               line))
+           (split-string text "\n"))
+   "\n"))
+
 (defun pdf-text-render-pages (pages)
-  "Raw PAGES cleaned, unfilled, and de-shadowed, ready for insertion.
+  "Raw PAGES cleaned, unfilled, de-shadowed, and org-escaped.
 The doubled-title collapse runs after unfill: the second shadow paint
 can split across raw lines (\"PATTERNS OF\" / \"CONFLICT\"), so the
-doubling only becomes a matchable line once the paragraph is joined."
+doubling only becomes a matchable line once the paragraph is joined.
+Escaping runs last, so the zero-width prefix cannot skew the doubled
+check."
   (mapcar (lambda (page)
-            (string-join (mapcar #'pdf-text--collapse-doubled
-                                 (split-string (pdf-text-unfill page) "\n"))
-                         "\n"))
+            (pdf-text--escape-org-lines
+             (string-join (mapcar #'pdf-text--collapse-doubled
+                                  (split-string (pdf-text-unfill page) "\n"))
+                          "\n")))
           (pdf-text-clean-pages pages)))
+
+(defun pdf-text--interleave-outline (pages outline)
+  "PAGES with a heading line per OUTLINE entry at its page's start.
+OUTLINE is `pdf-info-outline' output: alists with depth, title, and -
+for goto-dest entries - page.  Entries without a usable page (URI
+links, unresolved destinations reported as page 0) or without a title
+are dropped.  A nil OUTLINE returns PAGES unchanged: PDFs without an
+outline degrade to the flat view."
+  (let ((heads (make-hash-table)))
+    (dolist (entry outline)
+      (let-alist entry
+        (when (and (integerp .page) (<= 1 .page)
+                   (stringp .title) (not (string-blank-p .title)))
+          (push (concat (make-string (max 1 (or .depth 1)) ?*) " "
+                        (string-trim .title))
+                (gethash .page heads)))))
+    (let ((n 0))
+      (mapcar (lambda (page)
+                (cl-incf n)
+                (if-let* ((lines (nreverse (gethash n heads))))
+                    (concat (string-join lines "\n") "\n" page)
+                  page))
+              pages))))
 
 (defvar-local pdf-text--page-starts nil
   "Vector of buffer positions; element N-1 is where page N starts.")
@@ -171,8 +220,13 @@ Fills `pdf-text--page-starts' with each page's start position."
         (setq n (1+ n)))
       n)))
 
-(define-derived-mode pdf-text-mode text-mode "pdf-text"
-  "Reflowed plain-text reading view of a PDF."
+(define-derived-mode pdf-text-mode org-mode "pdf-text"
+  "Reflowed reading view of a PDF.
+Derives from `org-mode' so the document outline, interleaved as
+headings, gives folding, sparse trees, and heading-addressable
+positions; the extracted text itself is escaped so none of it reads
+as org structure.  Without an outline the buffer is the same flat
+text it always was."
   (setq buffer-read-only t)
   (visual-line-mode 1)
   (goto-address-mode 1)
@@ -191,18 +245,23 @@ Extracts every page through epdfinfo and lands on the page the
     (user-error "Not in a pdf-view buffer"))
   (let* ((pdf-buf (current-buffer))
          (page (pdf-view-current-page))
-         (pages (pdf-text-render-pages
-                 (mapcar (lambda (p) (pdf-info-gettext p '(0 0 1 1)))
-                         (number-sequence 1 (pdf-info-number-of-pages)))))
+         (outline (pdf-info-outline))
+         (pages (pdf-text--interleave-outline
+                 (pdf-text-render-pages
+                  (mapcar (lambda (p) (pdf-info-gettext p '(0 0 1 1)))
+                          (number-sequence 1 (pdf-info-number-of-pages))))
+                 outline))
          (buf (get-buffer-create (format "*pdf-text: %s*" (buffer-name)))))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
         (pdf-text-mode)
         (pdf-text--insert-pages pages)
-        (setq pdf-text--pdf-buffer pdf-buf)))
+        (setq pdf-text--pdf-buffer pdf-buf)
+        (when outline (org-cycle-overview))))
     (pop-to-buffer buf)
     (goto-char (pdf-text--page-start page))
+    (when outline (org-fold-show-set-visibility 'lineage))
     (recenter 0)))
 
 (defun pdf-text-show-in-pdf ()
