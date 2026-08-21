@@ -1,0 +1,5 @@
+;; Source lines the render is allowed to lose: running heads,
+;; folios, the echo of a title painted twice.  A line of prose
+;; here is a defect, not a licence.
+xiv
+Preface

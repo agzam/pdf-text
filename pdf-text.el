@@ -359,6 +359,43 @@ is what tells a bullet dash from a wrapped clause."
                         trimmed)
       (match-string 1 trimmed))))
 
+;;; Titles the outline names
+
+(defconst pdf-text-ligature-alist
+  '((?\ﬀ . "ff") (?\ﬁ . "fi") (?\ﬂ . "fl") (?\ﬃ . "ffi") (?\ﬄ . "ffl")
+    (?\ﬅ . "st") (?\ﬆ . "st"))
+  "Ligature glyphs and the letters they stand for.
+A font substitutes them for the letter pairs it sets, so the line
+carries the glyph where the outline entry carries the letters.")
+
+(defun pdf-text--normalize-title (text)
+  "TEXT reduced to the letters and digits it is made of, downcased.
+An outline entry and the line it names agree on the words and on
+little else: the line may be set in small caps, spaced out by the
+extraction, or carry the ligatures its font substitutes."
+  (let ((folded (mapconcat (lambda (char)
+                             (or (cdr (assq char pdf-text-ligature-alist))
+                                 (char-to-string char)))
+                           text "")))
+    (downcase (replace-regexp-in-string "[^[:alnum:]]" "" folded))))
+
+(defun pdf-text--heading-title (head)
+  "The title the org heading line HEAD carries, without its markers."
+  (string-trim (replace-regexp-in-string "\\`\\(?:\\*+\\|#\\+TITLE:\\)[ \t]*" ""
+                                         head)))
+
+(defun pdf-text--heading-alist (headings)
+  "HEADINGS as an alist from the normalised title to the heading line.
+The book's own title renders as a keyword rather than a headline and
+names no line of the page, so it stays out."
+  (delq nil
+        (mapcar (lambda (head)
+                  (when (string-prefix-p "*" head)
+                    (cons (pdf-text--normalize-title
+                           (pdf-text--heading-title head))
+                          head)))
+                headings)))
+
 ;;; Cleanups over line records
 
 (defun pdf-text--normalize-line (line)
@@ -433,7 +470,7 @@ keeps it out of the running-head count."
           "\\`\\(?:[Pp]age[ \t]*\\)?\\(?:[0-9]+\\|[ivxlcdmIVXLCDM]+\\|[|·—–-]+\\)\\'"
           trimmed))))
 
-(defun pdf-text-remove-marginal-lines (pages profiles)
+(defun pdf-text-remove-marginal-lines (pages profiles &optional headings)
   "PAGES without running heads, footers, and page numbers.
 PROFILES holds each page's own layout profile.
 A margin line goes when its digit-normalised form recurs across pages,
@@ -441,7 +478,14 @@ when it is nothing but a page marker, or when it shares a baseline
 with one - the folio and the running head are set as one line, which
 poppler splits at the gap between them.  Recurring forms are then
 dropped wherever they appear: a two-up scan embeds whole book pages,
-running heads included, in the middle of the text."
+running heads included, in the middle of the text.
+
+HEADINGS carries one entry per page: the heading lines the outline
+puts on it.  A book that runs its section title in the page head
+makes that title a recurring form, and the section's own heading line
+is then dropped along with the head - so a line down in the body that
+the outline names is spared.  The head itself sits in the margin band
+and goes as it should."
   (let ((counts (make-hash-table :test #'equal))
         (tolerance (* 0.5 (or (plist-get (car profiles) :leading) 0.01)))
         (candidates (cl-loop for lines in pages
@@ -459,20 +503,26 @@ running heads included, in the middle of the text."
     (cl-loop
      for lines in pages
      for marginal in candidates
+     for heads = headings then (cdr heads)
      collect
      (let ((folios (delq nil
                          (mapcar (lambda (line)
                                    (and line
                                         (pdf-text--page-marker-p (pdf-text-line-text line))
                                         (pdf-text-line-base line)))
-                                 marginal))))
+                                 marginal)))
+           (titles (mapcar #'car (pdf-text--heading-alist (car heads)))))
        (cl-remove-if
         (lambda (line)
-          (let ((text (pdf-text-line-text line))
-                (base (pdf-text-line-base line)))
+          (let* ((text (pdf-text-line-text line))
+                 (base (pdf-text-line-base line))
+                 (in-margin (memq line marginal))
+                 (named (and (not in-margin)
+                             (member (pdf-text--normalize-title text) titles))))
             (and (not (string-blank-p text))
+                 (not named)
                  (or (member (pdf-text--normalize-line text) recurring)
-                     (and (memq line marginal)
+                     (and in-margin
                           (or (pdf-text--page-marker-p text)
                               (and base
                                    (cl-some (lambda (folio)
@@ -581,12 +631,21 @@ dash itself is text and stays.")
   "Whether TEXT ends in a hyphen that a line wrap put there."
   (string-match-p pdf-text-wrap-hyphen-re text))
 
+(defvar pdf-text-extra-vocabulary nil
+  "Hyphenated words known from outside the pages being rendered.
+The document decides whether a wrap hyphen closes up or stays, and a
+window of pages is not the document: a book can hyphenate
+\"well-known\" once in chapter one and wrap it in chapter nine.  A
+corpus case carries the compounds its own pages cannot show.")
+
 (defun pdf-text--hyphenated-words (pages)
   "Words PAGES writes with an internal hyphen, downcased, as a set.
 A wrap hyphen is ambiguous - \"well-\" plus \"known\" is a compound,
 \"informa-\" plus \"tion\" is one split word - and the document itself
 settles it: a compound it hyphenates elsewhere keeps its hyphen here."
   (let ((table (make-hash-table :test #'equal)))
+    (dolist (word pdf-text-extra-vocabulary)
+      (puthash (downcase word) t table))
     (dolist (lines pages table)
       (dolist (line lines)
         (dolist (word (split-string (pdf-text-line-text line) "[ \t]+" t))
@@ -962,6 +1021,45 @@ reads better flush; the inset only means something over a passage."
          (< 1 (length (pdf-text-block-lines block)))
          (< (+ column (* 2 space)) left))))
 
+(defun pdf-text--block-height (block)
+  "The glyph height BLOCK is set at, or nil where no line measured one."
+  (when-let* ((heights (delq nil (mapcar #'pdf-text-line-height
+                                         (pdf-text-block-lines block)))))
+    (apply #'max heights)))
+
+(defun pdf-text--sidebar-title-p (block next profile)
+  "Whether BLOCK is the title of the boxed passage NEXT opens.
+A sidebar is set in from the column and in smaller type than the body,
+and its first line is its title.  On its own that line reads as a
+centred heading and prints flush, which loses the box: the title
+starts where the box starts and is set as the box is set, so it is
+part of it."
+  (let ((space (or (plist-get profile :space) 0))
+        (column (plist-get profile :left))
+        (body (plist-get profile :height))
+        (left (pdf-text-block-left block))
+        (other (pdf-text-block-left next))
+        (height (pdf-text--block-height block))
+        (box (pdf-text--block-height next)))
+    (and left other column body height box
+         (< (+ column (* 2 space)) left)
+         (< (abs (- left other)) space)
+         (< height body)
+         (< box body)
+         (pdf-text--inset-p next profile))))
+
+(defun pdf-text--inset-blocks (blocks profile)
+  "The blocks of BLOCKS that render set in from the column margin.
+A passage of more than one line that runs inset is a quotation or the
+body of a boxed sidebar; the sidebar's title line joins it, so the box
+reads as the one unit the page sets."
+  (let (out)
+    (cl-loop for (block next) on blocks
+             do (when (or (pdf-text--inset-p block profile)
+                          (and next (pdf-text--sidebar-title-p block next profile)))
+                  (push block out)))
+    (nreverse out)))
+
 (defun pdf-text--item-indent (block stack profile)
   "Indent columns for item BLOCK, and the nesting STACK it leaves behind.
 Deeper markers nest, a marker back at an earlier column closes the
@@ -992,12 +1090,73 @@ tight list - stay together."
      (t (< (* pdf-text-blank-factor leading)
            (- (pdf-text-line-base first) (pdf-text-line-base last)))))))
 
-(defun pdf-text--render-blocks (blocks profile vocabulary)
-  "BLOCKS as the page's reflowed text."
-  (let (out previous stack listing-left)
+(defvar pdf-text-heading-height 1.15
+  "Glyph height, in body heights, at which a line reads as a heading.")
+
+(defvar pdf-text-heading-max-words 14
+  "Words a block may carry and still read as a heading rather than prose.")
+
+(defun pdf-text--heading-block-p (block profile text)
+  "Whether BLOCK, joined up as TEXT, reads as a heading by how it is set.
+Bigger type than the body, few words, nothing closing the line: what a
+section title looks like on a page that spells it differently from the
+outline - a display face the extraction reads letter by letter, a
+title the page carries with its chapter number."
+  (let ((body (plist-get profile :height))
+        (heights (delq nil (mapcar #'pdf-text-line-height
+                                   (pdf-text-block-lines block)))))
+    (and body heights
+         (< (* pdf-text-heading-height body) (apply #'max heights))
+         (<= (length (split-string text)) pdf-text-heading-max-words)
+         (not (string-match-p "[.,;:]\\'" (string-trim text))))))
+
+(defun pdf-text--assign-headings (blocks profile vocabulary headings)
+  "Where each of HEADINGS goes among BLOCKS, as an alist.
+Every entry is (BLOCK HEAD REPLACE).  A title names a line, and the
+block whose words are that title is where its section starts: the
+heading is that line, so it replaces it.  A title no block spells out
+falls back on the way the page is set - the blocks that read as
+headings take what is left over, both in the order they run down the
+page - and there the heading goes above the block, because the words
+differ and the page's own are not the reflow's to drop.  A title that
+finds no block at all stays for `pdf-text--interleave-outline', which
+has only the page's start left to put it at."
+  (when-let* ((pending (pdf-text--heading-alist headings)))
+    (let ((texts (mapcar (lambda (block)
+                           (and (memq (pdf-text-block-kind block) '(para item))
+                                (pdf-text--join-block block vocabulary)))
+                         blocks))
+          assigned)
+      (cl-loop for block in blocks
+               for text in texts
+               do (when-let* ((text)
+                              (found (assoc (pdf-text--normalize-title text)
+                                            pending)))
+                    (push (list block (cdr found) t) assigned)
+                    (setq pending (delq found pending))))
+      (cl-loop for block in blocks
+               for text in texts
+               while pending
+               do (when (and text
+                             (not (assq block assigned))
+                             (pdf-text--heading-block-p block profile text))
+                    (push (list block (cdr (pop pending))) assigned)))
+      assigned)))
+
+(defun pdf-text--render-blocks (blocks profile vocabulary &optional headings)
+  "BLOCKS as the page's reflowed text.
+HEADINGS are the org heading lines the outline puts on this page.
+`pdf-text--assign-headings' says which block each one belongs at: a
+section starts where the page starts it, not where the page it sits
+on does."
+  (let ((placed (pdf-text--assign-headings blocks profile vocabulary headings))
+        (inset (pdf-text--inset-blocks blocks profile))
+        out previous stack listing-left)
     (dolist (block blocks)
-      (let ((kind (pdf-text-block-kind block))
-            indent)
+      (let* ((kind (pdf-text-block-kind block))
+             (placement (cdr (assq block placed)))
+             (head (car placement))
+             indent)
         (unless (eq 'item kind) (setq stack nil))
         (when (eq 'item kind)
           (let ((nesting (pdf-text--item-indent block stack profile)))
@@ -1009,17 +1168,21 @@ tight list - stay together."
         (unless (eq 'blank kind)
           (when (and previous (pdf-text--blank-between-p block previous profile))
             (push "" out))
-          (push (pcase kind
-                  ('mono (pdf-text--render-mono block profile listing-left))
-                  ('fixed (mapconcat (lambda (line)
-                                       (string-trim-right (pdf-text-line-text line)))
-                                     (pdf-text-block-lines block) "\n"))
-                  ('item (pdf-text--render-item block vocabulary indent))
-                  (_ (let ((text (pdf-text--collapse-doubled
-                                  (pdf-text--join-block block vocabulary))))
-                       (if (pdf-text--inset-p block profile)
-                           (concat "  " text)
-                         text))))
+          (when (and head (not (cadr placement)))
+            (push head out)
+            (push "" out))
+          (push (or (and (cadr placement) head)
+                    (pcase kind
+                      ('mono (pdf-text--render-mono block profile listing-left))
+                      ('fixed (mapconcat (lambda (line)
+                                           (string-trim-right (pdf-text-line-text line)))
+                                         (pdf-text-block-lines block) "\n"))
+                      ('item (pdf-text--render-item block vocabulary indent))
+                      (_ (let ((text (pdf-text--collapse-doubled
+                                      (pdf-text--join-block block vocabulary))))
+                           (if (memq block inset)
+                               (concat "  " text)
+                             text)))))
                 out)
           (setq previous block))))
     (string-join (nreverse out) "\n")))
@@ -1033,52 +1196,71 @@ tight list - stay together."
   "Extracted lines that org would parse as document structure.
 Headlines, keyword/block lines, drawer and property lines.")
 
-(defun pdf-text--escape-org-lines (text)
+(defun pdf-text--escape-org-lines (text &optional headings)
   "TEXT with org-structural lines neutralized by a zero-width space.
 The buffer derives from `org-mode' only so the interleaved outline
 headings fold; a PDF bullet line starting `* ' must not become a real
 headline and corrupt that folding.  The invisible prefix keeps the
 line visually identical, and a plain-text search still matches it
-whole."
+whole.  HEADINGS are the heading lines the render placed itself: they
+are the structure the folding is for, and stay as they are."
   (string-join
    (mapcar (lambda (line)
-             (if (string-match-p pdf-text-org-escape-re line)
+             (if (and (string-match-p pdf-text-org-escape-re line)
+                      (not (member line headings)))
                  (concat "\u200B" line)
                line))
            (split-string text "\n"))
    "\n"))
 
-(defun pdf-text-render-pages (pages &optional layouts)
+(defun pdf-text-render-lines (pages &optional headings)
+  "PAGES of `pdf-text-line' records reflowed into readable text.
+One string per page.  Body geometry, running heads and the
+hyphenation vocabulary are all read across the whole of PAGES, so a
+page never renders on its own: the same page reads differently
+depending on what it arrives with.
+
+HEADINGS carries one entry per page of PAGES - the org heading lines
+the outline puts on it, from `pdf-text-page-headings'.  A page gets
+its headings at the lines they name; only the caller knows which page
+of the book each entry of PAGES is, which is why they arrive already
+lined up."
+  (let* ((page-lines (pdf-text-clean-pages pages))
+         (profile (pdf-text--profile page-lines))
+         (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                           page-lines))
+         (page-lines (pdf-text-remove-marginal-lines page-lines profiles headings))
+         (vocabulary (pdf-text--hyphenated-words page-lines)))
+    (cl-loop for lines in page-lines
+             for page-profile in profiles
+             for heads = headings then (cdr heads)
+             collect (pdf-text--escape-org-lines
+                      (pdf-text--render-blocks (pdf-text--blocks lines page-profile)
+                                               page-profile vocabulary (car heads))
+                      (car heads)))))
+
+(defun pdf-text-render-pages (pages &optional layouts headings)
   "Raw PAGES reflowed into readable text, one string per page.
 PAGES are `pdf-info-gettext' strings and LAYOUTS the matching
 `pdf-info-charlayout' output.  The layout is what carries paragraph
 structure - indents, line fullness, the air between baselines - so a
-page without one falls back to character heuristics."
-  (let* ((page-lines (pdf-text-clean-pages
-                      (cl-loop for text in pages
-                               for rest = layouts then (cdr rest)
-                               collect (pdf-text--page-lines text (car rest)))))
-         (profile (pdf-text--profile page-lines))
-         (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
-                           page-lines))
-         (page-lines (pdf-text-remove-marginal-lines page-lines profiles))
-         (vocabulary (pdf-text--hyphenated-words page-lines)))
-    (cl-loop for lines in page-lines
-             for page-profile in profiles
-             collect (pdf-text--escape-org-lines
-                      (pdf-text--render-blocks (pdf-text--blocks lines page-profile)
-                                               page-profile vocabulary)))))
+page without one falls back to character heuristics.  HEADINGS is
+what `pdf-text-render-lines' takes."
+  (pdf-text-render-lines
+   (cl-loop for text in pages
+            for rest = layouts then (cdr rest)
+            collect (pdf-text--page-lines text (car rest)))
+   headings))
 
-(defun pdf-text--interleave-outline (pages outline)
-  "PAGES with a heading line per OUTLINE entry at its page's start.
+(defun pdf-text--outline-heads (outline)
+  "OUTLINE as org heading lines, keyed by the page each one names.
 OUTLINE is `pdf-info-outline' output: alists with depth, title, and -
 for goto-dest entries - page.  Entries without a usable page (URI
 links, unresolved destinations reported as page 0) or without a title
 are dropped.  A lone top-level entry is the book's own title, not a
 chapter - as a headline it would fold the entire book into one line -
 so it renders as a #+TITLE keyword and every deeper entry promotes to
-close the gap.  A nil OUTLINE returns PAGES unchanged: PDFs without
-an outline degrade to the flat view."
+close the gap."
   (let* ((usable (cl-remove-if-not
                   (lambda (entry)
                     (let-alist entry
@@ -1103,13 +1285,35 @@ an outline degrade to the flat view."
                (t (concat (make-string (funcall depth-of entry) ?*)
                           " " (string-trim .title))))
               (gethash .page heads))))
-    (let ((n 0))
-      (mapcar (lambda (page)
-                (cl-incf n)
-                (if-let* ((lines (nreverse (gethash n heads))))
-                    (concat (string-join lines "\n") "\n" page)
-                  page))
-              pages))))
+    (dolist (page (hash-table-keys heads) heads)
+      (puthash page (nreverse (gethash page heads)) heads))))
+
+(defun pdf-text-page-headings (outline first count)
+  "The heading lines OUTLINE puts on COUNT pages starting at page FIRST.
+One entry per page, which is how `pdf-text-render-lines' takes them:
+the reflow places a heading at the line naming it, and only the caller
+knows which page of the book each page it renders is."
+  (let ((heads (pdf-text--outline-heads outline)))
+    (cl-loop for page from first below (+ first count)
+             collect (gethash page heads))))
+
+(defun pdf-text--interleave-outline (pages outline)
+  "PAGES with every OUTLINE heading its page does not already carry.
+The reflow places a heading at the line the outline names, when the
+page has that line; what is left over - a title no line of the page
+reproduces - goes at the page's start, which is the only thing left
+to say about where its section begins.  A nil OUTLINE returns PAGES
+unchanged: PDFs without an outline degrade to the flat view."
+  (let ((heads (pdf-text--outline-heads outline))
+        (n 0))
+    (mapcar (lambda (page)
+              (cl-incf n)
+              (if-let* ((placed (split-string page "\n"))
+                        (missing (cl-remove-if (lambda (head) (member head placed))
+                                               (gethash n heads))))
+                  (concat (string-join missing "\n") "\n" page)
+                page))
+            pages)))
 
 (defvar pdf-text-synth-heading-max-fraction 0.6
   "Widest fraction of the page's wrap column a synthesized heading fills.")
@@ -1229,7 +1433,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 3
+(defconst pdf-text-render-version 4
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")
@@ -1291,7 +1495,9 @@ text - a scan - signals an error instead of an empty buffer."
                       (buffer-name)
                       (cl-count-if-not #'string-blank-p raw) (length raw)))
         (let* ((outline (pdf-info-outline))
-               (rendered (pdf-text-render-pages raw layouts))
+               (rendered (pdf-text-render-pages
+                          raw layouts
+                          (pdf-text-page-headings outline 1 (length raw))))
                (pages (if outline
                           (pdf-text--interleave-outline rendered outline)
                         (pdf-text--synthesize-headings rendered))))

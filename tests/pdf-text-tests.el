@@ -43,13 +43,15 @@ step down from the line above in leadings (1 by default)."
                 (apply #'pdf-text-tests--line (car spec) :base base props)))
             specs)))
 
-(defun pdf-text-tests--render (specs)
-  "SPECS rendered as one page, the way `pdf-text-render-pages' renders it."
+(defun pdf-text-tests--render (specs &optional headings)
+  "SPECS rendered as one page, the way `pdf-text-render-pages' renders it.
+HEADINGS are the org heading lines the outline puts on that page."
   (let* ((lines (pdf-text-tests--page specs))
          (profile (pdf-text--profile (list lines)))
          (page (pdf-text--page-profile lines profile)))
     (pdf-text--render-blocks (pdf-text--blocks lines page) page
-                             (pdf-text--hyphenated-words (list lines)))))
+                             (pdf-text--hyphenated-words (list lines))
+                             headings)))
 
 (defun pdf-text-tests--glyphs (text &optional x0 base width height)
   "Charlayout glyphs for TEXT laid out from X0 at BASE, WIDTH per glyph.
@@ -445,6 +447,19 @@ monospaced one."
   (it "rejoins a drop cap without a space"
     (expect (pdf-text--join-lines "T" "his book") :to-equal "This book")))
 
+(describe "pdf-text-extra-vocabulary"
+  (it "keeps a compound the pages at hand never spell out"
+    ;; a window of a book is not the book: the compound may be
+    ;; hyphenated three chapters away from the page that wraps it
+    (let ((pdf-text-extra-vocabulary '("well-known")))
+      (expect (pdf-text-render-pages '("many well-\nknown algorithms"))
+              :to-equal '("many well-known algorithms"))))
+
+  (it "leaves an ordinary split word alone"
+    (let ((pdf-text-extra-vocabulary '("well-known")))
+      (expect (pdf-text-render-pages '("the informa-\ntion here"))
+              :to-equal '("the information here")))))
+
 (describe "pdf-text--hyphenated-words"
   (it "collects the document's own hyphenated words, stripped and downcased"
     (let ((table (pdf-text--hyphenated-words
@@ -544,7 +559,42 @@ monospaced one."
            (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
                              pages)))
       (expect (length (car (pdf-text-remove-marginal-lines pages profiles)))
-              :to-equal 6))))
+              :to-equal 6)))
+
+  (it "spares the heading line a book also runs in its page head"
+    ;; the head repeats the section's title on every page of it, which
+    ;; makes the title a recurring form; dropping it wherever it appears
+    ;; takes the section's own heading with it
+    (let* ((pages (cl-loop
+                   for n from 1 to 3
+                   collect (pdf-text-tests--page
+                            `(("Supervised Segmentation" :x0 0.10 :x1 0.32
+                               :base 0.06)
+                              (,(number-to-string n) :x0 0.85 :x1 0.87 :base 0.06)
+                              ,@(when (eql n 1)
+                                  '(("Supervised Segmentation" :base 0.20
+                                     :x1 0.32 :height 0.024)))
+                              ("body line one filling the column" :base 0.30)
+                              ("body line two filling the column")
+                              ("body line three ends here" :x1 0.40)))))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages))
+           (headings '(("** Supervised Segmentation") nil nil)))
+      (expect (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                      (pdf-text-remove-marginal-lines pages profiles headings))
+              :to-equal
+              (cons '("Supervised Segmentation"
+                      "body line one filling the column"
+                      "body line two filling the column"
+                      "body line three ends here")
+                    (make-list 2 '("body line one filling the column"
+                                   "body line two filling the column"
+                                   "body line three ends here"))))
+      ;; the title is a recurring form either way: what spares the line
+      ;; is the outline naming it, and nothing else
+      (expect (length (car (pdf-text-remove-marginal-lines pages profiles)))
+              :to-equal 3))))
 
 (describe "pdf-text--collapse-doubled"
   (it "collapses a line painted twice"
@@ -654,6 +704,28 @@ monospaced one."
     (expect (pdf-text-render-pages '("* bullet line" "#+keyword line"))
             :to-equal '("\u200B* bullet line" "\u200B#+keyword line"))))
 
+(describe "pdf-text-render-lines"
+  (it "renders the same text the raw-page entry point does"
+    ;; the corpus harness stores line records and enters here, so the two
+    ;; entry points have to be the same pipeline rather than two copies
+    (let ((raw '("ABSTRACT | 14\nbody one runs to a full width line\ncontinues"
+                 "ABSTRACT | 15\nbody two"
+                 "ABSTRACT | 16\nbody three"
+                 "ABSTRACT | 17\nbody four")))
+      (expect (pdf-text-render-lines
+               (mapcar (lambda (text) (pdf-text--page-lines text)) raw))
+              :to-equal (pdf-text-render-pages raw))))
+
+  (it "reflows records carrying geometry"
+    (expect (pdf-text-render-lines
+             (list (pdf-text-tests--page
+                    '(("First paragraph line one" :x1 0.90)
+                      ("ends here." :x1 0.30)
+                      ("Second paragraph opens" :x0 0.13 :x1 0.90)
+                      ("and ends." :x1 0.28)))))
+            :to-equal
+            '("First paragraph line one ends here.\n\nSecond paragraph opens and ends."))))
+
 (describe "pdf-text--escape-org-lines"
   (it "neutralizes headline-looking bullet lines"
     (expect (pdf-text--escape-org-lines "* item\n** sub")
@@ -729,7 +801,192 @@ monospaced one."
 
   (it "returns pages unchanged without an outline"
     (expect (pdf-text--interleave-outline '("a" "b") nil)
-            :to-equal '("a" "b"))))
+            :to-equal '("a" "b")))
+
+  (it "leaves a heading the page already carries where the render put it"
+    ;; the reflow places a heading at the line naming it; prepending it
+    ;; again is the Round 4 defect - the section then owns nothing and
+    ;; the line it names reads as prose below it
+    (expect (pdf-text--interleave-outline
+             '("body before\n\n** Sec\n\nbody after")
+             '(((depth . 2) (title . "Sec") (page . 1))
+               ((depth . 2) (title . "Elsewhere") (page . 1))))
+            :to-equal '("** Elsewhere\nbody before\n\n** Sec\n\nbody after"))))
+
+(describe "pdf-text-page-headings"
+  (it "lines the outline's headings up with the pages a render is given"
+    (expect (pdf-text-page-headings
+             '(((depth . 1) (title . "One") (page . 1))
+               ((depth . 2) (title . "Deep") (page . 3))
+               ((depth . 2) (title . "Deeper") (page . 3))
+               ((depth . 1) (title . "Two") (page . 5)))
+             2 3)
+            :to-equal '(nil ("** Deep" "** Deeper") nil)))
+
+  (it "has nothing to line up without an outline"
+    (expect (pdf-text-page-headings nil 1 2) :to-equal '(nil nil))))
+
+(describe "pdf-text--normalize-title"
+  (it "reads through case, spacing and ligatures"
+    (expect (pdf-text--normalize-title "The ﬁnal Word")
+            :to-equal (pdf-text--normalize-title "THE  FINAL  WORD")))
+
+  (it "reads through the punctuation a title is set with"
+    (expect (pdf-text--normalize-title "A note on the starred, “curvy road” sections")
+            :to-equal (pdf-text--normalize-title
+                       "A note on the starred curvy road sections")))
+
+  (it "keeps two titles that differ by a word apart"
+    (expect (pdf-text--normalize-title "Sections and Notation")
+            :not :to-equal (pdf-text--normalize-title "Sections and Notations"))))
+
+(describe "headings placed at the line they name"
+  (it "renders the line an outline title names as the heading itself"
+    (expect (pdf-text-tests--render
+             '(("The section before this one ends on this line." :x1 0.62)
+               ("Other Skills and Concepts" :x1 0.45 :height 0.024 :gap 1.6)
+               ("There are many other concepts and skills that a" :x1 0.90)
+               ("practical data scientist needs to know." :x1 0.50))
+             '("** Other Skills and Concepts"))
+            :to-equal
+            (string-join
+             '("The section before this one ends on this line."
+               ""
+               "** Other Skills and Concepts"
+               ""
+               "There are many other concepts and skills that a practical data scientist needs to know.")
+             "\n")))
+
+  (it "matches the title through the small caps the line is set in"
+    (expect (pdf-text-tests--render
+             '(("OTHER SKILLS AND CONCEPTS" :x1 0.45 :height 0.024)
+               ("There are many other concepts and skills that a" :x1 0.90)
+               ("practical data scientist needs to know." :x1 0.50))
+             '("** Other Skills and Concepts"))
+            :to-equal
+            (string-join
+             '("** Other Skills and Concepts"
+               ""
+               "There are many other concepts and skills that a practical data scientist needs to know.")
+             "\n")))
+
+  (it "places each of a page's headings at its own line"
+    (expect (pdf-text-tests--render
+             '(("Other Skills and Concepts" :x1 0.45 :height 0.024)
+               ("There are many other concepts and skills to know." :x1 0.60)
+               ("Sections and Notation" :x1 0.41 :height 0.024 :gap 1.6)
+               ("In addition to occasional footnotes, the book" :x1 0.90)
+               ("contains boxed sidebars." :x1 0.35))
+             '("** Other Skills and Concepts" "** Sections and Notation"))
+            :to-equal
+            (string-join
+             '("** Other Skills and Concepts"
+               ""
+               "There are many other concepts and skills to know."
+               ""
+               "** Sections and Notation"
+               ""
+               "In addition to occasional footnotes, the book contains boxed sidebars.")
+             "\n")))
+
+  (it "leaves a line the outline has no heading for as the prose it is"
+    (expect (pdf-text-tests--render
+             '(("Some Other Big Line" :x1 0.45 :height 0.024)
+               ("Body text follows the line above it here." :x1 0.55)))
+            :to-equal "Some Other Big Line\n\nBody text follows the line above it here."))
+
+  (it "gives a title no line spells out the line the page sets as a heading"
+    ;; the outline carries the chapter number the page does not, so the
+    ;; words never match; the size of the line is what is left to go on,
+    ;; and the page's own words stay under the heading rather than go
+    (expect (pdf-text-tests--render
+             '(("Body of the section before it ends on this line." :x1 0.62)
+               ("Similarity, Neighbors, and Clusters" :x1 0.45 :height 0.024 :gap 1.6)
+               ("Body text follows the line above it here." :x1 0.55))
+             '("* Chapter 6. Similarity, Neighbors, and Clusters"))
+            :to-equal
+            (string-join '("Body of the section before it ends on this line."
+                           ""
+                           "* Chapter 6. Similarity, Neighbors, and Clusters"
+                           ""
+                           "Similarity, Neighbors, and Clusters"
+                           ""
+                           "Body text follows the line above it here.")
+                         "\n")))
+
+  (it "reads no heading into a line the page sets like its body"
+    (expect (pdf-text-tests--render
+             '(("Body of the section before it ends on this line." :x1 0.62)
+               ("A line no larger than the body" :x1 0.45 :gap 1.6)
+               ("Body text follows the line above it here." :x1 0.55))
+             '("* Chapter 6. Similarity, Neighbors, and Clusters"))
+            :to-equal
+            (string-join '("Body of the section before it ends on this line."
+                           ""
+                           "A line no larger than the body"
+                           "Body text follows the line above it here.")
+                         "\n")))
+
+  (it "keeps a placed heading unescaped, so org folds the section"
+    (let ((page (car (pdf-text-render-lines
+                      (list (pdf-text-tests--page
+                             '(("Sections and Notation" :x1 0.41 :height 0.024)
+                               ("In addition to occasional footnotes, the" :x1 0.90)
+                               ("book contains boxed sidebars." :x1 0.40))))
+                      '(("** Sections and Notation"))))))
+      (expect page :to-equal
+              "** Sections and Notation\n\nIn addition to occasional footnotes, the book contains boxed sidebars.")
+      (with-temp-buffer
+        (insert page)
+        (org-mode)
+        (font-lock-ensure)
+        (expect (org-element-map (org-element-parse-buffer 'headline)
+                    'headline (lambda (h) (org-element-property :raw-value h)))
+                :to-equal '("Sections and Notation"))))))
+
+(describe "passages set in from the column margin"
+  (it "sets a boxed sidebar in as one unit, its title line included"
+    ;; the box is smaller than the body and starts at its own left edge;
+    ;; its first line is its title, and printing that line flush would
+    ;; leave the box a quotation with no head
+    (expect (pdf-text-tests--render
+             '(("Body prose at the column margin runs the full measure")
+               ("and carries on across a second line of the paragraph")
+               ("and a third and a fourth line at the same measure")
+               ("and a fifth line of the very same paragraph")
+               ("and a sixth before it ends." :x1 0.62)
+               ("A note on the starred sections" :x0 0.25 :x1 0.55
+                :height 0.012 :gap 1.6)
+               ("The occasional mathematical details are relegated to" :x0 0.25
+                :x1 0.78 :height 0.012)
+               ("optional starred sections." :x0 0.25 :x1 0.42 :height 0.012)))
+            :to-equal
+            (string-join
+             '("Body prose at the column margin runs the full measure and carries on across a second line of the paragraph and a third and a fourth line at the same measure and a fifth line of the very same paragraph and a sixth before it ends."
+               ""
+               "  A note on the starred sections"
+               "  The occasional mathematical details are relegated to optional starred sections.")
+             "\n")))
+
+  (it "reads a lone inset line the body follows as the heading it is"
+    ;; one line in from the margin with no box under it is a centred
+    ;; heading or an attribution, and reads flush
+    (expect (pdf-text-tests--render
+             '(("Body prose at the column margin runs the full measure")
+               ("and carries on across a second line of the paragraph")
+               ("and a third and a fourth line at the same measure")
+               ("and a fifth line of the very same paragraph")
+               ("and a sixth before it ends." :x1 0.62)
+               ("A Centred Line" :x0 0.25 :x1 0.55 :gap 1.6)
+               ("Body prose resumes at the margin and runs on." :x1 0.62 :gap 1.6)))
+            :to-equal
+            (string-join
+             '("Body prose at the column margin runs the full measure and carries on across a second line of the paragraph and a third and a fourth line at the same measure and a fifth line of the very same paragraph and a sixth before it ends."
+               ""
+               "A Centred Line"
+               ""
+               "Body prose resumes at the margin and runs on.")
+             "\n"))))
 
 (describe "pdf-text--synthesize-headings"
   (it "promotes short numbered section lines, dot count as level"
