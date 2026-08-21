@@ -31,10 +31,14 @@
 (defun lint-checkdoc (file)
   "Whether checkdoc has nothing to say about FILE.
 `checkdoc-file' reports through `warn', so the warning buffer is the
-verdict: it exists only once something failed."
-  (when-let* ((buffer (get-buffer "*Warnings*")))
-    (kill-buffer buffer))
-  (checkdoc-file file)
+verdict: it exists only once something failed.  The experimental verb
+check stays off - Emacs 29 and 30 default it on and 32 does not, and it
+reads any word from its list as a leading verb, so \"the runs it leaves
+behind\" comes back as a mood error."
+  (let ((checkdoc-verb-check-experimental-flag nil))
+    (when-let* ((buffer (get-buffer "*Warnings*")))
+      (kill-buffer buffer))
+    (checkdoc-file file))
   (if-let* ((buffer (get-buffer "*Warnings*")))
       (progn (message "CHECKDOC %s:\n%s" file
                       (with-current-buffer buffer (buffer-string)))
