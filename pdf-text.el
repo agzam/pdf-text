@@ -1,12 +1,319 @@
 ;;; modules/pdf/autoload/pdf-text.el -*- lexical-binding: t; -*-
 
-;; Reflowed reading view for PDFs.  Text comes from the already-running
-;; epdfinfo (`pdf-info-gettext' per page), the document outline
-;; (`pdf-info-outline') becomes foldable org headings; everything below
-;; the two entry commands is pure text transformation, testable without
-;; a PDF or pdf-tools on the load path.
+;; Reflowed reading view for PDFs.  Text and glyph geometry both come
+;; from the already-running epdfinfo (`pdf-info-charlayout' per page,
+;; `pdf-info-gettext' as the fallback for a page without one), and the
+;; document outline (`pdf-info-outline') becomes foldable org headings.
+;; Everything below the entry commands is pure transformation, testable
+;; without a PDF or pdf-tools on the load path.
+;;
+;; poppler hands out lines, never blocks: it computes paragraphs and
+;; columns internally and then discards them while serving text, so the
+;; reflow has to rebuild that structure from the glyph boxes - where a
+;; line ends, how far the next one starts in, how much air sits between
+;; their baselines.
 
 (require 'cl-lib)
+
+;;; Statistics over glyph measurements
+
+(defun pdf-text--quantile (values fraction)
+  "Order statistic of VALUES at FRACTION; nil when VALUES is empty."
+  (when values
+    (let* ((sorted (sort (copy-sequence values) #'<))
+           (index (min (1- (length sorted))
+                       (floor (* fraction (length sorted))))))
+      (nth index sorted))))
+
+(defun pdf-text--variation (values)
+  "Coefficient of variation of VALUES; nil below two values."
+  (when (< 1 (length values))
+    (let ((mean (/ (apply #'+ values) (float (length values)))))
+      (when (< 0 mean)
+        (/ (sqrt (/ (apply #'+ (mapcar (lambda (v) (expt (- v mean) 2)) values))
+                    (float (length values))))
+           mean)))))
+
+(defun pdf-text--mode-value (values bucket &optional weights)
+  "Most common of VALUES once rounded into BUCKET-wide steps.
+The mode, not an extreme: a page number outside the column, a heading
+at twice the body size, or a stray wide line cannot move it.  WEIGHTS,
+a parallel list, says how much each value counts - by ink width, a
+column of page numbers no longer outvotes a column of prose it happens
+to match line for line."
+  (let ((counts (make-hash-table :test #'eql)) (best 0) mode)
+    (cl-loop for v in values
+             for w in (or weights (make-list (length values) 1))
+             do (let* ((key (round (/ v bucket)))
+                       (n (+ w (gethash key counts 0))))
+                  (puthash key n counts)
+                  (when (< best n) (setq best n mode key))))
+    (and mode (* mode bucket))))
+
+;;; Line records
+
+(cl-defstruct (pdf-text-line (:constructor pdf-text-line-create)
+                             (:copier nil))
+  "One line of a page: its text and the geometry of the glyphs that drew it.
+Coordinates are page-relative.  The geometry slots are nil for a line
+built without a layout, and every rule that reads one falls back to
+character heuristics."
+  text
+  kind                                  ; nil for prose, `mono' for a listing
+  align                                 ; nil, `right' or `center'
+  x0 x1                                 ; ink edges, left and right
+  top bot                               ; ink extent, highest and lowest
+  base                                  ; median glyph bottom: the baseline
+  height                                ; glyph height, upper quantile of the ink
+  space                                 ; median width of the line's spaces
+  cv                                    ; advance variation; ~0 is monospaced
+  first-width)                          ; width of the first word
+
+(defun pdf-text--layout-lines (layout)
+  "Charlayout LAYOUT split at newline glyphs into per-line glyph lists.
+Entries are (CHAR (X0 Y0 X1 Y1)); the newline glyphs poppler emits
+mirror the line breaks of the gettext stream."
+  (let (lines cur)
+    (dolist (e layout)
+      (if (eq (car e) ?\n)
+          (progn (push (nreverse cur) lines) (setq cur nil))
+        (push e cur)))
+    (when cur (push (nreverse cur) lines))
+    (nreverse lines)))
+
+(defun pdf-text--glyph-line (glyphs)
+  "Line record for GLYPHS, one line of `pdf-info-charlayout' output."
+  (let* ((text (apply #'string (mapcar #'car glyphs)))
+         (ink (cl-remove-if (lambda (g) (memq (car g) '(?\s ?\t))) glyphs))
+         (boxes (mapcar #'cadr ink))
+         (spaces (cl-loop for g in glyphs
+                          when (eq (car g) ?\s)
+                          collect (- (nth 2 (cadr g)) (nth 0 (cadr g)))))
+         (advances (cl-loop for (a b) on glyphs while b
+                            for step = (- (nth 0 (cadr b)) (nth 0 (cadr a)))
+                            when (< 0 step) collect step))
+         (opening (cl-position-if (lambda (g) (not (eq (car g) ?\s))) glyphs))
+         (gap (and opening (cl-position ?\s glyphs :key #'car :start opening))))
+    (if (null boxes)
+        (pdf-text-line-create :text text)
+      (pdf-text-line-create
+       :text text
+       :x0 (apply #'min (mapcar (lambda (b) (nth 0 b)) boxes))
+       :x1 (apply #'max (mapcar (lambda (b) (nth 2 b)) boxes))
+       :top (apply #'min (mapcar (lambda (b) (nth 1 b)) boxes))
+       :bot (apply #'max (mapcar (lambda (b) (nth 3 b)) boxes))
+       ;; the median glyph bottom is the baseline: descenders and
+       ;; superscripts are too few to move it, unlike the extremes
+       :base (pdf-text--quantile (mapcar (lambda (b) (nth 3 b)) boxes) 0.5)
+       ;; the upper quantile of ink heights tracks the font size, where
+       ;; the median would only report the x-height of the line's vowels
+       :height (pdf-text--quantile
+                (mapcar (lambda (b) (- (nth 3 b) (nth 1 b))) boxes) 0.8)
+       :space (pdf-text--quantile spaces 0.5)
+       :cv (pdf-text--variation advances)
+       :first-width (- (nth 2 (cadr (nth (1- (or gap (length glyphs))) glyphs)))
+                       (nth 0 (cadr (nth opening glyphs))))))))
+
+(defun pdf-text--layout-text (layout)
+  "The plain text of LAYOUT's glyph stream, newlines included."
+  (apply #'string (delq nil (mapcar #'car layout))))
+
+(defun pdf-text--page-lines (text &optional layout)
+  "Line records for one page, from LAYOUT when it exists, else from TEXT.
+Taking the text from the same glyph stream as its geometry is what
+keeps the two aligned; the fallback path reflows on character
+heuristics alone."
+  (if layout
+      (mapcar #'pdf-text--glyph-line (pdf-text--layout-lines layout))
+    (mapcar (lambda (line) (pdf-text-line-create :text line))
+            (split-string text "\n"))))
+
+(defun pdf-text--profile (pages)
+  "Modal body geometry of PAGES, each a list of `pdf-text-line'.
+A plist: :height glyph height, :leading baseline step, :left and
+:right column edges, :space word gap.  Document-wide, because a page
+of listings or a page of table rows has no representative body
+geometry of its own."
+  (let (heights lefts rights widths spaces leadings)
+    (dolist (lines pages)
+      (let (prev)
+        (dolist (line lines)
+          (when (pdf-text-line-x0 line)
+            (push (pdf-text-line-height line) heights)
+            (push (pdf-text-line-x0 line) lefts)
+            (push (pdf-text-line-x1 line) rights)
+            (push (- (pdf-text-line-x1 line) (pdf-text-line-x0 line)) widths)
+            (when (pdf-text-line-space line)
+              (push (pdf-text-line-space line) spaces))
+            (when-let* ((base (pdf-text-line-base line))
+                        (previous (and prev (pdf-text-line-base prev)))
+                        (step (- base previous))
+                        ((< 0 step))
+                        ((< step 0.1)))
+              (push step leadings))
+            (setq prev line)))))
+    (let ((height (pdf-text--mode-value heights 0.001)))
+      (list :height height
+            :leading (pdf-text--mode-value leadings 0.002)
+            :left (pdf-text--mode-value lefts 0.005 widths)
+            :right (pdf-text--mode-value rights 0.005 widths)
+            :space (let ((median (pdf-text--quantile spaces 0.5)))
+                     (cond ((and median height) (max median (/ height 3.0)))
+                           (median)
+                           (height (/ height 3.0))))))))
+
+(defvar pdf-text-page-profile-min-lines 8
+  "Body lines a page needs before its own column edges are trusted.")
+
+(defun pdf-text--page-profile (lines profile)
+  "PROFILE with the column edges this page's own body lines establish.
+Mirrored margins put the body column at a different offset on facing
+pages, so one document-wide edge is wrong for half the book.  Only
+lines set at the body size have a say: running heads, margin notes and
+figure captions have margins of their own.  A page too thin to speak
+for itself keeps the document's edges."
+  (let* ((height (plist-get profile :height))
+         (body (cl-remove-if-not
+                (lambda (line)
+                  (and (pdf-text-line-x0 line)
+                       (or (null height)
+                           (null (pdf-text-line-height line))
+                           (< (abs (- (pdf-text-line-height line) height))
+                              (* 0.15 height)))))
+                lines)))
+    (if (< (length body) pdf-text-page-profile-min-lines)
+        profile
+      (let ((page (copy-sequence profile))
+            (widths (mapcar (lambda (line)
+                              (- (pdf-text-line-x1 line) (pdf-text-line-x0 line)))
+                            body)))
+        (plist-put page :left
+                   (pdf-text--mode-value (mapcar #'pdf-text-line-x0 body)
+                                         0.005 widths))
+        (plist-put page :right
+                   (pdf-text--mode-value (mapcar #'pdf-text-line-x1 body)
+                                         0.005 widths))
+        page))))
+
+;;; Line classification
+
+(defvar pdf-text-monospace-variation 0.05
+  "Advance variation below which a line reads as monospaced.
+A listing's glyph advances are identical, proportional type varies by
+0.2 and more, so the two never meet in the middle.")
+
+(defvar pdf-text-monospace-min-glyphs 8
+  "Glyphs a line needs before its advances can call it monospaced.
+Proportional fonts set digits to one width, so a page number or a
+table cell of figures reads as monospaced until enough letters have
+had their say.")
+
+(defun pdf-text--similar-height-p (a b)
+  "Whether lines A and B were set in the same size."
+  (let ((ha (pdf-text-line-height a))
+        (hb (pdf-text-line-height b)))
+    (and ha hb (< 0 (max ha hb))
+         (< (/ (abs (- ha hb)) (max ha hb)) 0.15))))
+
+(defun pdf-text--mark-monospace (lines)
+  "Tag the monospaced LINES, which are listings and must not reflow.
+A line too short to judge on its own takes the tag from a neighbour of
+the same size: a closing brace alone on its line belongs to the
+listing above it."
+  (dolist (line lines)
+    (when-let* ((cv (pdf-text-line-cv line)))
+      (when (and (< cv pdf-text-monospace-variation)
+                 (<= pdf-text-monospace-min-glyphs
+                     (length (string-trim (pdf-text-line-text line)))))
+        (setf (pdf-text-line-kind line) 'mono))))
+  (let ((vec (vconcat lines)))
+    (dotimes (i (length vec))
+      (let ((line (aref vec i)))
+        (unless (or (pdf-text-line-kind line)
+                    (<= pdf-text-monospace-min-glyphs
+                        (length (string-trim (pdf-text-line-text line)))))
+          (when (cl-some (lambda (j)
+                           (and (<= 0 j) (< j (length vec))
+                                (eq 'mono (pdf-text-line-kind (aref vec j)))
+                                (pdf-text--similar-height-p line (aref vec j))))
+                         (list (1- i) (1+ i)))
+            (setf (pdf-text-line-kind line) 'mono))))))
+  lines)
+
+(defun pdf-text--aligned-pair (line other profile)
+  "How LINE sits against neighbouring OTHER: `right', `center' or nil.
+A run whose right edges agree while its left edges move is set flush
+right; one whose centres agree while both edges move is centred.
+Either way the left edge means nothing about paragraphs.  Justified
+prose looks flush right too, so the run must also stay clear of the
+column's own right edge."
+  (let ((space (or (plist-get profile :space) 0.005))
+        (column-right (plist-get profile :right))
+        (column-left (plist-get profile :left))
+        (leading (or (plist-get profile :leading) 0.02)))
+    (when (and (pdf-text-line-x0 other)
+               (pdf-text--similar-height-p line other)
+               (pdf-text-line-base line) (pdf-text-line-base other)
+               (< (abs (- (pdf-text-line-base line) (pdf-text-line-base other)))
+                  (* 2 leading))
+               column-right
+               (< (pdf-text-line-x1 line) (- column-right (* 2 space))))
+      (let ((left-step (abs (- (pdf-text-line-x0 line) (pdf-text-line-x0 other))))
+            (right-step (abs (- (pdf-text-line-x1 line) (pdf-text-line-x1 other))))
+            (centre-step (abs (- (+ (pdf-text-line-x0 line) (pdf-text-line-x1 line))
+                                 (+ (pdf-text-line-x0 other) (pdf-text-line-x1 other))))))
+        (cond
+         ((and (< right-step space) (< space left-step)) 'right)
+         ((and (< centre-step (* 2 space))
+               (< space left-step)
+               (< space right-step)
+               column-left
+               (< (+ column-left (* 2 space)) (pdf-text-line-x0 line)))
+          'center))))))
+
+(defun pdf-text--shares-measure-p (line other align profile)
+  "Whether LINE is set to the same ALIGN measure as neighbouring OTHER."
+  (let ((space (or (plist-get profile :space) 0.005))
+        (leading (or (plist-get profile :leading) 0.02)))
+    (and (pdf-text-line-x0 line) (pdf-text-line-x0 other)
+         (pdf-text--similar-height-p line other)
+         (pdf-text-line-base line) (pdf-text-line-base other)
+         (< (abs (- (pdf-text-line-base line) (pdf-text-line-base other)))
+            (* 2 leading))
+         (pcase align
+           ('right (< (abs (- (pdf-text-line-x1 line) (pdf-text-line-x1 other)))
+                      space))
+           ('center (< (abs (- (+ (pdf-text-line-x0 line) (pdf-text-line-x1 line))
+                               (+ (pdf-text-line-x0 other) (pdf-text-line-x1 other))))
+                       (* 2 space)))))))
+
+(defun pdf-text--mark-alignment (lines profile)
+  "Tag the LINES of right-aligned and centred runs.
+A pair of lines establishes the run, then it spreads to the neighbours
+sharing its measure: one line of a flush-right note can start where
+the line above it did by coincidence, and that is no reason to read it
+as prose."
+  (let ((vec (vconcat lines)))
+    (dotimes (i (length vec))
+      (let ((line (aref vec i)))
+        (when (pdf-text-line-x0 line)
+          (dolist (j (list (1- i) (1+ i)))
+            (when (and (<= 0 j) (< j (length vec))
+                       (null (pdf-text-line-align line)))
+              (setf (pdf-text-line-align line)
+                    (pdf-text--aligned-pair line (aref vec j) profile)))))))
+    (dolist (step '(1 -1))
+      (dotimes (k (length vec))
+        (let* ((i (if (< 0 step) k (- (length vec) 1 k)))
+               (j (- i step))
+               (line (aref vec i)))
+          (when (and (<= 0 j) (< j (length vec))
+                     (null (pdf-text-line-align line)))
+            (let ((align (pdf-text-line-align (aref vec j))))
+              (when (and align
+                         (pdf-text--shares-measure-p line (aref vec j) align profile))
+                (setf (pdf-text-line-align line) align))))))))
+  lines)
 
 (defvar pdf-text-preformatted-indent 4
   "Leading spaces at which a line counts as preformatted.")
@@ -24,239 +331,35 @@ sentences, and those lines must stay joinable.")
       (string-match-p (format " \\{%d\\}" pdf-text-preformatted-space-run)
                       (string-trim line))))
 
-(defun pdf-text--join-lines (para line)
-  "Append LINE to PARA, absorbing a wrap hyphen or a drop cap.
-A word-attached trailing hyphen means the wrap split mid-word: a
-lowercase continuation is the split word's tail (drop the hyphen), any
-other continuation is a compound broken at its own hyphen (keep it);
-neither wants a space.  A dangling hyphen is ordinary text.  A PARA
-that is one capital letter is a drop cap - the oversized initial
-extracts as its own line - and rejoins its word without a space."
-  (let ((case-fold-search nil))         ; [[:lower:]] must not match S
-    (cond
-     ((string-match-p "\\`[[:upper:]]\\'" para)
-      (concat para line))
-     ((not (string-match-p "[[:alnum:]]-\\'" para))
-      (concat para " " line))
-     ((string-match-p "\\`[[:lower:]]" line)
-      (concat (substring para 0 -1) line))
-     (t (concat para line)))))
+(defconst pdf-text-bullet-re
+  "[•‣▪▫◦∙·◆◇○●□■▶▸✓✔➤]"
+  "Glyphs that open a list item and mean nothing else.")
 
-(defvar pdf-text-full-line-fraction 0.7
-  "Fraction of the page's widest line at which a line counts as full.
-Only a full line was wrapped by the renderer mid-paragraph; a shorter
-one ended its paragraph - or its TOC entry - so the next line starts
-fresh.")
+(defconst pdf-text-weak-bullet-re
+  "[-–—*+]"
+  "Glyphs that open a list item only where the line is indented.
+A dash or an asterisk at the margin is far more often a footnote
+marker or a wrapped clause than a bullet.")
 
-(defun pdf-text--page-width (lines)
-  "Widest trimmed line length in LINES, the page's wrap-column estimate.
-Preformatted lines are layout, not prose, and stay out of the
-estimate."
-  (apply #'max 0 (mapcar (lambda (l) (length (string-trim l)))
-                         (cl-remove-if #'pdf-text--preformatted-p lines))))
+(defconst pdf-text-numeral-re
+  "(?[0-9]\\{1,3\\}[.)]\\|(?[ivxIVX]\\{1,5\\})\\|(?[ivx]\\{1,5\\}[.)]\\|([a-zA-Z])"
+  "Enumerators that open a list item: 1. 2) (3) iv. (a).")
 
-(defun pdf-text-unfill (text &optional geometry doc-right)
-  "Reflow hard-wrapped TEXT into one line per paragraph.
-Blank lines separate paragraphs and pass through; preformatted-looking
-lines (see `pdf-text--preformatted-p') pass through verbatim.  A line
-continues the open paragraph only while the previous line was full or
-ended mid-word in a wrap hyphen; anything after a shorter line - a
-TOC entry, a heading, a paragraph's natural end - starts fresh.  So
-does an indented line (a first-line-indented paragraph, rendered with
-a two-space prefix) or one opening with a number and a capitalized
-word (a numbered entry or section heading; a lowercase continuation
-like \"10 cover it\" still joins).
+(defun pdf-text--list-marker (text &optional indented)
+  "The list marker TEXT opens with, else nil.
+INDENTED reports that the line starts in from the column margin, which
+is what tells a bullet dash from a wrapped clause."
+  (let ((trimmed (string-trim-left text)))
+    (when (string-match (format "\\`\\(%s\\|%s%s\\)[ \t]+[^ \t]"
+                                pdf-text-bullet-re
+                                (if indented
+                                    (format "%s\\|" pdf-text-weak-bullet-re)
+                                  "")
+                                pdf-text-numeral-re)
+                        trimmed)
+      (match-string 1 trimmed))))
 
-GEOMETRY, when given, is the page's `pdf-text--page-geometry' table
-and DOC-RIGHT the document-wide `pdf-text--doc-right-edge' profile.
-Glyph edges then decide.  Full means the line's right edge reaches
-the column margin minus the profile's slack - immune to the
-char-count inflation that small-type footnote lines cause.  Indented
-means the left edge sits `pdf-text-indent-min' to
-`pdf-text-indent-max' past the modal margin, restoring the
-paragraph-start signal gettext strips from the print - except when
-the previous line starts at the same inset (a drop-cap or block-quote
-body, not a paragraph start) or when a full line that is itself inset
-hangs a deeper continuation under itself (a wrapped list item).  A
-lone capital letter with an inset next line is a drop cap and rejoins
-its word.  A line dedenting out of a two-line-or-longer inset run
-ends that block (a quote, a listing) rather than continuing its
-paragraph - except the run a drop cap indents, whose paragraph really
-does resume at the margin.  Lines without geometry fall back to
-character counts against `pdf-text-full-line-fraction' of the page's
-widest line."
-  (let* ((lines (split-string text "\n"))
-         (full-chars (* pdf-text-full-line-fraction (pdf-text--page-width lines)))
-         (geos (and geometry
-                    (mapcar (lambda (l) (gethash (string-trim l) geometry)) lines)))
-         (col-left (and geos (pdf-text--modal-edge geos #'car)))
-         (slack (or (cdr-safe doc-right) pdf-text-full-slack))
-         (col-right (let ((page (and geos (pdf-text--modal-edge geos #'cdr))))
-                      (if (and page doc-right) (max page (car doc-right))
-                        (or page (car-safe doc-right)))))
-         (case-fold-search nil)
-         out para open prev-geo prev-full (inset-run 0) para-drop-cap)
-    (cl-loop
-     for line in lines
-     for rest = geos then (cdr rest)
-     for geo = (car rest)
-     do
-     (cond
-      ((string-blank-p line)
-       (when para (push para out) (setq para nil para-drop-cap nil))
-       (push "" out))
-      ((pdf-text--preformatted-p line)
-       (when para (push para out) (setq para nil para-drop-cap nil))
-       (push line out))
-      (t
-       (let* ((trimmed (string-trim line))
-              (geo-full (and geo col-right
-                             (<= (- col-right slack) (cdr geo))))
-              (indented
-               (if (and geo col-left)
-                   (let ((delta (- (car geo) col-left)))
-                     (and (< pdf-text-indent-min delta)
-                          (<= delta pdf-text-indent-max)
-                          ;; same inset as the previous line: the body of a
-                          ;; drop cap or block quote, not a paragraph start
-                          (not (and prev-geo
-                                    (< (abs (- (car geo) (car prev-geo))) 0.003)))
-                          ;; deeper than a full line that is itself inset (a
-                          ;; wrapped list item): its hanging continuation.  A
-                          ;; full line at the margin is just a paragraph
-                          ;; ending flush, no bar to the next one's indent.
-                          (not (and prev-geo prev-full
-                                    (< (+ col-left 0.003) (car prev-geo))
-                                    (< (+ (car prev-geo) 0.003) (car geo))))))
-                 (string-match-p "\\`[ \t]" line)))
-              (dedent (and geo prev-geo
-                           (< (car geo) (- (car prev-geo) 0.003))
-                           (<= 2 inset-run)
-                           (not para-drop-cap)))
-              (drop-cap (and para geo indented
-                             (string-match-p "\\`[[:upper:]]\\'" para))))
-         (if (and para
-                  (or drop-cap
-                      (and open
-                           (not indented)
-                           (not dedent)
-                           (not (string-match-p
-                                 "\\`[0-9]+\\(?:\\.[0-9]+\\)*\\.? +[[:upper:]]"
-                                 line)))))
-             (progn
-               (setq para (pdf-text--join-lines para trimmed))
-               (when drop-cap (setq para-drop-cap t)))
-           (when para (push para out))
-           (setq para (if (and geo indented)
-                          (concat "  " trimmed)
-                        (string-trim-right line))
-                 para-drop-cap nil))
-         (setq inset-run (if (and geo prev-geo
-                                  (< (abs (- (car geo) (car prev-geo))) 0.003))
-                             (1+ inset-run)
-                           1))
-         (setq open (or geo-full
-                        (<= full-chars (length trimmed))
-                        (string-match-p "[[:alnum:]]-\\'" trimmed)
-                        ;; a drop cap's lone capital must stay joinable
-                        (and geo (string-match-p "\\`[[:upper:]]\\'" trimmed)))
-               prev-geo geo
-               prev-full geo-full)))))
-    (when para (push para out))
-    (string-join (nreverse out) "\n")))
-
-(defvar pdf-text-indent-min 0.01
-  "Least x-offset past the column edge that reads as a first-line indent.
-Relative to page width.  Print indents measure 0.02-0.04; font-metric
-jitter (an inline code glyph opening a wrapped line) reaches 0.006,
-so the floor sits between the two.")
-
-(defvar pdf-text-indent-max 0.05
-  "Largest x-offset past the column edge that still reads as an indent.
-Lines starting farther right - centered headings, a second column -
-carry no paragraph signal.")
-
-(defun pdf-text--layout-lines (layout)
-  "Charlayout LAYOUT split at newline glyphs into per-line glyph lists.
-Entries are (CHAR (X0 Y0 X1 Y1)); the newline glyphs poppler emits
-mirror the line breaks of the gettext stream."
-  (let (lines cur)
-    (dolist (e layout)
-      (if (eq (car e) ?\n)
-          (progn (push (nreverse cur) lines) (setq cur nil))
-        (push e cur)))
-    (when cur (push (nreverse cur) lines))
-    (nreverse lines)))
-
-(defvar pdf-text-full-slack 0.025
-  "How far short of the column's right edge a full line may still end.
-Relative to page width.  Justified text lands within 0.002 of the
-edge on every wrapped line; a paragraph's last line falls short by an
-order of magnitude more.")
-
-(defvar pdf-text-full-slack-ragged 0.12
-  "The `pdf-text-full-slack' for ragged-right documents.
-Unjustified lines stop wherever the next word no longer fits, up to a
-long word short of the margin, so calling them full takes an order of
-magnitude more slack.")
-
-(defun pdf-text--page-geometry (text layout)
-  "Trimmed-line-text -> (X0 . X1) table for TEXT's lines, from LAYOUT.
-LAYOUT is `pdf-info-charlayout' output.  Content lookup, not line
-position, lets the geometry survive the line-dropping cleanups
-between extraction and `pdf-text-unfill'; a layout line that does not
-match its gettext line verbatim contributes nothing, so drift fails
-open to the character heuristics."
-  (when layout
-    (let ((table (make-hash-table :test #'equal)))
-      (cl-loop for lline in (pdf-text--layout-lines layout)
-               for tline in (split-string text "\n")
-               when (and lline
-                         (equal tline (apply #'string (mapcar #'car lline))))
-               do (puthash (string-trim tline)
-                           (cons (nth 0 (cadr (car lline)))
-                                 (nth 2 (cadr (car (last lline)))))
-                           table))
-      table)))
-
-(defun pdf-text--modal-edge (geos accessor)
-  "Most common ACCESSOR-side edge among GEOS entries; a column margin.
-The mode, not an extremum: a stray page number or margin note outside
-the column cannot pose as the text edge, on either side."
-  (let ((counts (make-hash-table :test #'eql)) (mode nil) (best 0))
-    (dolist (g geos)
-      (when g
-        (let* ((key (round (* 200 (funcall accessor g))))
-               (n (1+ (gethash key counts 0))))
-          (puthash key n counts)
-          (when (< best n) (setq best n mode key)))))
-    (and mode (/ mode 200.0))))
-
-(defun pdf-text--doc-right-edge (geometries)
-  "Right-margin profile (RIGHT . SLACK) across GEOMETRIES' lines.
-RIGHT is the modal right edge - document-wide, because a page
-dominated by a code listing or display material has no prevailing
-right edge of its own.  SLACK is `pdf-text-full-slack' when the lines
-near the margin concentrate tightly on it (justified type), else
-`pdf-text-full-slack-ragged': unjustified lines wrap a variable word
-short of the margin and need the room."
-  (let (all)
-    (dolist (table geometries)
-      (when table
-        (maphash (lambda (_ geo) (push geo all)) table)))
-    (when-let* ((right (pdf-text--modal-edge all #'cdr)))
-      (let ((near 0) (tight 0))
-        (dolist (geo all)
-          (let ((short (- right (cdr geo))))
-            (when (<= (abs short) 0.15) (cl-incf near))
-            (when (<= (abs short) 0.005) (cl-incf tight))))
-        (cons right
-              (if (and (< 0 near) (<= 0.5 (/ (float tight) near)))
-                  pdf-text-full-slack
-                pdf-text-full-slack-ragged))))))
-
-(defvar pdf-text-recurring-min-count 3
-  "Occurrences at page edges before a line counts as a running header/footer.")
+;;; Cleanups over line records
 
 (defun pdf-text--normalize-line (line)
   "LINE with digit runs collapsed to #, for header/footer matching.
@@ -264,36 +367,118 @@ short of the margin and need the room."
   (string-trim (replace-regexp-in-string "[0-9]+" "#" line)))
 
 (defun pdf-text--edge-lines (lines)
-  "First and last non-blank line of LINES, once each."
-  (let ((nb (cl-remove-if #'string-blank-p lines)))
-    (cl-remove-duplicates (list (car nb) (car (last nb))) :test #'equal)))
+  "First and last non-blank line of LINES, once each.
+The fallback for a page with no geometry: running heads open and close
+the plain text stream."
+  (let ((nb (cl-remove-if (lambda (line)
+                            (string-blank-p (pdf-text-line-text line)))
+                          lines)))
+    (cl-remove-duplicates (delq nil (list (car nb) (car (last nb)))))))
 
-(defun pdf-text-remove-recurring-lines (pages)
-  "PAGES (raw strings) without running-header/footer lines.
-A line whose digit-normalized form shows up as the first or last
-non-blank line of `pdf-text-recurring-min-count' pages is layout, not
-text.  Qualified forms are then dropped anywhere they appear: 2-up
-spread pages embed whole book pages, headers included, mid-text."
-  (let ((page-lines (mapcar (lambda (p) (split-string p "\n")) pages))
-        (counts (make-hash-table :test #'equal)))
-    (dolist (lines page-lines)
-      (dolist (l (pdf-text--edge-lines lines))
-        (when l
-          (cl-incf (gethash (pdf-text--normalize-line l) counts 0)))))
-    (let (recurring)
-      (maphash (lambda (form n)
-                 (when (<= pdf-text-recurring-min-count n)
-                   (push form recurring)))
-               counts)
-      (mapcar (lambda (lines)
-                (string-join
-                 (cl-remove-if (lambda (l)
-                                 (and (not (string-blank-p l))
-                                      (member (pdf-text--normalize-line l)
-                                              recurring)))
-                               lines)
-                 "\n"))
-              page-lines))))
+(defvar pdf-text-margin-band 0.12
+  "Fraction of the page, at top and bottom, where running heads sit.")
+
+(defvar pdf-text-recurring-min-count 3
+  "Occurrences in the margin band before a line counts as a running head.")
+
+(defun pdf-text--neighbour-gap (vec index step)
+  "Baseline distance from line INDEX of VEC to its neighbour along STEP.
+Lines sharing a baseline are one visual line that poppler split at a
+wide gap - a page number and its running head - so the scan walks past
+them.  Nil at the end of the page."
+  (let* ((line (aref vec index))
+         (base (pdf-text-line-base line))
+         (i (+ index step))
+         found)
+    (while (and base (<= 0 i) (< i (length vec)) (not found))
+      (when-let* ((other (pdf-text-line-base (aref vec i)))
+                  ((< 0.0001 (abs (- other base)))))
+        (setq found (abs (- other base))))
+      (setq i (+ i step)))
+    found))
+
+(defun pdf-text--margin-candidates (lines profile)
+  "Lines of one page that sit apart in the top or bottom margin band.
+Narrow, inside the band, and cut off from the body by more than two
+leadings - a footnote block fails the last two tests, which is what
+keeps it out of the running-head count."
+  (let ((leading (plist-get profile :leading))
+        (left (plist-get profile :left))
+        (right (plist-get profile :right)))
+    (if (not (and leading left right (cl-some #'pdf-text-line-base lines)))
+        (pdf-text--edge-lines lines)
+      (let ((vec (vconcat lines))
+            (width (- right left))
+            candidates)
+        (dotimes (i (length vec))
+          (let* ((line (aref vec i))
+                 (base (pdf-text-line-base line))
+                 (before (pdf-text--neighbour-gap vec i -1))
+                 (after (pdf-text--neighbour-gap vec i 1)))
+            (when (and base
+                       (or (< base pdf-text-margin-band)
+                           (< (- 1.0 pdf-text-margin-band) base))
+                       (< (- (pdf-text-line-x1 line) (pdf-text-line-x0 line))
+                          (* 0.6 width))
+                       (or (null before) (< (* 2 leading) before))
+                       (or (null after) (< (* 2 leading) after)))
+              (push line candidates))))
+        (nreverse candidates)))))
+
+(defun pdf-text--page-marker-p (text)
+  "Whether TEXT is a bare page marker: a number, a numeral, or a rule."
+  (let ((trimmed (string-trim text)))
+    (and (not (string-blank-p trimmed))
+         (string-match-p
+          "\\`\\(?:[Pp]age[ \t]*\\)?\\(?:[0-9]+\\|[ivxlcdmIVXLCDM]+\\|[|·—–-]+\\)\\'"
+          trimmed))))
+
+(defun pdf-text-remove-marginal-lines (pages profiles)
+  "PAGES without running heads, footers, and page numbers.
+PROFILES holds each page's own layout profile.
+A margin line goes when its digit-normalised form recurs across pages,
+when it is nothing but a page marker, or when it shares a baseline
+with one - the folio and the running head are set as one line, which
+poppler splits at the gap between them.  Recurring forms are then
+dropped wherever they appear: a two-up scan embeds whole book pages,
+running heads included, in the middle of the text."
+  (let ((counts (make-hash-table :test #'equal))
+        (tolerance (* 0.5 (or (plist-get (car profiles) :leading) 0.01)))
+        (candidates (cl-loop for lines in pages
+                             for profile in profiles
+                             collect (pdf-text--margin-candidates lines profile)))
+        recurring)
+    (dolist (lines candidates)
+      (dolist (line lines)
+        (when (and line (not (string-blank-p (pdf-text-line-text line))))
+          (cl-incf (gethash (pdf-text--normalize-line (pdf-text-line-text line))
+                            counts 0)))))
+    (maphash (lambda (form n)
+               (when (<= pdf-text-recurring-min-count n) (push form recurring)))
+             counts)
+    (cl-loop
+     for lines in pages
+     for marginal in candidates
+     collect
+     (let ((folios (delq nil
+                         (mapcar (lambda (line)
+                                   (and line
+                                        (pdf-text--page-marker-p (pdf-text-line-text line))
+                                        (pdf-text-line-base line)))
+                                 marginal))))
+       (cl-remove-if
+        (lambda (line)
+          (let ((text (pdf-text-line-text line))
+                (base (pdf-text-line-base line)))
+            (and (not (string-blank-p text))
+                 (or (member (pdf-text--normalize-line text) recurring)
+                     (and (memq line marginal)
+                          (or (pdf-text--page-marker-p text)
+                              (and base
+                                   (cl-some (lambda (folio)
+                                              (< (abs (- base folio)) tolerance))
+                                            folios))))))))
+        lines)))))
 
 (defun pdf-text--collapse-doubled (line)
   "Collapse LINE when it reads as the same string twice.
@@ -311,14 +496,15 @@ string doubled around a single space is that artifact, not prose."
       line)))
 
 (defun pdf-text--dedup-adjacent (lines)
-  "LINES with runs of identical non-blank neighbors collapsed to one.
-The other face of the shadow-draw artifact: the second paint lands a
-point lower, so gettext emits the same title on two adjacent lines."
+  "LINES with runs of identical non-blank neighbours collapsed to one.
+The shadow-draw artifact: the second paint lands a point lower, so
+gettext emits the same title on two adjacent lines."
   (let (out)
     (dolist (line lines (nreverse out))
       (unless (and out
-                   (not (string-blank-p line))
-                   (equal (string-trim line) (string-trim (car out))))
+                   (not (string-blank-p (pdf-text-line-text line)))
+                   (equal (string-trim (pdf-text-line-text line))
+                          (string-trim (pdf-text-line-text (car out)))))
         (push line out)))))
 
 (defun pdf-text--drop-split-echoes (lines)
@@ -330,15 +516,16 @@ are that echo, not text.  A blank line ends the candidate run."
   (let (out)
     (while lines
       (let* ((line (pop lines))
-             (trimmed (string-trim line)))
+             (trimmed (string-trim (pdf-text-line-text line))))
         (push line out)
-        (unless (string-blank-p line)
+        (unless (string-blank-p trimmed)
           (let ((acc "") (rest lines) (n 0) matched)
             (while (and rest
                         (not matched)
-                        (not (string-blank-p (car rest)))
+                        (not (string-blank-p (pdf-text-line-text (car rest))))
                         (< (length acc) (length trimmed)))
-              (setq acc (string-trim (concat acc " " (string-trim (car rest))))
+              (setq acc (string-trim
+                         (concat acc " " (string-trim (pdf-text-line-text (car rest)))))
                     n (1+ n)
                     rest (cdr rest))
               (when (equal acc trimmed) (setq matched t)))
@@ -368,13 +555,476 @@ anything but the artifact."
       line)))
 
 (defun pdf-text-clean-pages (pages)
-  "PAGES with headers stripped, dupes dropped, small-caps gaps closed."
-  (mapcar (lambda (page)
-            (string-join (mapcar #'pdf-text-join-small-caps
-                                 (pdf-text--drop-split-echoes
-                                  (pdf-text--dedup-adjacent (split-string page "\n"))))
-                         "\n"))
-          (pdf-text-remove-recurring-lines pages)))
+  "PAGES of line records with paint artifacts and small-caps gaps gone."
+  (mapcar (lambda (lines)
+            (let ((kept (pdf-text--drop-split-echoes
+                         (pdf-text--dedup-adjacent lines))))
+              (dolist (line kept kept)
+                (setf (pdf-text-line-text line)
+                      (pdf-text-join-small-caps (pdf-text-line-text line))))))
+          pages))
+
+;;; Joining lines into blocks
+
+(defconst pdf-text-wrap-hyphen-re "[[:alnum:]][-\u2010\u2011\u00AD]\\'"
+  "A word-attached hyphen at a line's end: the renderer split a word.
+Books use the ASCII hyphen, the typographic one, and the soft hyphen
+interchangeably for this.")
+
+(defconst pdf-text-closed-dash-re "[[:alnum:]][\u2013\u2014]\\'"
+  "An en or em dash at a line's end.
+English typography sets both closed up against their neighbours, so
+the wrap put no space there and the join must not add one - but the
+dash itself is text and stays.")
+
+(defun pdf-text--wrap-hyphen-p (text)
+  "Whether TEXT ends in a hyphen that a line wrap put there."
+  (string-match-p pdf-text-wrap-hyphen-re text))
+
+(defun pdf-text--hyphenated-words (pages)
+  "Words PAGES writes with an internal hyphen, downcased, as a set.
+A wrap hyphen is ambiguous - \"well-\" plus \"known\" is a compound,
+\"informa-\" plus \"tion\" is one split word - and the document itself
+settles it: a compound it hyphenates elsewhere keeps its hyphen here."
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (lines pages table)
+      (dolist (line lines)
+        (dolist (word (split-string (pdf-text-line-text line) "[ \t]+" t))
+          (when (string-match "[[:alnum:]]-[[:alnum:]]" word)
+            (puthash (downcase (string-trim word "[^[:alnum:]]+" "[^[:alnum:]]+"))
+                     t table)))))))
+
+(defun pdf-text--join-lines (para line &optional vocabulary)
+  "Append LINE to PARA, absorbing a wrap hyphen or a drop cap.
+A word-attached trailing hyphen means the wrap split mid-word: a
+lowercase continuation is the split word's tail, so the hyphen goes -
+unless VOCABULARY, the document's own hyphenated words, shows the two
+halves belong to a compound.  Any other continuation is a compound
+broken at its own hyphen and keeps it; neither wants a space.  An en
+or em dash closes up the same way but survives, being text rather
+than a wrap artifact.  A dangling hyphen is ordinary text.  A PARA
+that is one capital letter
+is a drop cap - the oversized initial extracts as its own line - and
+rejoins its word without a space."
+  (let ((case-fold-search nil))         ; [[:lower:]] must not match S
+    (cond
+     ((string-match-p "\\`[[:upper:]]\\'" para)
+      (concat para line))
+     ((string-match-p pdf-text-closed-dash-re para)
+      (concat para line))
+     ((not (pdf-text--wrap-hyphen-p para))
+      (concat para " " line))
+     ((not (string-match-p "\\`[[:lower:]]" line))
+      (concat para line))
+     ((and vocabulary
+           (gethash (downcase
+                     (concat (car (last (split-string (substring para 0 -1) "[ \t]+" t)))
+                             "-"
+                             (string-trim (car (split-string line "[ \t]+" t))
+                                          "" "[^[:alnum:]]+")))
+                    vocabulary))
+      (concat (substring para 0 -1) "-" line))
+     (t (concat (substring para 0 -1) line)))))
+
+;;; Blocks
+
+(cl-defstruct (pdf-text-block (:constructor pdf-text-block-create)
+                              (:copier nil))
+  "A run of lines that belong together: a paragraph, a list item, a listing."
+  kind                                  ; para, item, mono, fixed or blank
+  reason                                ; why the block before it ended
+  lines                                 ; in reverse while it grows
+  left body-x marker drop-cap)
+
+(defvar pdf-text-gap-factor 1.35
+  "Baseline step, in modal leadings, that opens a new block.
+Renderers pad between paragraphs and around headings; within a
+paragraph the step is the leading itself.")
+
+(defvar pdf-text-blank-factor 1.25
+  "Baseline step, in modal leadings, that renders as a blank line.
+Below it the page put no air between the two blocks either, so a table
+of contents or a stanza stays tight.")
+
+(defvar pdf-text-size-tolerance 0.2
+  "Relative glyph-height change that separates two blocks.")
+
+(defvar pdf-text-full-line-fraction 0.7
+  "Fraction of the page's widest line at which a line counts as full.
+The fallback for a page with no geometry, where glyph edges cannot say
+whether the renderer wrapped the line or the paragraph ended.")
+
+(defun pdf-text--page-width (lines)
+  "Widest trimmed line length in LINES, the page's wrap-column estimate.
+Preformatted lines are layout, not prose, and stay out of the
+estimate."
+  (apply #'max 0
+         (mapcar (lambda (line) (length (string-trim (pdf-text-line-text line))))
+                 (cl-remove-if (lambda (line)
+                                 (pdf-text--preformatted-p (pdf-text-line-text line)))
+                               lines))))
+
+(defun pdf-text--mono-p (line)
+  "Whether LINE was set in a monospaced face."
+  (eq 'mono (pdf-text-line-kind line)))
+
+(defun pdf-text--drop-cap-p (line profile)
+  "Whether LINE is an oversized initial standing alone on its line."
+  (let ((case-fold-search nil)
+        (height (pdf-text-line-height line))
+        (body (plist-get profile :height)))
+    (and (string-match-p "\\`[[:upper:]]\\'" (string-trim (pdf-text-line-text line)))
+         (or (null height) (null body) (< (* 1.4 body) height)))))
+
+(defun pdf-text--gap-break-p (line prev profile)
+  "Whether the step from PREV's baseline to LINE's opens a new block."
+  (when-let* ((leading (plist-get profile :leading))
+              (base (pdf-text-line-base line))
+              (previous (pdf-text-line-base prev))
+              ((< 0 leading)))
+    (let ((step (- base previous)))
+      (or (< step (- (* 0.5 leading)))  ; back up the page: another column
+          (< (* pdf-text-gap-factor leading) step)))))
+
+(defun pdf-text--size-break-p (line prev profile)
+  "Whether LINE and PREV differ enough in glyph size to be separate blocks."
+  (when-let* ((body (plist-get profile :height))
+              (this (pdf-text-line-height line))
+              (that (pdf-text-line-height prev))
+              ((< 0 body)))
+    (< pdf-text-size-tolerance (/ (abs (- this that)) body))))
+
+(defun pdf-text--supports-break-p (prev line)
+  "Whether the words meeting at PREV and LINE read as a break in the text.
+Sentence punctuation closing one line and a capital, a digit or an
+opening quote starting the next is what a paragraph boundary looks
+like in words.  Flush-right and centred runs need the confirmation,
+because every line of theirs falls short of a margin without ending
+anything."
+  (let ((case-fold-search nil))
+    (and (string-match-p "[.!?:;)”’\"']\\'" (string-trim (pdf-text-line-text prev)))
+         (string-match-p "\\`[[:upper:][:digit:]“\"'(]"
+                         (string-trim (pdf-text-line-text line))))))
+
+(defun pdf-text--ends-short-p (line prev right profile page-width)
+  "Whether PREV ended its block instead of wrapping into LINE.
+The renderer breaks a line when the next word no longer fits, so a
+line that left room for LINE's first word ended for a reason of its
+own: the paragraph, the list item or the entry stopped there.  RIGHT
+is the margin they wrap against.  PAGE-WIDTH carries the
+character-count fallback for a page with no geometry."
+  (let ((space (or (plist-get profile :space) 0))
+        (x1 (pdf-text-line-x1 prev))
+        (width (pdf-text-line-first-width line)))
+    (if (and right x1 width)
+        (< (+ x1 space width) right)
+      (< (length (string-trim (pdf-text-line-text prev)))
+         (* pdf-text-full-line-fraction page-width)))))
+
+(defun pdf-text--indent-break-p (line block profile)
+  "Whether LINE starts in from its block's body margin: a new paragraph.
+Silent over a right-aligned or centred run, where the left edge moves
+for reasons of typesetting."
+  (let ((space (or (plist-get profile :space) 0))
+        (body (pdf-text-block-body-x block))
+        (x0 (pdf-text-line-x0 line)))
+    (cond
+     ((pdf-text-line-align line) nil)
+     ((and body x0) (< (+ body space) x0))
+     (t (and (null x0) (string-match-p "\\`[ \t]" (pdf-text-line-text line)))))))
+
+(defun pdf-text--dedent-break-p (line block profile)
+  "Whether LINE falls back left of its block's body margin, ending it.
+A quotation, a listing or a list item runs inset; prose resuming at
+the column margin is no longer part of it.  A drop cap is the
+exception: it holds the first lines of its own paragraph inset, and
+the paragraph really does go on once the text clears the initial."
+  (let* ((space (or (plist-get profile :space) 0))
+         (column (plist-get profile :left))
+         (body (pdf-text-block-body-x block))
+         (x0 (pdf-text-line-x0 line)))
+    (and body x0 (< x0 (- body space))
+         (null (pdf-text-line-align line))
+         (not (and (pdf-text-block-drop-cap block)
+                   column
+                   (< (abs (- x0 column)) (* 2 space)))))))
+
+(defun pdf-text--item-break-p (line prev block profile page-width)
+  "Whether LINE opens a list item.
+The marker alone is not enough - a wrapped clause can start with a
+dash - so the line must also stand apart from its predecessor: a step
+in from the margin, extra air above, a predecessor that ended short,
+or a list already running."
+  (let* ((space (or (plist-get profile :space) 0))
+         (x0 (pdf-text-line-x0 line))
+         (left (plist-get profile :left))
+         (indented (and x0 left (< (+ left space) x0))))
+    (and (pdf-text--list-marker (pdf-text-line-text line) (or indented (null x0)))
+         (or (eq 'item (pdf-text-block-kind block))
+             (and x0 (pdf-text-line-x0 prev)
+                  (< space (abs (- x0 (pdf-text-line-x0 prev)))))
+             (pdf-text--gap-break-p line prev profile)
+             (pdf-text--ends-short-p line prev (plist-get profile :right)
+                                     profile page-width)))))
+
+(defun pdf-text--break-reason (line block profile page-width)
+  "Why LINE cannot continue BLOCK, or nil when it can.
+Ordered by strength of evidence: a wrap hyphen or a drop cap forces
+the join, a change of face or a list marker forces the break, and the
+geometry decides the rest."
+  (let ((prev (car (pdf-text-block-lines block)))
+        (kind (pdf-text-block-kind block)))
+    (cond
+     ((string-blank-p (pdf-text-line-text line)) 'blank)
+     ((eq 'blank kind) 'text)
+     ((not (eq (pdf-text--mono-p line) (eq 'mono kind))) 'face)
+     ((eq 'mono kind) (and (pdf-text--gap-break-p line prev profile) 'gap))
+     ((eq 'fixed kind)
+      (if (pdf-text--preformatted-p (pdf-text-line-text line))
+          (and (pdf-text--gap-break-p line prev profile) 'gap)
+        'fixed))
+     ((pdf-text--preformatted-p (pdf-text-line-text line)) 'fixed)
+     ((pdf-text--drop-cap-p prev profile) nil)
+     ((pdf-text--wrap-hyphen-p (pdf-text-line-text prev)) nil)
+     ((pdf-text--item-break-p line prev block profile page-width) 'item)
+     ((pdf-text--gap-break-p line prev profile) 'gap)
+     ((pdf-text--size-break-p line prev profile) 'size)
+     ((pdf-text--indent-break-p line block profile) 'indent)
+     ((pdf-text--dedent-break-p line block profile) 'dedent))))
+
+(defun pdf-text--block-margin (block profile)
+  "Right margin BLOCK's lines wrap against.
+A block starting at the column margin wraps against the column's own
+right edge.  One starting elsewhere - a margin note, a pull quote, an
+indented list item - wraps against its own widest line instead;
+measured against the column's, every line of it would read as a
+paragraph end.  Knowing this takes the whole block, which is why the
+short-line rule runs over grouped blocks rather than line by line."
+  (let* ((edges (delq nil (mapcar #'pdf-text-line-x1 (pdf-text-block-lines block))))
+         (widest (and edges (apply #'max edges)))
+         (left (pdf-text-block-left block))
+         (column-left (plist-get profile :left))
+         (column-right (plist-get profile :right))
+         (space (or (plist-get profile :space) 0)))
+    (cond ((null widest) column-right)
+          ((null column-right) widest)
+          ((or (null left) (null column-left)) column-right)
+          ((< (abs (- left column-left)) (* 2 space)) column-right)
+          (t widest))))
+
+(defun pdf-text--start-block (line reason profile)
+  "A block opened by LINE, which broke off the one before it for REASON."
+  (let* ((text (pdf-text-line-text line))
+         (space (or (plist-get profile :space) 0))
+         (left (pdf-text-line-x0 line))
+         (column-left (plist-get profile :left))
+         (indented (or (null left)
+                       (null column-left)
+                       (< (+ column-left space) left)))
+         (marker (pdf-text--list-marker text indented))
+         (kind (cond ((string-blank-p text) 'blank)
+                     ((pdf-text--mono-p line) 'mono)
+                     ((pdf-text--preformatted-p text) 'fixed)
+                     (marker 'item)
+                     (t 'para))))
+    (pdf-text-block-create
+     :kind kind
+     :reason reason
+     :lines (list line)
+     :left left
+     ;; every block, list item included, finds its body margin on its
+     ;; second line: an item's continuation hangs under the marker in
+     ;; one book and returns to the column margin in the next
+     :marker marker
+     :drop-cap (pdf-text--drop-cap-p line profile))))
+
+(defun pdf-text--extend-block (block line)
+  "Add LINE to BLOCK, tracking the margins its later lines establish."
+  (push line (pdf-text-block-lines block))
+  (when-let* ((x0 (pdf-text-line-x0 line)))
+    (unless (pdf-text-block-body-x block)
+      (setf (pdf-text-block-body-x block) x0))
+    (when (or (null (pdf-text-block-left block))
+              (< x0 (pdf-text-block-left block)))
+      (setf (pdf-text-block-left block) x0)))
+  block)
+
+(defun pdf-text--group-lines (lines profile page-width)
+  "LINES of one page grouped into blocks by every rule but the short line."
+  (let (blocks current)
+    (dolist (line lines)
+      (let ((reason (and current
+                         (pdf-text--break-reason line current profile page-width))))
+        (if (and current (not reason))
+            (pdf-text--extend-block current line)
+          (when current
+            (setf (pdf-text-block-lines current)
+                  (nreverse (pdf-text-block-lines current)))
+            (push current blocks))
+          (setq current (pdf-text--start-block line (or reason 'start) profile)))))
+    (when current
+      (setf (pdf-text-block-lines current)
+            (nreverse (pdf-text-block-lines current)))
+      (push current blocks))
+    (nreverse blocks)))
+
+(defun pdf-text--split-short-lines (block profile page-width)
+  "BLOCK split wherever one of its lines ended short of its own margin.
+A short line is the end of a paragraph, an entry or an item; the rule
+needs the block's measure, so it runs once the grouping settled it."
+  (if (or (memq (pdf-text-block-kind block) '(mono fixed blank))
+          (< (length (pdf-text-block-lines block)) 2))
+      (list block)
+    (let* ((right (pdf-text--block-margin block profile))
+           ;; lines set flush right or centred fall short of any margin
+           ;; by design, so their geometry alone cannot end a paragraph
+           (aligned (cl-some #'pdf-text-line-align (pdf-text-block-lines block)))
+           (lines (pdf-text-block-lines block))
+           parts current)
+      (dolist (line lines)
+        (if (null current)
+            (setq current (pdf-text--start-block
+                           line (pdf-text-block-reason block) profile))
+          (let ((prev (car (pdf-text-block-lines current))))
+            (if (and (not (pdf-text--wrap-hyphen-p (pdf-text-line-text prev)))
+                     (not (pdf-text--drop-cap-p prev profile))
+                     (pdf-text--ends-short-p line prev right profile page-width)
+                     (or (not aligned) (pdf-text--supports-break-p prev line)))
+                (progn
+                  (setf (pdf-text-block-lines current)
+                        (nreverse (pdf-text-block-lines current)))
+                  (push current parts)
+                  (setq current (pdf-text--start-block line 'short profile)))
+              (pdf-text--extend-block current line)))))
+      (when current
+        (setf (pdf-text-block-lines current)
+              (nreverse (pdf-text-block-lines current)))
+        (push current parts))
+      (nreverse parts))))
+
+(defun pdf-text--blocks (lines profile)
+  "LINES of one page grouped into `pdf-text-block' records."
+  (let ((page-width (pdf-text--page-width lines))
+        (marked (pdf-text--mark-alignment (pdf-text--mark-monospace lines) profile)))
+    (cl-mapcan (lambda (block)
+                 (pdf-text--split-short-lines block profile page-width))
+               (pdf-text--group-lines marked profile page-width))))
+
+;;; Rendering blocks back to text
+
+(defun pdf-text--join-block (block vocabulary)
+  "BLOCK's lines joined into one paragraph line."
+  (let (para)
+    (dolist (line (pdf-text-block-lines block) (or para ""))
+      (let ((text (string-trim (pdf-text-line-text line))))
+        (setq para (if para
+                       (pdf-text--join-lines para text vocabulary)
+                     text))))))
+
+(defun pdf-text--render-item (block vocabulary indent)
+  "BLOCK rendered as an org list item at INDENT columns.
+A bullet glyph becomes org's own dash, which costs nothing to read and
+buys real list structure; an enumerator is already org syntax and
+stays as the document wrote it."
+  (let* ((text (pdf-text--join-block block vocabulary))
+         (marker (pdf-text-block-marker block))
+         (pad (make-string indent ?\s)))
+    (if (and marker (string-match-p (concat "\\`" pdf-text-bullet-re) marker))
+        (concat pad "- " (string-trim (substring text (length marker))))
+      (concat pad text))))
+
+(defun pdf-text--render-mono (block profile left)
+  "BLOCK's listing lines, verbatim, with their own indentation restored.
+LEFT is the margin of the listing this block belongs to, which spans
+every block the vertical gaps inside a listing split it into - measure
+each block against itself and the second half of a listing loses its
+nesting."
+  (let* ((lines (pdf-text-block-lines block))
+         (unit (or (car (delq nil (mapcar #'pdf-text-line-space lines)))
+                   (plist-get profile :space)
+                   0.005)))
+    (mapconcat (lambda (line)
+                 (let ((step (if (and left (pdf-text-line-x0 line))
+                                 (round (/ (- (pdf-text-line-x0 line) left) unit))
+                               0)))
+                   (concat "  " (make-string (max 0 step) ?\s)
+                           (string-trim (pdf-text-line-text line)))))
+               lines "\n")))
+
+(defun pdf-text--inset-p (block profile)
+  "Whether BLOCK is a passage set in from the column margin, as a quotation is.
+One line in from the margin is a centred heading or an attribution and
+reads better flush; the inset only means something over a passage."
+  (let ((left (pdf-text-block-left block))
+        (column (plist-get profile :left))
+        (space (or (plist-get profile :space) 0)))
+    (and left column
+         (< 1 (length (pdf-text-block-lines block)))
+         (< (+ column (* 2 space)) left))))
+
+(defun pdf-text--item-indent (block stack profile)
+  "Indent columns for item BLOCK, and the nesting STACK it leaves behind.
+Deeper markers nest, a marker back at an earlier column closes the
+levels it left."
+  (let ((left (pdf-text-block-left block))
+        (space (or (plist-get profile :space) 0)))
+    (if (null left)
+        (cons 0 stack)
+      (while (and stack (< left (- (car stack) space)))
+        (pop stack))
+      (when (or (null stack) (< (+ (car stack) space) left))
+        (push left stack))
+      (cons (* 2 (1- (length stack))) stack))))
+
+(defun pdf-text--blank-between-p (block previous profile)
+  "Whether a blank line belongs between PREVIOUS and BLOCK.
+The page itself decides: blocks the renderer set apart get one, blocks
+it stacked at the plain leading - a table of contents, a stanza, a
+tight list - stay together."
+  (let ((leading (plist-get profile :leading))
+        (last (car (last (pdf-text-block-lines previous))))
+        (first (car (pdf-text-block-lines block))))
+    (cond
+     ((memq (pdf-text-block-reason block) '(indent dedent size face fixed gap)) t)
+     ((not (and leading last first
+                (pdf-text-line-base last) (pdf-text-line-base first)))
+      t)
+     (t (< (* pdf-text-blank-factor leading)
+           (- (pdf-text-line-base first) (pdf-text-line-base last)))))))
+
+(defun pdf-text--render-blocks (blocks profile vocabulary)
+  "BLOCKS as the page's reflowed text."
+  (let (out previous stack listing-left)
+    (dolist (block blocks)
+      (let ((kind (pdf-text-block-kind block))
+            indent)
+        (unless (eq 'item kind) (setq stack nil))
+        (when (eq 'item kind)
+          (let ((nesting (pdf-text--item-indent block stack profile)))
+            (setq indent (car nesting) stack (cdr nesting))))
+        (if (eq 'mono kind)
+            (unless (eq 'mono (and previous (pdf-text-block-kind previous)))
+              (setq listing-left (pdf-text-block-left block)))
+          (setq listing-left nil))
+        (unless (eq 'blank kind)
+          (when (and previous (pdf-text--blank-between-p block previous profile))
+            (push "" out))
+          (push (pcase kind
+                  ('mono (pdf-text--render-mono block profile listing-left))
+                  ('fixed (mapconcat (lambda (line)
+                                       (string-trim-right (pdf-text-line-text line)))
+                                     (pdf-text-block-lines block) "\n"))
+                  ('item (pdf-text--render-item block vocabulary indent))
+                  (_ (let ((text (pdf-text--collapse-doubled
+                                  (pdf-text--join-block block vocabulary))))
+                       (if (pdf-text--inset-p block profile)
+                           (concat "  " text)
+                         text))))
+                out)
+          (setq previous block))))
+    (string-join (nreverse out) "\n")))
+
+;;; Org structure
 
 (defvar pdf-text-org-escape-re
   (rx bos (or (seq (+ "*") " ")
@@ -398,24 +1048,26 @@ whole."
            (split-string text "\n"))
    "\n"))
 
-(defun pdf-text-render-pages (pages &optional geometries)
-  "Raw PAGES cleaned, unfilled, de-shadowed, and org-escaped.
-GEOMETRIES, when given, holds one `pdf-text--page-geometry' table (or
-nil) per page for the unfill's glyph-edge decisions.  Split-across-
-lines shadow echoes die in `pdf-text-clean-pages'; the doubled-title
-collapse after unfill catches the same-line form, which a paragraph
-join can also assemble.  Escaping runs last, so the zero-width prefix
-cannot skew the doubled check."
-  (let ((doc-right (and geometries (pdf-text--doc-right-edge geometries))))
-    (cl-loop for page in (pdf-text-clean-pages pages)
-             for rest = geometries then (cdr rest)
-             collect
-             (pdf-text--escape-org-lines
-              (string-join (mapcar #'pdf-text--collapse-doubled
-                                   (split-string
-                                    (pdf-text-unfill page (car rest) doc-right)
-                                    "\n"))
-                           "\n")))))
+(defun pdf-text-render-pages (pages &optional layouts)
+  "Raw PAGES reflowed into readable text, one string per page.
+PAGES are `pdf-info-gettext' strings and LAYOUTS the matching
+`pdf-info-charlayout' output.  The layout is what carries paragraph
+structure - indents, line fullness, the air between baselines - so a
+page without one falls back to character heuristics."
+  (let* ((page-lines (pdf-text-clean-pages
+                      (cl-loop for text in pages
+                               for rest = layouts then (cdr rest)
+                               collect (pdf-text--page-lines text (car rest)))))
+         (profile (pdf-text--profile page-lines))
+         (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                           page-lines))
+         (page-lines (pdf-text-remove-marginal-lines page-lines profiles))
+         (vocabulary (pdf-text--hyphenated-words page-lines)))
+    (cl-loop for lines in page-lines
+             for page-profile in profiles
+             collect (pdf-text--escape-org-lines
+                      (pdf-text--render-blocks (pdf-text--blocks lines page-profile)
+                                               page-profile vocabulary)))))
 
 (defun pdf-text--interleave-outline (pages outline)
   "PAGES with a heading line per OUTLINE entry at its page's start.
@@ -474,7 +1126,8 @@ as the org level.  Prose and TOC pages pass through untouched."
      (lambda (page)
        (let* ((lines (split-string page "\n"))
               (limit (* pdf-text-synth-heading-max-fraction
-                        (pdf-text--page-width lines))))
+                        (apply #'max 0 (mapcar (lambda (l) (length (string-trim l)))
+                                               lines)))))
          (string-join
           (mapcar
            (lambda (line)
@@ -499,6 +1152,8 @@ otherwise image-only book does not make a readable view.")
   "Whether raw PAGES look like a scan: nearly no page carries text."
   (< (cl-count-if-not #'string-blank-p pages)
      (* pdf-text-min-text-fraction (length pages))))
+
+;;; The companion buffer
 
 (defvar-local pdf-text--page-starts nil
   "Vector of buffer positions; element N-1 is where page N starts.")
@@ -574,7 +1229,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 2
+(defconst pdf-text-render-version 3
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")
@@ -620,20 +1275,23 @@ text - a scan - signals an error instead of an empty buffer."
          (buf (get-buffer name)))
     (unless (and buf stamp
                  (equal stamp (buffer-local-value 'pdf-text--source-stamp buf)))
-      (let* ((raw (mapcar (lambda (p) (pdf-info-gettext p '(0 0 1 1)))
-                          (number-sequence 1 (pdf-info-number-of-pages))))
-             (geometries
-              (cl-loop for p from 1 for text in raw
-                       collect (condition-case nil
-                                   (pdf-text--page-geometry
-                                    text (pdf-info-charlayout p))
-                                 (error nil)))))
+      ;; the layout carries the text as well as its geometry, so gettext
+      ;; only runs for a page epdfinfo lays out no glyphs for
+      (let* ((layouts (cl-loop for p from 1 to (pdf-info-number-of-pages)
+                               collect (condition-case nil
+                                           (pdf-info-charlayout p)
+                                         (error nil))))
+             (raw (cl-loop for p from 1
+                           for layout in layouts
+                           collect (if layout
+                                       (pdf-text--layout-text layout)
+                                     (pdf-info-gettext p '(0 0 1 1))))))
         (when (pdf-text--scanned-p raw)
           (user-error "%s has no text layer (%d of %d pages carry text)"
                       (buffer-name)
                       (cl-count-if-not #'string-blank-p raw) (length raw)))
         (let* ((outline (pdf-info-outline))
-               (rendered (pdf-text-render-pages raw geometries))
+               (rendered (pdf-text-render-pages raw layouts))
                (pages (if outline
                           (pdf-text--interleave-outline rendered outline)
                         (pdf-text--synthesize-headings rendered))))

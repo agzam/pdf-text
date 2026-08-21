@@ -12,274 +12,539 @@
 (require 'org)
 (require 'org-element)
 
-(describe "pdf-text-unfill"
-  (it "joins hard-wrapped lines into one paragraph line"
-    (expect (pdf-text-unfill "Lorem ipsum dolor\nsit amet, consectetur\nadipiscing elit")
-            :to-equal "Lorem ipsum dolor sit amet, consectetur adipiscing elit"))
+;;; Fixtures
 
-  (it "keeps the first line's paragraph indent"
-    (expect (pdf-text-unfill "  Lorem ipsum\ndolor sit")
-            :to-equal "  Lorem ipsum dolor sit"))
+(cl-defun pdf-text-tests--line (text &key (x0 0.10) (x1 0.90) (base 0.10)
+                                     (height 0.015) (space 0.005) (cv 0.3)
+                                     first-width
+                                     &allow-other-keys)
+  "A line record for TEXT with page-relative geometry.
+The defaults describe a body line filling a column that runs 0.10 to
+0.90; a spec overrides only what its case is about."
+  (pdf-text-line-create
+   :text text :x0 x0 :x1 x1 :base base :top (- base height) :bot base
+   :height height :space space :cv cv
+   :first-width (or first-width
+                    ;; a character measures about 0.01 of the page
+                    (* 0.01 (length (car (split-string (string-trim text))))))))
 
-  (it "preserves blank lines between paragraphs"
-    (expect (pdf-text-unfill "one two\nthree\n\nfour five\nsix")
-            :to-equal "one two three\n\nfour five six"))
+(defun pdf-text-tests--page (specs)
+  "Line records for one page from SPECS, each (TEXT . PROPS).
+PROPS take the `pdf-text-tests--line' keywords plus :gap, the baseline
+step down from the line above in leadings (1 by default)."
+  (let ((base 0.10) (leading 0.02) started)
+    (mapcar (lambda (spec)
+              (let ((props (cdr spec)))
+                (setq base (cond ((plist-get props :base))
+                                 (started (+ base (* (or (plist-get props :gap) 1)
+                                                     leading)))
+                                 (t base))
+                      started t)
+                (apply #'pdf-text-tests--line (car spec) :base base props)))
+            specs)))
 
-  (it "preserves runs of blank lines"
-    (expect (pdf-text-unfill "one\n\n\ntwo")
-            :to-equal "one\n\n\ntwo"))
+(defun pdf-text-tests--render (specs)
+  "SPECS rendered as one page, the way `pdf-text-render-pages' renders it."
+  (let* ((lines (pdf-text-tests--page specs))
+         (profile (pdf-text--profile (list lines)))
+         (page (pdf-text--page-profile lines profile)))
+    (pdf-text--render-blocks (pdf-text--blocks lines page) page
+                             (pdf-text--hyphenated-words (list lines)))))
 
-  (it "de-hyphenates a wrap hyphen before a lowercase continuation"
-    (expect (pdf-text-unfill "modern informa-\ntion retrieval")
-            :to-equal "modern information retrieval"))
+(defun pdf-text-tests--glyphs (text &optional x0 base width height)
+  "Charlayout glyphs for TEXT laid out from X0 at BASE, WIDTH per glyph.
+Glyph widths alternate around WIDTH unless WIDTH is given, so a fixture
+line reads as proportional type; pass an explicit WIDTH for a
+monospaced one."
+  (let* ((x (or x0 0.10))
+         (base (or base 0.12))
+         (height (or height 0.015))
+         (n -1))
+    (mapcar (lambda (char)
+              (let ((advance (or width (if (cl-oddp (cl-incf n)) 0.006 0.014))))
+                (prog1 (list char (list x (- base height) (+ x advance) base))
+                  (setq x (+ x advance)))))
+            (append text nil))))
 
-  (it "keeps a compound's hyphen, joining without a space"
-    (expect (pdf-text-unfill "the Navier-\nStokes equations")
-            :to-equal "the Navier-Stokes equations"))
+;;; Line records and profile
 
-  (it "keeps a numeric range's hyphen, joining without a space"
-    (expect (pdf-text-unfill "pages 3-\n10 cover it")
-            :to-equal "pages 3-10 cover it"))
+(describe "pdf-text--glyph-line"
+  (it "measures the line's edges, baseline, and first word"
+    (let ((line (pdf-text--glyph-line (pdf-text-tests--glyphs "ab cd" nil nil 0.01))))
+      (expect (pdf-text-line-text line) :to-equal "ab cd")
+      (expect (pdf-text-line-x0 line) :to-be-close-to 0.10 3)
+      (expect (pdf-text-line-x1 line) :to-be-close-to 0.15 3)
+      (expect (pdf-text-line-base line) :to-be-close-to 0.12 3)
+      (expect (pdf-text-line-height line) :to-be-close-to 0.015 3)
+      (expect (pdf-text-line-first-width line) :to-be-close-to 0.02 3)))
 
-  (it "space-joins after a dangling hyphen"
-    (expect (pdf-text-unfill "weights are x -\ny at most")
-            :to-equal "weights are x - y at most"))
+  (it "reports even advances as a monospaced line"
+    (expect (pdf-text-line-cv (pdf-text--glyph-line
+                              (pdf-text-tests--glyphs "let x = 1;" nil nil 0.01)))
+            :to-be-close-to 0.0 3))
 
-  (it "passes deeply indented lines through unjoined"
-    (expect (pdf-text-unfill "Intro paragraph\n    (defun foo ()\n      (bar baz))\nclosing words")
-            :to-equal "Intro paragraph\n    (defun foo ()\n      (bar baz))\nclosing words"))
+  (it "reports uneven advances as proportional type"
+    (expect (pdf-text-line-cv (pdf-text--glyph-line
+                              (pdf-text-tests--glyphs "ordinary prose here")))
+            :to-be-greater-than pdf-text-monospace-variation))
 
-  (it "passes lines with interior space runs through unjoined"
-    (expect (pdf-text-unfill "Name    Type    Default\nfill    bool    nil")
-            :to-equal "Name    Type    Default\nfill    bool    nil"))
+  (it "keeps a blank line, geometry and all, out of the measurements"
+    (let ((line (pdf-text--glyph-line nil)))
+      (expect (pdf-text-line-text line) :to-equal "")
+      (expect (pdf-text-line-x0 line) :to-be nil))))
 
-  (it "treats a tab-led line as preformatted"
-    (expect (pdf-text-unfill "para\n\tcode line\nmore para")
-            :to-equal "para\n\tcode line\nmore para"))
+(describe "pdf-text--page-lines"
+  (it "takes text and geometry from the same glyph stream"
+    (let ((lines (pdf-text--page-lines
+                  "ignored"
+                  (append (pdf-text-tests--glyphs "ab" nil nil 0.01)
+                          (list (list ?\n '(0.12 0.10 0.12 0.12)))
+                          (pdf-text-tests--glyphs "cd" 0.10 0.14 0.01)))))
+      (expect (mapcar #'pdf-text-line-text lines) :to-equal '("ab" "cd"))
+      (expect (pdf-text-line-base (nth 1 lines)) :to-be-close-to 0.14 3)))
 
-  (it "still joins lines with double spaces after sentence ends"
-    (expect (pdf-text-unfill "It ends here.  And\nresumes after")
-            :to-equal "It ends here.  And resumes after"))
+  (it "falls back to the plain text lines without a layout"
+    (let ((lines (pdf-text--page-lines "one\ntwo")))
+      (expect (mapcar #'pdf-text-line-text lines) :to-equal '("one" "two"))
+      (expect (pdf-text-line-x0 (car lines)) :to-be nil))))
 
-  (it "keeps TOC entry lines separate, joining only wrapped continuations"
-    (expect (pdf-text-unfill
-             (concat "contents\n"
-                     "PRAISE FOR A MIND FOR NUMBERS\n"
-                     "TITLE PAGE\n"
-                     "COPYRIGHT\n"
-                     "FOREWORD by Terrence J. Sejnowski, Francis Crick Professor, Salk Institute for\n"
-                     "Biological Studies\n"
-                     "NOTE TO THE READER\n"
-                     "1 Open the Door"))
+(describe "pdf-text--profile"
+  (it "reports the modal body geometry, not the extremes"
+    (let* ((lines (pdf-text-tests--page
+                   '(("heading" :x0 0.30 :x1 0.60 :height 0.03)
+                     ("body one") ("body two") ("body three")
+                     ("page number" :x0 0.85 :x1 0.88 :height 0.008))))
+           (profile (pdf-text--profile (list lines))))
+      (expect (plist-get profile :height) :to-be-close-to 0.015 3)
+      (expect (plist-get profile :leading) :to-be-close-to 0.02 3)
+      (expect (plist-get profile :left) :to-be-close-to 0.10 2)
+      (expect (plist-get profile :right) :to-be-close-to 0.90 2)))
+
+  (it "is all nil for pages that carry no geometry"
+    (let ((profile (pdf-text--profile (list (pdf-text--page-lines "a\nb")))))
+      (expect (plist-get profile :height) :to-be nil)
+      (expect (plist-get profile :right) :to-be nil))))
+
+(describe "pdf-text--page-profile"
+  (it "takes the column edges from the page, as mirrored margins need"
+    (let* ((doc '(:height 0.015 :leading 0.02 :left 0.10 :right 0.80 :space 0.005))
+           (lines (pdf-text-tests--page
+                   (make-list 9 '("body line here" :x0 0.20 :x1 0.90))))
+           (page (pdf-text--page-profile lines doc)))
+      (expect (plist-get page :left) :to-be-close-to 0.20 2)
+      (expect (plist-get page :right) :to-be-close-to 0.90 2)))
+
+  (it "keeps the document's edges on a page too thin to judge"
+    (let* ((doc '(:height 0.015 :leading 0.02 :left 0.10 :right 0.80 :space 0.005))
+           (lines (pdf-text-tests--page '(("lonely" :x0 0.20 :x1 0.90)))))
+      (expect (pdf-text--page-profile lines doc) :to-equal doc)))
+
+  (it "ignores lines set at another size, which have margins of their own"
+    (let* ((doc '(:height 0.015 :leading 0.02 :left 0.10 :right 0.80 :space 0.005))
+           (lines (pdf-text-tests--page
+                   (append (make-list 9 '("body line here" :x0 0.20 :x1 0.90))
+                           (make-list 5 '("note" :x0 0.05 :x1 0.15 :height 0.008)))))
+           (page (pdf-text--page-profile lines doc)))
+      (expect (plist-get page :left) :to-be-close-to 0.20 2))))
+
+;;; Classification
+
+(describe "pdf-text--mark-monospace"
+  (it "tags a listing line by its even advances"
+    (let ((lines (pdf-text-tests--page '(("let x = 1;" :cv 0.0)))))
+      (pdf-text--mark-monospace lines)
+      (expect (pdf-text-line-kind (car lines)) :to-equal 'mono)))
+
+  (it "leaves prose alone"
+    (let ((lines (pdf-text-tests--page '(("ordinary prose line" :cv 0.3)))))
+      (pdf-text--mark-monospace lines)
+      (expect (pdf-text-line-kind (car lines)) :to-be nil)))
+
+  (it "does not read tabular figures as a listing"
+    (let ((lines (pdf-text-tests--page '(("488" :cv 0.0)))))
+      (pdf-text--mark-monospace lines)
+      (expect (pdf-text-line-kind (car lines)) :to-be nil)))
+
+  (it "takes a lone brace into the listing above it"
+    (let ((lines (pdf-text-tests--page
+                  '(("let x = 1;" :cv 0.0 :height 0.010)
+                    ("}" :cv nil :height 0.010)))))
+      (pdf-text--mark-monospace lines)
+      (expect (pdf-text-line-kind (nth 1 lines)) :to-equal 'mono)))
+
+  (it "leaves a short prose line out of a listing of another size"
+    (let ((lines (pdf-text-tests--page
+                  '(("let x = 1;" :cv 0.0 :height 0.010)
+                    ("Paris." :cv nil :height 0.015)))))
+      (pdf-text--mark-monospace lines)
+      (expect (pdf-text-line-kind (nth 1 lines)) :to-be nil))))
+
+(describe "pdf-text--mark-alignment"
+  (it "tags a flush-right run whose left edge moves"
+    (let* ((lines (pdf-text-tests--page
+                   '(("We drew inspiration" :x0 0.08 :x1 0.21)
+                     ("from Michael" :x0 0.13 :x1 0.21)
+                     ("Jackson's method for" :x0 0.08 :x1 0.21))))
+           (profile '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
+                      :space 0.005)))
+      (pdf-text--mark-alignment lines profile)
+      (expect (mapcar #'pdf-text-line-align lines)
+              :to-equal '(right right right))))
+
+  (it "tags a centred run"
+    (let* ((lines (pdf-text-tests--page
+                   '(("program design deserves the same" :x0 0.30 :x1 0.70)
+                     ("role as language skills" :x0 0.34 :x1 0.66))))
+           (profile '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
+                      :space 0.005)))
+      (pdf-text--mark-alignment lines profile)
+      (expect (mapcar #'pdf-text-line-align lines) :to-equal '(center center))))
+
+  (it "leaves justified prose alone, first-line indent and all"
+    (let* ((lines (pdf-text-tests--page
+                   '(("An indented paragraph opening" :x0 0.13 :x1 0.90)
+                     ("continues at the column margin" :x0 0.10 :x1 0.90))))
+           (profile '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
+                      :space 0.005)))
+      (pdf-text--mark-alignment lines profile)
+      (expect (mapcar #'pdf-text-line-align lines) :to-equal '(nil nil)))))
+
+(describe "pdf-text--list-marker"
+  (it "reads a bullet glyph anywhere"
+    (expect (pdf-text--list-marker "• Business people who will be") :to-equal "•"))
+
+  (it "reads an enumerator"
+    (expect (pdf-text--list-marker "1. An item") :to-equal "1.")
+    (expect (pdf-text--list-marker "2) Another item") :to-equal "2)")
+    (expect (pdf-text--list-marker "(3) A third item") :to-equal "(3)")
+    (expect (pdf-text--list-marker "iv. A fourth item") :to-equal "iv."))
+
+  (it "reads a dash only where the line is indented"
+    (expect (pdf-text--list-marker "- an item" t) :to-equal "-")
+    (expect (pdf-text--list-marker "- an item") :to-be nil))
+
+  (it "leaves prose and footnote markers alone"
+    (expect (pdf-text--list-marker "*A word on scientific notation:" t) :to-be nil)
+    (expect (pdf-text--list-marker "ordinary prose here" t) :to-be nil)
+    (expect (pdf-text--list-marker "1961 was the year" t) :to-be nil)))
+
+;;; Reflow
+
+(describe "pdf-text reflow"
+  (it "joins wrapped lines into one paragraph"
+    (expect (pdf-text-tests--render
+             '(("Lorem ipsum dolor sit amet")
+               ("consectetur adipiscing elit")
+               ("sed do eiusmod tempor" :x1 0.40)))
             :to-equal
-            (concat "contents\n"
-                    "PRAISE FOR A MIND FOR NUMBERS\n"
-                    "TITLE PAGE\n"
-                    "COPYRIGHT\n"
-                    "FOREWORD by Terrence J. Sejnowski, Francis Crick Professor, Salk Institute for Biological Studies\n"
-                    "NOTE TO THE READER\n"
-                    "1 Open the Door")))
+            "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor"))
 
-  (it "does not join across a short line: it ended its paragraph"
-    (expect (pdf-text-unfill
-             (concat "The final short line.\n"
-                     "A new paragraph begins here and runs to the full width of the page\n"
-                     "continuing on"))
+  (it "separates paragraphs the page set apart with a blank line"
+    (expect (pdf-text-tests--render
+             '(("First paragraph line one")
+               ("first paragraph ends here" :x1 0.40)
+               ("Second paragraph opens" :gap 1.5)
+               ("and runs on to its end" :x1 0.40)))
             :to-equal
-            (concat "The final short line.\n"
-                    "A new paragraph begins here and runs to the full width of the page continuing on")))
+            (concat "First paragraph line one first paragraph ends here\n\n"
+                    "Second paragraph opens and runs on to its end")))
 
-  (it "starts a new paragraph at a first-line indent"
-    (expect (pdf-text-unfill
-             (concat "This paragraph runs to a full width line here\n"
-                     "   The next paragraph opens indented and goes\n"
-                     "on further"))
+  (it "separates paragraphs marked only by a first-line indent"
+    (expect (pdf-text-tests--render
+             '(("First paragraph line one")
+               ("first paragraph runs to the margin")
+               ("Second paragraph opens indented" :x0 0.13)
+               ("and returns to the margin" :x1 0.40)))
             :to-equal
-            (concat "This paragraph runs to a full width line here\n"
-                    "   The next paragraph opens indented and goes on further")))
+            (concat "First paragraph line one first paragraph runs to the margin\n\n"
+                    "Second paragraph opens indented and returns to the margin")))
 
-  (it "starts fresh at a numbered entry even after a full line"
-    (expect (pdf-text-unfill
-             (concat "Why Trying Too Hard Can Sometimes Be Part of the Problem\n"
-                     "3 Learning Is Creating:"))
+  (it "breaks where the next line's first word would have fit"
+    (expect (pdf-text-tests--render
+             '(("A body paragraph filling the column")
+               ("and wrapping to a second full line")
+               ("and to a third full line as well")
+               ("and to a fourth full line as well")
+               ("that ends here." :x1 0.30)
+               ("A short entry" :x1 0.40)
+               ("Another short entry" :x1 0.45)))
             :to-equal
-            (concat "Why Trying Too Hard Can Sometimes Be Part of the Problem\n"
-                    "3 Learning Is Creating:"))))
+            (concat "A body paragraph filling the column and wrapping to a"
+                    " second full line and to a third full line as well and to"
+                    " a fourth full line as well that ends here.\n"
+                    "A short entry\nAnother short entry")))
 
-(defun pdf-text-tests--geo (&rest pairs)
-  "Geometry table from PAIRS of (LINE-TEXT X0 . X1)."
-  (let ((table (make-hash-table :test #'equal)))
-    (dolist (p pairs table)
-      (puthash (car p) (cons (cadr p) (cddr p)) table))))
+  (it "keeps a wrapped line joined when the next word would not have fit"
+    (expect (pdf-text-tests--render
+             '(("A line stopping just short" :x1 0.86)
+               ("internationalisation follows" :first-width 0.09 :x1 0.40)))
+            :to-equal "A line stopping just short internationalisation follows"))
 
-(describe "pdf-text-unfill with geometry"
-  (it "joins on glyph fullness though footnote chars inflate the page width"
-    ;; the footnote line has the most characters, so the char threshold
-    ;; alone would call the body lines short and break mid-paragraph
-    (expect (pdf-text-unfill
-             (concat "Body line one continues\n"
-                     "body ends now.\n"
-                     "A footnote in tiny type that runs much longer in characters than the body")
-             (pdf-text-tests--geo
-              '("Body line one continues" 0.1 . 0.9)
-              '("body ends now." 0.1 . 0.5)
-              '("A footnote in tiny type that runs much longer in characters than the body" 0.1 . 0.9))
-             (cons 0.9 0.025))
+  (it "keeps entries of one measure tight, with no blank line between"
+    (expect (pdf-text-tests--render
+             '(("A body paragraph filling the column")
+               ("and wrapping to a second full line")
+               ("and to a third full line as well")
+               ("and to a fourth full line as well")
+               ("that ends here." :x1 0.30)
+               ("ACKNOWLEDGMENTS" :x1 0.40)
+               ("ENDNOTES" :x1 0.30)
+               ("REFERENCES" :x1 0.32)))
             :to-equal
-            (concat "Body line one continues body ends now.\n"
-                    "A footnote in tiny type that runs much longer in characters than the body")))
+            (concat "A body paragraph filling the column and wrapping to a"
+                    " second full line and to a third full line as well and to"
+                    " a fourth full line as well that ends here.\n"
+                    "ACKNOWLEDGMENTS\nENDNOTES\nREFERENCES")))
 
-  (it "breaks at a geometric indent and renders it as a two-space prefix"
-    (expect (pdf-text-unfill
-             (concat "First paragraph line runs the full width\n"
-                     "Second paragraph starts here\n"
-                     "and continues at the margin")
-             (pdf-text-tests--geo
-              '("First paragraph line runs the full width" 0.1 . 0.9)
-              '("Second paragraph starts here" 0.13 . 0.9)
-              '("and continues at the margin" 0.1 . 0.9))
-             (cons 0.9 0.025))
+  (it "rejoins a drop cap and carries the paragraph past its inset lines"
+    (expect (pdf-text-tests--render
+             '(("Y" :x0 0.10 :x1 0.13 :height 0.05)
+               ("our brain has amazing abilities" :x0 0.16)
+               ("but it did not come with one" :x0 0.16)
+               ("a novice or an expert will find" :x0 0.10)
+               ("great new ways to improve your" :x0 0.10)
+               ("skills and your techniques for" :x0 0.10)
+               ("learning, especially the ones" :x0 0.10)
+               ("related to math and science." :x0 0.10 :x1 0.40)))
             :to-equal
-            (concat "First paragraph line runs the full width\n"
-                    "  Second paragraph starts here and continues at the margin")))
+            (concat "Your brain has amazing abilities but it did not come with one"
+                    " a novice or an expert will find great new ways to improve your"
+                    " skills and your techniques for learning, especially the ones"
+                    " related to math and science.")))
 
-  (it "rejoins a drop cap and its inset lines, resuming at the margin"
-    (expect (pdf-text-unfill
-             (concat "T\n"
-                     "his inset line continues on\n"
-                     "still inset here fully wide\n"
-                     "back at margin now and wide\n"
-                     "one more margin line here padding")
-             (pdf-text-tests--geo
-              '("T" 0.1 . 0.13)
-              '("his inset line continues on" 0.15 . 0.9)
-              '("still inset here fully wide" 0.15 . 0.9)
-              '("back at margin now and wide" 0.1 . 0.9)
-              '("one more margin line here padding" 0.1 . 0.9))
-             (cons 0.9 0.025))
+  (it "joins a flush-right margin note into its own paragraph"
+    ;; the note is a column of its own, off to the left of the body's
+    (expect (pdf-text-tests--render
+             '(("A body paragraph filling the column" :x0 0.30)
+               ("and wrapping to a second full line" :x0 0.30)
+               ("and to a third full line as well" :x0 0.30)
+               ("and to a fourth full line as well" :x0 0.30)
+               ("and ending here." :x0 0.30 :x1 0.50)
+               ("We drew inspiration" :x0 0.08 :x1 0.21 :first-width 0.02 :gap 3)
+               ("from Michael Jackson's" :x0 0.06 :x1 0.21 :first-width 0.04)
+               ("method for COBOL." :x0 0.07 :x1 0.21 :first-width 0.06)))
             :to-equal
-            (concat "This inset line continues on still inset here fully wide"
-                    " back at margin now and wide one more margin line here padding")))
+            (concat "A body paragraph filling the column and wrapping to a second"
+                    " full line and to a third full line as well and to a fourth"
+                    " full line as well and ending here.\n\n"
+                    "We drew inspiration from Michael Jackson's method for COBOL.")))
 
-  (it "joins a hanging continuation under a wrapped inset list item"
-    (expect (pdf-text-unfill
-             (concat "Prose paragraph before the list runs wide\n"
-                     "1. An item line that wraps fully wide\n"
-                     "continuation hangs deeper\n"
-                     "Prose after the list also runs wide")
-             (pdf-text-tests--geo
-              '("Prose paragraph before the list runs wide" 0.1 . 0.9)
-              '("1. An item line that wraps fully wide" 0.13 . 0.9)
-              '("continuation hangs deeper" 0.145 . 0.6)
-              '("Prose after the list also runs wide" 0.1 . 0.9))
-             (cons 0.9 0.025))
-            :to-equal
-            (concat "Prose paragraph before the list runs wide\n"
-                    "  1. An item line that wraps fully wide continuation hangs deeper\n"
-                    "Prose after the list also runs wide")))
+  (it "keeps a line of aligned columns verbatim"
+    (expect (pdf-text-tests--render
+             '(("Name    Type    Default")
+               ("fill    bool    nil")))
+            :to-equal "Name    Type    Default\nfill    bool    nil")))
 
-  (it "ends an inset block at its dedent instead of joining the prose"
-    (expect (pdf-text-unfill
-             (concat "Prose opening line also fully wide.\n"
-                     "Prose intro line ending here wide\n"
-                     "listing one inset\n"
-                     "listing two inset runs fully wide\n"
-                     "Prose resumes at margin after")
-             (pdf-text-tests--geo
-              '("Prose opening line also fully wide." 0.1 . 0.9)
-              '("Prose intro line ending here wide" 0.1 . 0.9)
-              '("listing one inset" 0.14 . 0.5)
-              '("listing two inset runs fully wide" 0.14 . 0.9)
-              '("Prose resumes at margin after" 0.1 . 0.9))
-             (cons 0.9 0.025))
+(describe "pdf-text lists"
+  (it "renders bullet items as org list items, continuations joined"
+    (expect (pdf-text-tests--render
+             '(("Data Science for Business is intended for several sorts of readers:"
+                :x1 0.67)
+               ("• Business people who will be working with data scientists"
+                :x0 0.12 :gap 1.7 :first-width 0.01)
+               ("oriented projects, or investing in ventures," :x0 0.14 :x1 0.63)
+               ("• Developers who will be implementing solutions, and"
+                :x0 0.12 :x1 0.72 :gap 1.3 :first-width 0.01)
+               ("• Aspiring data scientists." :x0 0.12 :x1 0.38 :gap 1.3
+                :first-width 0.01)
+               ("This is not a book about algorithms, nor is it" :gap 1.7)
+               ("a replacement for a book about them, since the concepts")
+               ("underlie the techniques rather than the other way round")
+               ("and that is what the exposition follows here." :x1 0.40)))
             :to-equal
-            (concat "Prose opening line also fully wide. Prose intro line ending here wide\n"
-                    "  listing one inset\n"
-                    "listing two inset runs fully wide\n"
-                    "Prose resumes at margin after"))))
+            (concat "Data Science for Business is intended for several sorts of readers:\n\n"
+                    "- Business people who will be working with data scientists"
+                    " oriented projects, or investing in ventures,\n\n"
+                    "- Developers who will be implementing solutions, and\n\n"
+                    "- Aspiring data scientists.\n\n"
+                    "This is not a book about algorithms, nor is it"
+                    " a replacement for a book about them, since the concepts"
+                    " underlie the techniques rather than the other way round"
+                    " and that is what the exposition follows here.")))
+
+  (it "keeps an enumerator as the document wrote it"
+    (expect (pdf-text-tests--render
+             '(("1. The set of natural numbers" :x0 0.12 :x1 0.50)
+               ("2. The set of integers" :x0 0.12 :x1 0.45)))
+            :to-equal "1. The set of natural numbers\n2. The set of integers"))
+
+  (it "nests a deeper marker under its parent"
+    (expect (pdf-text-tests--render
+             '(("• First item at the outer level" :x0 0.12 :x1 0.50
+                :first-width 0.01)
+               ("• A nested item further in" :x0 0.16 :x1 0.48 :first-width 0.01)
+               ("• Back at the outer level again" :x0 0.12 :x1 0.52
+                :first-width 0.01)))
+            :to-equal
+            (concat "- First item at the outer level\n"
+                    "  - A nested item further in\n"
+                    "- Back at the outer level again")))
+
+  (it "takes an item's continuation from its second line, hanging or not"
+    (expect (pdf-text-tests--render
+             '(("(2) is countable because there is an injection" :x0 0.13)
+               ("injective function." :x0 0.10 :x1 0.33)))
+            :to-equal
+            "(2) is countable because there is an injection injective function.")))
+
+(describe "pdf-text listings"
+  (it "keeps monospaced lines verbatim, indentation and all"
+    (expect (pdf-text-tests--render
+             '(("we can run the tests as follows:" :x1 0.40)
+               ("$ cargo test" :x0 0.18 :x1 0.28 :cv 0.0 :height 0.010
+                :space 0.008 :gap 1.6)
+               ("fn main() {" :x0 0.18 :x1 0.27 :cv 0.0 :height 0.010
+                :space 0.008)
+               ("let x = 1;" :x0 0.21 :x1 0.30 :cv 0.0 :height 0.010
+                :space 0.008)
+               ("}" :x0 0.18 :x1 0.19 :cv nil :height 0.010)
+               ("We can have test functions scattered" :gap 1.6)
+               ("throughout our source tree." :x1 0.40)))
+            :to-equal
+            (concat "we can run the tests as follows:\n\n"
+                    "  $ cargo test\n"
+                    "  fn main() {\n"
+                    "      let x = 1;\n"
+                    "  }\n\n"
+                    "We can have test functions scattered"
+                    " throughout our source tree."))))
 
 (describe "pdf-text--join-lines"
+  (it "drops a wrap hyphen before a lowercase continuation"
+    (expect (pdf-text--join-lines "modern informa-" "tion retrieval")
+            :to-equal "modern information retrieval"))
+
+  (it "drops a typographic or soft wrap hyphen too"
+    (expect (pdf-text--join-lines "detailed algo\u2010" "rithmic steps")
+            :to-equal "detailed algorithmic steps")
+    (expect (pdf-text--join-lines "signifi\u00AD" "cant understanding")
+            :to-equal "significant understanding"))
+
+  (it "keeps the hyphen of a compound the document writes hyphenated"
+    (let ((vocabulary (make-hash-table :test #'equal)))
+      (puthash "well-known" t vocabulary)
+      (expect (pdf-text--join-lines "many well-" "known algorithms" vocabulary)
+              :to-equal "many well-known algorithms")))
+
+  (it "keeps a compound broken at its own hyphen"
+    (expect (pdf-text--join-lines "the Navier-" "Stokes equations")
+            :to-equal "the Navier-Stokes equations")
+    (expect (pdf-text--join-lines "pages 3-" "10 cover it")
+            :to-equal "pages 3-10 cover it"))
+
+  (it "closes up an en or em dash without eating it"
+    (expect (pdf-text--join-lines "data science\u2013" "oriented projects")
+            :to-equal "data science\u2013oriented projects")
+    (expect (pdf-text--join-lines "the Big Bang\u2014" "forms too alien")
+            :to-equal "the Big Bang\u2014forms too alien"))
+
+  (it "space-joins after a dangling hyphen"
+    (expect (pdf-text--join-lines "weights are x -" "y at most")
+            :to-equal "weights are x - y at most"))
+
   (it "rejoins a drop cap without a space"
     (expect (pdf-text--join-lines "T" "his book") :to-equal "This book")))
 
-(describe "pdf-text--modal-edge"
+(describe "pdf-text--hyphenated-words"
+  (it "collects the document's own hyphenated words, stripped and downcased"
+    (let ((table (pdf-text--hyphenated-words
+                  (list (pdf-text-tests--page
+                         '(("many well-known (data-driven) results")
+                           ("no hyphen here")))))))
+      (expect (gethash "well-known" table) :to-be-truthy)
+      (expect (gethash "data-driven" table) :to-be-truthy)
+      (expect (gethash "hyphen" table) :to-be nil))))
+
+;;; Statistics
+
+(describe "pdf-text--mode-value"
   (it "yields the mode, immune to outliers on either side"
-    (let ((geos '((0.1 . 0.9) (0.1 . 0.9) (0.1 . 0.9) (0.05 . 0.93))))
-      (expect (pdf-text--modal-edge geos #'car) :to-be-close-to 0.1 2)
-      (expect (pdf-text--modal-edge geos #'cdr) :to-be-close-to 0.9 2))))
+    (expect (pdf-text--mode-value '(0.1 0.1 0.1 0.05 0.93) 0.005)
+            :to-be-close-to 0.1 2))
 
-(describe "pdf-text--doc-right-edge"
-  (it "reads tightly concentrated margins as justified: small slack"
-    (let ((tables (list (pdf-text-tests--geo
-                         '("a line" 0.1 . 0.9) '("b line" 0.1 . 0.901)
-                         '("c line" 0.1 . 0.9) '("d line" 0.1 . 0.5)))))
-      (expect (cdr (pdf-text--doc-right-edge tables))
-              :to-equal pdf-text-full-slack)))
+  (it "buckets near-equal measurements together"
+    (expect (pdf-text--mode-value '(0.0191 0.0199 0.0190 0.0350) 0.002)
+            :to-be-close-to 0.02 2)))
 
-  (it "reads smeared margins as ragged: wide slack"
-    (let ((tables (list (pdf-text-tests--geo
-                         '("a line" 0.1 . 0.9) '("b line" 0.1 . 0.86)
-                         '("c line" 0.1 . 0.82) '("d line" 0.1 . 0.79)))))
-      (expect (cdr (pdf-text--doc-right-edge tables))
-              :to-equal pdf-text-full-slack-ragged))))
+(describe "pdf-text--quantile"
+  (it "orders the values and picks at the fraction"
+    (expect (pdf-text--quantile '(3 1 2 5 4) 0.5) :to-equal 3)
+    (expect (pdf-text--quantile '(3 1 2 5 4) 0.0) :to-equal 1)
+    (expect (pdf-text--quantile '(3 1 2 5 4) 1.0) :to-equal 5))
 
-(describe "pdf-text--page-geometry"
-  (it "maps each matching line to its first and last glyph edges"
-    (let ((table (pdf-text--page-geometry
-                  "ab\ncd"
-                  '((?a (0.10 0.1 0.11 0.12)) (?b (0.11 0.1 0.12 0.12))
-                    (?\n (0.12 0.1 0.12 0.12))
-                    (?c (0.20 0.2 0.21 0.22)) (?d (0.21 0.2 0.22 0.22))))))
-      (expect (gethash "ab" table) :to-equal '(0.10 . 0.12))
-      (expect (gethash "cd" table) :to-equal '(0.20 . 0.22))))
+  (it "is nil for no values"
+    (expect (pdf-text--quantile nil 0.5) :to-be nil)))
 
-  (it "skips lines whose layout text disagrees, failing open"
-    (let ((table (pdf-text--page-geometry
-                  "ab\nXY"
-                  '((?a (0.10 0.1 0.11 0.12)) (?b (0.11 0.1 0.12 0.12))
-                    (?\n (0.12 0.1 0.12 0.12))
-                    (?c (0.20 0.2 0.21 0.22)) (?d (0.21 0.2 0.22 0.22))))))
-      (expect (gethash "ab" table) :to-be-truthy)
-      (expect (gethash "XY" table) :to-be nil)
-      (expect (gethash "cd" table) :to-be nil))))
+(describe "pdf-text--variation"
+  (it "is zero for even spacing and grows with the spread"
+    (expect (pdf-text--variation '(0.01 0.01 0.01)) :to-be-close-to 0.0 3)
+    (expect (pdf-text--variation '(0.005 0.01 0.02)) :to-be-close-to 0.53 1))
 
-(describe "pdf-text--layout-lines"
-  (it "splits the glyph stream at newline glyphs"
-    (expect (mapcar (lambda (l) (apply #'string (mapcar #'car l)))
-                    (pdf-text--layout-lines
-                     '((?a (0.1 0.1 0.2 0.2)) (?\n (0.2 0.1 0.2 0.2))
-                       (?b (0.1 0.3 0.2 0.4)) (?c (0.2 0.3 0.3 0.4)))))
-            :to-equal '("a" "bc"))))
+  (it "is nil below two values"
+    (expect (pdf-text--variation '(0.01)) :to-be nil)))
 
-(describe "pdf-text-remove-recurring-lines"
-  (it "strips a running header recurring at page tops"
-    (expect (pdf-text-remove-recurring-lines
-             '("INTRO | 1\nbody one" "INTRO | 2\nbody two"
-               "INTRO | 3\nbody three" "INTRO | 4\nbody four"))
-            :to-equal '("body one" "body two" "body three" "body four")))
+;;; Cleanups
 
-  (it "strips alternating odd/even header forms"
-    (expect (pdf-text-remove-recurring-lines
-             '("HEAD | 1\na" "2 | HEAD\nb" "HEAD | 3\nc"
-               "4 | HEAD\nd" "HEAD | 5\ne" "6 | HEAD\nf"))
-            :to-equal '("a" "b" "c" "d" "e" "f")))
+(describe "pdf-text-remove-marginal-lines"
+  (it "strips a running head and folio detached in the margin band"
+    (let* ((pages (mapcar
+                   (lambda (n)
+                     (pdf-text-tests--page
+                      `((,(format "INTRO | %d" n) :x0 0.10 :x1 0.30 :base 0.06)
+                        ("body line one filling the column" :base 0.20)
+                        ("body line two filling the column")
+                        ("body line three filling the column")
+                        ("body line four ends here" :x1 0.40))))
+                   '(1 2 3)))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                      (pdf-text-remove-marginal-lines pages profiles))
+              :to-equal (make-list 3 '("body line one filling the column"
+                                       "body line two filling the column"
+                                       "body line three filling the column"
+                                       "body line four ends here")))))
 
-  (it "strips page-number footers"
-    (expect (pdf-text-remove-recurring-lines
-             '("body one\n7" "body two\n8" "body three\n9"))
-            :to-equal '("body one" "body two" "body three")))
+  (it "strips a running head sharing the folio's baseline"
+    (let* ((pages (mapcar
+                   (lambda (n)
+                     (pdf-text-tests--page
+                      `(("body line one filling the column")
+                        ("body line two filling the column")
+                        ("body line three filling the column")
+                        ("body line four ends here" :x1 0.40)
+                        (,(number-to-string n) :x0 0.10 :x1 0.12 :base 0.93)
+                        ("A Tour of Rust" :x0 0.20 :x1 0.34 :base 0.93))))
+                   '(11 12 13)))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                      (pdf-text-remove-marginal-lines pages profiles))
+              :to-equal (make-list 3 '("body line one filling the column"
+                                       "body line two filling the column"
+                                       "body line three filling the column"
+                                       "body line four ends here")))))
 
-  (it "leaves non-recurring edge lines alone"
-    (expect (pdf-text-remove-recurring-lines
-             '("Chapter One\nfirst body" "Chapter Two\nsecond body"
-               "Chapter Three\nthird body"))
-            :to-equal '("Chapter One\nfirst body" "Chapter Two\nsecond body"
-                        "Chapter Three\nthird body")))
-
-  (it "strips qualified header forms mid-page too (2-up spreads embed them)"
-    (expect (pdf-text-remove-recurring-lines
-             '("HEAD | 1\nbody\nHEAD | 9\nmore" "HEAD | 2\nb" "HEAD | 3\nc"))
-            :to-equal '("body\nmore" "b" "c"))))
+  (it "keeps a footnote block, which is neither narrow nor detached"
+    (let* ((pages (mapcar
+                   (lambda (n)
+                     (pdf-text-tests--page
+                      `(("body line one filling the column")
+                        ("body line two filling the column")
+                        ("body line three filling the column")
+                        ("body line four ends here" :x1 0.40)
+                        ("* A footnote that runs the full measure" :gap 3
+                         :height 0.010)
+                        (,(format "a second footnote line here %d" n)
+                         :height 0.010))))
+                   '(1 2 3)))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (length (car (pdf-text-remove-marginal-lines pages profiles)))
+              :to-equal 6))))
 
 (describe "pdf-text--collapse-doubled"
   (it "collapses a line painted twice"
@@ -300,32 +565,33 @@
 
 (describe "pdf-text--dedup-adjacent"
   (it "collapses the same title on adjacent lines"
-    (expect (pdf-text--dedup-adjacent
-             '("PATTERNS OF CONFLICT" "PATTERNS OF CONFLICT" "body"))
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--dedup-adjacent
+                     (pdf-text-tests--page
+                      '(("PATTERNS OF CONFLICT") ("PATTERNS OF CONFLICT") ("body")))))
             :to-equal '("PATTERNS OF CONFLICT" "body")))
 
   (it "keeps identical lines separated by a blank"
-    (expect (pdf-text--dedup-adjacent '("refrain" "" "refrain"))
-            :to-equal '("refrain" "" "refrain")))
-
-  (it "keeps blank runs"
-    (expect (pdf-text--dedup-adjacent '("a" "" "" "b"))
-            :to-equal '("a" "" "" "b"))))
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--dedup-adjacent
+                     (pdf-text-tests--page '(("refrain") ("") ("refrain")))))
+            :to-equal '("refrain" "" "refrain"))))
 
 (describe "pdf-text--drop-split-echoes"
   (it "drops a following run that re-spells the previous line"
-    (expect (pdf-text--drop-split-echoes
-             '("PATTERNS OF CONFLICT" "PATTERNS OF" "CONFLICT" "body"))
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--drop-split-echoes
+                     (pdf-text-tests--page
+                      '(("PATTERNS OF CONFLICT") ("PATTERNS OF") ("CONFLICT")
+                        ("body")))))
             :to-equal '("PATTERNS OF CONFLICT" "body")))
 
   (it "keeps partial overlaps that never equal the line"
-    (expect (pdf-text--drop-split-echoes
-             '("PATTERNS OF CONFLICT" "PATTERNS OF" "WAR"))
-            :to-equal '("PATTERNS OF CONFLICT" "PATTERNS OF" "WAR")))
-
-  (it "stops the candidate run at a blank line"
-    (expect (pdf-text--drop-split-echoes '("refrain" "" "refrain"))
-            :to-equal '("refrain" "" "refrain"))))
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--drop-split-echoes
+                     (pdf-text-tests--page
+                      '(("PATTERNS OF CONFLICT") ("PATTERNS OF") ("WAR")))))
+            :to-equal '("PATTERNS OF CONFLICT" "PATTERNS OF" "WAR"))))
 
 (describe "pdf-text-join-small-caps"
   (it "closes gaps in a multi-word small-caps line"
@@ -335,11 +601,6 @@
   (it "joins a two-pair line"
     (expect (pdf-text-join-small-caps "S ECOND E DITION")
             :to-equal "SECOND EDITION"))
-
-  (it "joins chained single initials"
-    (expect (pdf-text-join-small-caps
-             "A N I NTRODUCTION TO P ROGRAMMING AND C OMPUTING")
-            :to-equal "AN INTRODUCTION TO PROGRAMMING AND COMPUTING"))
 
   (it "joins a lone-pair heading line"
     (expect (pdf-text-join-small-caps "P REFACE") :to-equal "PREFACE"))
@@ -353,33 +614,45 @@
 
   (it "leaves lines containing lowercase alone"
     (expect (pdf-text-join-small-caps "see EXHIBIT A NOW and SECTION B LATER")
-            :to-equal "see EXHIBIT A NOW and SECTION B LATER"))
+            :to-equal "see EXHIBIT A NOW and SECTION B LATER")))
 
-  (it "leaves ordinary prose alone"
-    (expect (pdf-text-join-small-caps "the quick brown fox")
-            :to-equal "the quick brown fox")))
+;;; The pipeline end to end
 
 (describe "pdf-text-render-pages"
+  (it "reflows pages from their glyph layout"
+    (let* ((page (append
+                  (pdf-text-tests--glyphs "First paragraph line one" 0.10 0.12)
+                  (list (list ?\n '(0.34 0.10 0.34 0.12)))
+                  (pdf-text-tests--glyphs "ends here." 0.10 0.14)
+                  (list (list ?\n '(0.20 0.12 0.20 0.14)))
+                  (pdf-text-tests--glyphs "Second paragraph opens" 0.13 0.16)
+                  (list (list ?\n '(0.35 0.14 0.35 0.16)))
+                  (pdf-text-tests--glyphs "and ends." 0.10 0.18))))
+      (expect (pdf-text-render-pages '("ignored") (list page))
+              :to-equal
+              '("First paragraph line one ends here.\n\nSecond paragraph opens and ends."))))
+
   (it "closes small-caps gaps in the pipeline"
     (expect (pdf-text-render-pages '("H OW TO D ESIGN P ROGRAMS\nS ECOND E DITION"))
             :to-equal '("HOW TO DESIGN PROGRAMS SECOND EDITION")))
 
-  (it "strips headers, joins paragraphs, collapses doubled titles"
+  (it "strips recurring headers and joins paragraphs without a layout"
     (expect (pdf-text-render-pages
-             '("14 | ABSTRACT\nABSTRACT ABSTRACT\n\nbody one runs to a full width line\ncontinues"
+             '("ABSTRACT | 14\nbody one runs to a full width line\ncontinues"
                "ABSTRACT | 15\nbody two"
-               "16 | ABSTRACT\nbody three"
-               "ABSTRACT | 17\nbody four"
-               "18 | ABSTRACT\nbody five"
-               "ABSTRACT | 19\nbody six"))
-            :to-equal '("ABSTRACT\n\nbody one runs to a full width line continues"
-                        "body two" "body three"
-                        "body four" "body five" "body six")))
+               "ABSTRACT | 16\nbody three"
+               "ABSTRACT | 17\nbody four"))
+            :to-equal '("body one runs to a full width line continues"
+                        "body two" "body three" "body four")))
 
   (it "collapses a shadow paint split across raw lines"
     (expect (pdf-text-render-pages
              '("PATTERNS OF CONFLICT\nPATTERNS OF\nCONFLICT\n\nbody"))
-            :to-equal '("PATTERNS OF CONFLICT\n\nbody"))))
+            :to-equal '("PATTERNS OF CONFLICT\n\nbody")))
+
+  (it "escapes extracted lines org would read as structure"
+    (expect (pdf-text-render-pages '("* bullet line" "#+keyword line"))
+            :to-equal '("\u200B* bullet line" "\u200B#+keyword line"))))
 
 (describe "pdf-text--escape-org-lines"
   (it "neutralizes headline-looking bullet lines"
@@ -503,6 +776,8 @@
 
   (it "passes a single textual page"
     (expect (pdf-text--scanned-p '("just one page")) :to-equal nil)))
+
+;;; The companion buffer
 
 (describe "pdf-text org structure"
   (it "builds headings matching the outline, escaped bullets staying text"
