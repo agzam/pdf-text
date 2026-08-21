@@ -1,0 +1,96 @@
+#+title: pdf-text.el
+
+[[https://github.com/agzam/pdf-text/actions/workflows/run-tests.yml][https://github.com/agzam/pdf-text/actions/workflows/run-tests.yml/badge.svg]]
+
+A reflowed plain-text reading view for PDFs, on top of [[https://github.com/vedang/pdf-tools][pdf-tools]].
+
+* What
+
+~pdf-view-as-text~ opens the PDF you are viewing as text in a companion buffer, on the page the image view shows and as far into it as the window sits down the image. The document outline becomes foldable org headings, each one owning the text of its own section - including the sections that start mid-page.
+
+The buffer is an ~org-mode~ derivative, so folding, sparse trees (~C-c /~), subtree narrowing and export all work on a book. Extracted text is escaped first, so nothing in the PDF parses as org structure.
+
+- ~pdf-view-as-text~ - open (or re-show) the companion.
+- ~pdf-text-show-in-pdf~ - jump the PDF back to the page at point.
+- ~pdf-text-sync-mode~ - keep the two buffers on the same page, both directions.
+
+The companion is reused as long as the file on disk has not changed, so re-opening a 600-page book costs a millisecond rather than seconds.
+
+* Why
+
+~pdf-view~ renders pages as images, so nothing a text buffer gives you applies: no soft wrap, no text motions, no isearch, no spell checker, no translate-at-point. The text is right there - epdfinfo serves it - but no one turns it into a buffer that reads like a book and stays in step with the page you are on.
+
+Getting there is more than calling ~pdf-info-gettext~. poppler computes paragraphs, columns and blocks internally and then throws them away before serving text: what arrives is a list of lines with no structure at all. So the reflow rebuilds it from the glyph boxes ~pdf-info-charlayout~ returns - where a line ends, how far the next one starts in, how much air sits between their baselines, how big its glyphs are. Out of that come paragraphs, list items, quotations, listings kept verbatim, headings at the line they name, running heads dropped, and hyphens resolved against the book's own vocabulary.
+
+* How
+
+** Install
+
+Needs Emacs 29.1, pdf-tools, and a built ~epdfinfo~ (~M-x pdf-tools-install~).
+
+#+begin_src emacs-lisp
+;; elpaca
+(use-package pdf-text
+  :ensure (pdf-text :host github :repo "agzam/pdf-text")
+  :defer t)
+
+;; straight
+(straight-use-package '(pdf-text :host github :repo "agzam/pdf-text"))
+#+end_src
+
+** Use
+
+Bind the entry command in ~pdf-view-mode~, and the sync-back inside the companion:
+
+#+begin_src emacs-lisp
+(with-eval-after-load 'pdf-view
+  (define-key pdf-view-mode-map (kbd "C-c x") #'pdf-view-as-text))
+
+(with-eval-after-load 'pdf-text
+  (define-key pdf-text-mode-map (kbd "RET") #'pdf-text-show-in-pdf)
+  (define-key pdf-text-mode-map (kbd "q") #'bury-buffer))
+#+end_src
+
+In a GUI frame bind ~<return>~ next to ~RET~ if another minor mode (evil-org, say) binds the function key directly - a direct ~<return>~ binding wins before the terminal translation to ~RET~ ever runs.
+
+** Tuning
+
+Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (paragraph break as a multiple of the leading), ~pdf-text-blank-factor~, ~pdf-text-size-tolerance~, ~pdf-text-heading-height~ and ~pdf-text-heading-max-words~ (what reads as a heading), ~pdf-text-monospace-variation~ (what reads as a listing), ~pdf-text-margin-band~ and ~pdf-text-recurring-min-count~ (what reads as a running head), ~pdf-text-min-text-fraction~ (below which a document is a scan and the command refuses it).
+
+* Known limits
+
+- Two-column pages: a table of contents arrives with its page numbers as a separate run of lines and stays that way. Real column detection is the fix.
+- Display maths and code inside prose break the sentence around them.
+- Paragraphs are not joined across a page boundary.
+- Pseudocode set in proportional type reflows as prose - nothing in the geometry says it is a listing.
+- A scan has no text layer; ~pdf-view-as-text~ names the page counts and refuses rather than opening an empty buffer.
+
+* Development
+
+#+begin_src sh
+bb deps    # buttercup into .local/elpa
+bb lint    # check-parens, byte-compile with warnings as errors, checkdoc
+bb test    # the buttercup suites in tests/
+bb ci      # all of the above
+#+end_src
+
+Neither the unit specs nor the corpus cases need a PDF or epdfinfo.
+
+** The corpus
+
+Synthetic geometry proves a rule; it never proves that a book renders. Real books cannot go in the repo and epdfinfo cannot run in CI, so the geometry travels instead of the PDF: a case under =tests/corpus/= carries a window of pages as line records, plus the rendering of one subject page that a human read once. The suite renders each case from its records and holds it to that golden and to a set of invariants - text survival, mid-sentence breaks, outline titles reading exactly once, no heading folding to an empty section.
+
+The tasks that do want a real book:
+
+#+begin_src sh
+bb corpus-add BOOK PAGE [SLUG]   # capture a page and its neighbours as a case
+bb corpus-accept [SLUG]          # re-render goldens after an intended change
+bb corpus-sweep BOOK [FIRST] [LAST]  # rank a book's pages by what they break
+bb corpus-audit [FRAGMENT] [LIMIT]   # account for a whole library, one line per book
+#+end_src
+
+~BOOK~ is a path or a fragment matched under ~$BOOKS~ (default =~/SyncMobile/Books=). ~$PDF_TOOLS~ overrides where a built pdf-tools is looked for.
+
+* License
+
+GPL-3.0-or-later.

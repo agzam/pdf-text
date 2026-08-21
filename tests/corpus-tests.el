@@ -1,9 +1,9 @@
-;;; tests/pdf/corpus-tests.el --- the pdf-text corpus, run as specs -*- lexical-binding: t; -*-
+;;; tests/corpus-tests.el --- the pdf-text corpus, run as specs -*- lexical-binding: t; -*-
 
-;; Renders every case under tests/pdf/corpus/ from its stored line
-;; records and holds it to its golden and to the invariants.  No PDF,
-;; no epdfinfo, so a real book's page is a regression test like any
-;; other spec.
+;; Renders every case under tests/corpus/ from its stored line records
+;; and holds it to its golden and to the invariants.  No PDF, no
+;; epdfinfo, so a real book's page is a regression test like any other
+;; spec.
 
 (require 'test-helper
          (expand-file-name
@@ -12,8 +12,8 @@
                                   "helper.el")))
 (require 'buttercup)
 
-(load-module-file "modules/pdf/autoload/pdf-text.el")
-(load-module-file "tests/pdf/corpus.el")
+(require 'pdf-text)
+(load-package-file "tests/corpus.el")
 
 ;;; Fixtures
 

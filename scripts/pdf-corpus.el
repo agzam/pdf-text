@@ -17,7 +17,21 @@
 
 (defvar pdf-corpus-script-root
   (expand-file-name "../" (file-name-directory (or load-file-name buffer-file-name)))
-  "Root of the config this script belongs to.")
+  "Root of the package this script belongs to.")
+
+(defvar pdf-corpus-pdf-tools-directories
+  '("~/.emacs.d/.local/elpaca/builds/pdf-tools"
+    "~/.emacs.d/elpaca/builds/pdf-tools"
+    "~/.config/emacs/.local/elpaca/builds/pdf-tools"
+    "~/.config/emacs/elpaca/builds/pdf-tools"
+    "~/.emacs.d/straight/build*/pdf-tools"
+    "~/.config/emacs/straight/build*/pdf-tools"
+    "~/.emacs.d/elpa/pdf-tools-*"
+    "~/.config/emacs/elpa/pdf-tools-*")
+  "Where a built pdf-tools is looked for, in order; PDF_TOOLS overrides.
+Wildcards allowed.  A directory qualifies once it holds both the lisp
+and the epdfinfo binary, which is where every package manager here
+leaves them.")
 
 (defvar pdf-corpus-books-directory
   (file-name-as-directory
@@ -36,22 +50,31 @@ counts.")
 Running heads and folios are short; a dropped line this long is a
 line of prose the cleanups ate.")
 
-(load (expand-file-name "modules/pdf/autoload/pdf-text.el" pdf-corpus-script-root)
-      nil 'nomessage)
-(load (expand-file-name "tests/pdf/corpus.el" pdf-corpus-script-root)
-      nil 'nomessage)
+(load (expand-file-name "pdf-text.el" pdf-corpus-script-root) nil 'nomessage)
+(load (expand-file-name "tests/corpus.el" pdf-corpus-script-root) nil 'nomessage)
+
+(defun pdf-corpus-script-pdf-tools ()
+  "Directory of a built pdf-tools: its lisp beside its epdfinfo binary.
+PDF_TOOLS names one outright; otherwise the usual install paths are
+searched, since the package has no config root to derive one from."
+  (let ((candidates (if-let* ((named (getenv "PDF_TOOLS")))
+                        (list named)
+                      pdf-corpus-pdf-tools-directories)))
+    (seq-find (lambda (dir)
+                (and (file-exists-p (expand-file-name "pdf-info.el" dir))
+                     (file-executable-p (expand-file-name "epdfinfo" dir))))
+              (mapcan (lambda (glob)
+                        (file-expand-wildcards (expand-file-name glob) t))
+                      candidates))))
 
 (defun pdf-corpus-script-connect ()
   "Put pdf-tools' epdfinfo within reach of this batch Emacs."
-  (let ((build (expand-file-name ".local/elpaca/builds/pdf-tools/"
-                                 pdf-corpus-script-root)))
-    (unless (file-directory-p build)
-      (error "pdf-tools is not built at %s" build))
+  (let ((build (or (pdf-corpus-script-pdf-tools)
+                   (error "No built pdf-tools found; set PDF_TOOLS to its directory (looked in %s)"
+                          (string-join pdf-corpus-pdf-tools-directories ", ")))))
     (add-to-list 'load-path build)
     (require 'pdf-info)
-    (setq pdf-info-epdfinfo-program (expand-file-name "epdfinfo" build))
-    (unless (file-executable-p pdf-info-epdfinfo-program)
-      (error "epdfinfo is not built at %s" pdf-info-epdfinfo-program))))
+    (setq pdf-info-epdfinfo-program (expand-file-name "epdfinfo" build))))
 
 (defun pdf-corpus-script-book (spec)
   "The PDF SPEC names: a path as it stands, or a fragment of one."

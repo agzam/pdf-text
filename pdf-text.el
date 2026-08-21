@@ -1,19 +1,66 @@
-;;; modules/pdf/autoload/pdf-text.el -*- lexical-binding: t; -*-
-
-;; Reflowed reading view for PDFs.  Text and glyph geometry both come
-;; from the already-running epdfinfo (`pdf-info-charlayout' per page,
-;; `pdf-info-gettext' as the fallback for a page without one), and the
-;; document outline (`pdf-info-outline') becomes foldable org headings.
+;;; pdf-text.el --- Reflowed plain-text reading view for PDFs -*- lexical-binding: t; -*-
+;;
+;; Copyright (C) 2026 Ag Ibragimov
+;;
+;; Author: Ag Ibragimov <agzam.ibragimov@gmail.com>
+;; Maintainer: Ag Ibragimov <agzam.ibragimov@gmail.com>
+;; Created: August 16, 2026
+;; Version: 0.1.0
+;; Keywords: files, multimedia
+;; Homepage: https://github.com/agzam/pdf-text
+;; Package-Requires: ((emacs "29.1") (pdf-tools "1.0"))
+;;
+;; This file is not part of GNU Emacs.
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+;;
+;;; Commentary:
+;;
+;; `pdf-view-as-text' reads the PDF of the current `pdf-view-mode' buffer as
+;; reflowed text in a companion buffer, landing on the page the image view
+;; shows and as far into it as the window sits down the image.  Text and glyph
+;; geometry both come from the already-running epdfinfo (`pdf-info-charlayout'
+;; per page, `pdf-info-gettext' as the fallback for a page without one), and
+;; the document outline (`pdf-info-outline') becomes foldable org headings.
+;; `pdf-text-show-in-pdf' jumps the PDF back to the page at point;
+;; `pdf-text-sync-mode' keeps the two on the same page in both directions.
+;;
+;; poppler hands out lines, never blocks: it computes paragraphs and columns
+;; internally and then discards them while serving text, so the reflow has to
+;; rebuild that structure from the glyph boxes - where a line ends, how far
+;; the next one starts in, how much air sits between their baselines.
+;;
 ;; Everything below the entry commands is pure transformation, testable
 ;; without a PDF or pdf-tools on the load path.
 ;;
-;; poppler hands out lines, never blocks: it computes paragraphs and
-;; columns internally and then discards them while serving text, so the
-;; reflow has to rebuild that structure from the glyph boxes - where a
-;; line ends, how far the next one starts in, how much air sits between
-;; their baselines.
+;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
+
+;; pdf-tools is a runtime dependency only: every symbol below resolves when a
+;; command runs, so the transforms load and test without it.  org arrives with
+;; the derived mode.
+(declare-function pdf-info-charlayout "ext:pdf-info")
+(declare-function pdf-info-gettext "ext:pdf-info")
+(declare-function pdf-info-number-of-pages "ext:pdf-info")
+(declare-function pdf-info-outline "ext:pdf-info")
+(declare-function pdf-view-current-page "ext:pdf-view")
+(declare-function pdf-view-goto-page "ext:pdf-view")
+(declare-function pdf-view-image-size "ext:pdf-view")
+(declare-function org-cycle-overview "org-cycle")
+(declare-function org-fold-show-set-visibility "org-fold")
 
 ;;; Statistics over glyph measurements
 
@@ -35,7 +82,7 @@
            mean)))))
 
 (defun pdf-text--mode-value (values bucket &optional weights)
-  "Most common of VALUES once rounded into BUCKET-wide steps.
+  "Most common of VALUES once rounded into steps BUCKET wide.
 The mode, not an extreme: a page number outside the column, a heading
 at twice the body size, or a stray wide line cannot move it.  WEIGHTS,
 a parallel list, says how much each value counts - by ink width, a
@@ -166,7 +213,7 @@ geometry of its own."
   "Body lines a page needs before its own column edges are trusted.")
 
 (defun pdf-text--page-profile (lines profile)
-  "PROFILE with the column edges this page's own body lines establish.
+  "PROFILE with the column edges this page's own body LINES establish.
 Mirrored margins put the body column at a different offset on facing
 pages, so one document-wide edge is wrong for half the book.  Only
 lines set at the body size have a say: running heads, margin notes and
@@ -246,7 +293,7 @@ A run whose right edges agree while its left edges move is set flush
 right; one whose centres agree while both edges move is centred.
 Either way the left edge means nothing about paragraphs.  Justified
 prose looks flush right too, so the run must also stay clear of the
-column's own right edge."
+right edge PROFILE gives the column."
   (let ((space (or (plist-get profile :space) 0.005))
         (column-right (plist-get profile :right))
         (column-left (plist-get profile :left))
@@ -288,7 +335,7 @@ column's own right edge."
                        (* 2 space)))))))
 
 (defun pdf-text--mark-alignment (lines profile)
-  "Tag the LINES of right-aligned and centred runs.
+  "Tag the LINES of right-aligned and centred runs, measured against PROFILE.
 A pair of lines establishes the run, then it spreads to the neighbours
 sharing its measure: one line of a flush-right note can start where
 the line above it did by coincidence, and that is no reason to read it
@@ -343,7 +390,7 @@ marker or a wrapped clause than a bullet.")
 
 (defconst pdf-text-numeral-re
   "(?[0-9]\\{1,3\\}[.)]\\|(?[ivxIVX]\\{1,5\\})\\|(?[ivx]\\{1,5\\}[.)]\\|([a-zA-Z])"
-  "Enumerators that open a list item: 1. 2) (3) iv. (a).")
+  "Enumerators that open a list item: 1., 2), (3), iv., (a).")
 
 (defun pdf-text--list-marker (text &optional indented)
   "The list marker TEXT opens with, else nil.
@@ -435,10 +482,10 @@ them.  Nil at the end of the page."
     found))
 
 (defun pdf-text--margin-candidates (lines profile)
-  "Lines of one page that sit apart in the top or bottom margin band.
-Narrow, inside the band, and cut off from the body by more than two
-leadings - a footnote block fails the last two tests, which is what
-keeps it out of the running-head count."
+  "LINES of one page that sit apart in the top or bottom margin band.
+Narrow, inside the band, and cut off from the body by more than two of
+PROFILE's leadings - a footnote block fails the last two tests, which
+is what keeps it out of the running-head count."
   (let ((leading (plist-get profile :leading))
         (left (plist-get profile :left))
         (right (plist-get profile :right)))
@@ -728,7 +775,7 @@ estimate."
   (eq 'mono (pdf-text-line-kind line)))
 
 (defun pdf-text--drop-cap-p (line profile)
-  "Whether LINE is an oversized initial standing alone on its line."
+  "Whether LINE is an initial standing alone, oversized against PROFILE's body."
   (let ((case-fold-search nil)
         (height (pdf-text-line-height line))
         (body (plist-get profile :height)))
@@ -746,7 +793,8 @@ estimate."
           (< (* pdf-text-gap-factor leading) step)))))
 
 (defun pdf-text--size-break-p (line prev profile)
-  "Whether LINE and PREV differ enough in glyph size to be separate blocks."
+  "Whether LINE and PREV differ enough in glyph size to be separate blocks.
+The difference is measured against PROFILE's body height."
   (when-let* ((body (plist-get profile :height))
               (this (pdf-text-line-height line))
               (that (pdf-text-line-height prev))
@@ -781,9 +829,10 @@ character-count fallback for a page with no geometry."
          (* pdf-text-full-line-fraction page-width)))))
 
 (defun pdf-text--indent-break-p (line block profile)
-  "Whether LINE starts in from its block's body margin: a new paragraph.
-Silent over a right-aligned or centred run, where the left edge moves
-for reasons of typesetting."
+  "Whether LINE starts in from BLOCK's body margin: a new paragraph.
+The step is measured in PROFILE's space widths, and the rule is silent
+over a right-aligned or centred run, where the left edge moves for
+reasons of typesetting."
   (let ((space (or (plist-get profile :space) 0))
         (body (pdf-text-block-body-x block))
         (x0 (pdf-text-line-x0 line)))
@@ -793,9 +842,9 @@ for reasons of typesetting."
      (t (and (null x0) (string-match-p "\\`[ \t]" (pdf-text-line-text line)))))))
 
 (defun pdf-text--dedent-break-p (line block profile)
-  "Whether LINE falls back left of its block's body margin, ending it.
+  "Whether LINE falls back left of BLOCK's body margin, ending it.
 A quotation, a listing or a list item runs inset; prose resuming at
-the column margin is no longer part of it.  A drop cap is the
+PROFILE's column margin is no longer part of it.  A drop cap is the
 exception: it holds the first lines of its own paragraph inset, and
 the paragraph really does go on once the text clears the initial."
   (let* ((space (or (plist-get profile :space) 0))
@@ -811,9 +860,9 @@ the paragraph really does go on once the text clears the initial."
 (defun pdf-text--item-break-p (line prev block profile page-width)
   "Whether LINE opens a list item.
 The marker alone is not enough - a wrapped clause can start with a
-dash - so the line must also stand apart from its predecessor: a step
-in from the margin, extra air above, a predecessor that ended short,
-or a list already running."
+dash - so LINE must also stand apart from PREV: a step in from
+PROFILE's margin, extra air above, a predecessor that ended short of
+PAGE-WIDTH's measure, or BLOCK already running as a list."
   (let* ((space (or (plist-get profile :space) 0))
          (x0 (pdf-text-line-x0 line))
          (left (plist-get profile :left))
@@ -830,7 +879,7 @@ or a list already running."
   "Why LINE cannot continue BLOCK, or nil when it can.
 Ordered by strength of evidence: a wrap hyphen or a drop cap forces
 the join, a change of face or a list marker forces the break, and the
-geometry decides the rest."
+geometry - PROFILE's body measures, PAGE-WIDTH - decides the rest."
   (let ((prev (car (pdf-text-block-lines block)))
         (kind (pdf-text-block-kind block)))
     (cond
@@ -853,7 +902,7 @@ geometry decides the rest."
 
 (defun pdf-text--block-margin (block profile)
   "Right margin BLOCK's lines wrap against.
-A block starting at the column margin wraps against the column's own
+A block starting at the column margin wraps against PROFILE's own
 right edge.  One starting elsewhere - a margin note, a pull quote, an
 indented list item - wraps against its own widest line instead;
 measured against the column's, every line of it would read as a
@@ -872,7 +921,8 @@ short-line rule runs over grouped blocks rather than line by line."
           (t widest))))
 
 (defun pdf-text--start-block (line reason profile)
-  "A block opened by LINE, which broke off the one before it for REASON."
+  "A block opened by LINE, which broke off the one before it for REASON.
+PROFILE gives the column margin the block's own is measured from."
   (let* ((text (pdf-text-line-text line))
          (space (or (plist-get profile :space) 0))
          (left (pdf-text-line-x0 line))
@@ -909,7 +959,8 @@ short-line rule runs over grouped blocks rather than line by line."
   block)
 
 (defun pdf-text--group-lines (lines profile page-width)
-  "LINES of one page grouped into blocks by every rule but the short line."
+  "LINES of one page grouped into blocks by every rule but the short line.
+PROFILE and PAGE-WIDTH are what those rules measure against."
   (let (blocks current)
     (dolist (line lines)
       (let ((reason (and current
@@ -930,7 +981,9 @@ short-line rule runs over grouped blocks rather than line by line."
 (defun pdf-text--split-short-lines (block profile page-width)
   "BLOCK split wherever one of its lines ended short of its own margin.
 A short line is the end of a paragraph, an entry or an item; the rule
-needs the block's measure, so it runs once the grouping settled it."
+needs the block's measure - PROFILE's column edge only where the block
+starts at it, PAGE-WIDTH throughout - so it runs once the grouping
+settled it."
   (if (or (memq (pdf-text-block-kind block) '(mono fixed blank))
           (< (length (pdf-text-block-lines block)) 2))
       (list block)
@@ -962,7 +1015,7 @@ needs the block's measure, so it runs once the grouping settled it."
       (nreverse parts))))
 
 (defun pdf-text--blocks (lines profile)
-  "LINES of one page grouped into `pdf-text-block' records."
+  "LINES of one page grouped into `pdf-text-block' records against PROFILE."
   (let ((page-width (pdf-text--page-width lines))
         (marked (pdf-text--mark-alignment (pdf-text--mark-monospace lines) profile)))
     (cl-mapcan (lambda (block)
@@ -972,7 +1025,7 @@ needs the block's measure, so it runs once the grouping settled it."
 ;;; Rendering blocks back to text
 
 (defun pdf-text--join-block (block vocabulary)
-  "BLOCK's lines joined into one paragraph line."
+  "BLOCK's lines joined into one paragraph line, de-hyphenated by VOCABULARY."
   (let (para)
     (dolist (line (pdf-text-block-lines block) (or para ""))
       (let ((text (string-trim (pdf-text-line-text line))))
@@ -981,7 +1034,7 @@ needs the block's measure, so it runs once the grouping settled it."
                      text))))))
 
 (defun pdf-text--render-item (block vocabulary indent)
-  "BLOCK rendered as an org list item at INDENT columns.
+  "BLOCK rendered as an org list item at INDENT columns, joined by VOCABULARY.
 A bullet glyph becomes org's own dash, which costs nothing to read and
 buys real list structure; an enumerator is already org syntax and
 stays as the document wrote it."
@@ -997,7 +1050,8 @@ stays as the document wrote it."
 LEFT is the margin of the listing this block belongs to, which spans
 every block the vertical gaps inside a listing split it into - measure
 each block against itself and the second half of a listing loses its
-nesting."
+nesting.  The step is the listing's own space width, PROFILE's where
+its lines carry none."
   (let* ((lines (pdf-text-block-lines block))
          (unit (or (car (delq nil (mapcar #'pdf-text-line-space lines)))
                    (plist-get profile :space)
@@ -1011,7 +1065,7 @@ nesting."
                lines "\n")))
 
 (defun pdf-text--inset-p (block profile)
-  "Whether BLOCK is a passage set in from the column margin, as a quotation is.
+  "Whether BLOCK is a passage set in from PROFILE's column, as a quotation is.
 One line in from the margin is a centred heading or an attribution and
 reads better flush; the inset only means something over a passage."
   (let ((left (pdf-text-block-left block))
@@ -1029,7 +1083,7 @@ reads better flush; the inset only means something over a passage."
 
 (defun pdf-text--sidebar-title-p (block next profile)
   "Whether BLOCK is the title of the boxed passage NEXT opens.
-A sidebar is set in from the column and in smaller type than the body,
+A sidebar is set in from PROFILE's column and in smaller type than its body,
 and its first line is its title.  On its own that line reads as a
 centred heading and prints flush, which loses the box: the title
 starts where the box starts and is set as the box is set, so it is
@@ -1049,7 +1103,7 @@ part of it."
          (pdf-text--inset-p next profile))))
 
 (defun pdf-text--inset-blocks (blocks profile)
-  "The blocks of BLOCKS that render set in from the column margin.
+  "The blocks of BLOCKS that render set in from PROFILE's column margin.
 A passage of more than one line that runs inset is a quotation or the
 body of a boxed sidebar; the sidebar's title line joins it, so the box
 reads as the one unit the page sets."
@@ -1063,7 +1117,7 @@ reads as the one unit the page sets."
 (defun pdf-text--item-indent (block stack profile)
   "Indent columns for item BLOCK, and the nesting STACK it leaves behind.
 Deeper markers nest, a marker back at an earlier column closes the
-levels it left."
+levels it left; PROFILE's space width is the step."
   (let ((left (pdf-text-block-left block))
         (space (or (plist-get profile :space) 0)))
     (if (null left)
@@ -1098,7 +1152,7 @@ tight list - stay together."
 
 (defun pdf-text--heading-block-p (block profile text)
   "Whether BLOCK, joined up as TEXT, reads as a heading by how it is set.
-Bigger type than the body, few words, nothing closing the line: what a
+Bigger type than PROFILE's body, few words, nothing closing the line: what a
 section title looks like on a page that spells it differently from the
 outline - a display face the extraction reads letter by letter, a
 title the page carries with its chapter number."
@@ -1120,7 +1174,8 @@ headings take what is left over, both in the order they run down the
 page - and there the heading goes above the block, because the words
 differ and the page's own are not the reflow's to drop.  A title that
 finds no block at all stays for `pdf-text--interleave-outline', which
-has only the page's start left to put it at."
+has only the page's start left to put it at.  PROFILE says how a page
+sets a heading; VOCABULARY joins a title split across lines."
   (when-let* ((pending (pdf-text--heading-alist headings)))
     (let ((texts (mapcar (lambda (block)
                            (and (memq (pdf-text-block-kind block) '(para item))
@@ -1144,7 +1199,7 @@ has only the page's start left to put it at."
       assigned)))
 
 (defun pdf-text--render-blocks (blocks profile vocabulary &optional headings)
-  "BLOCKS as the page's reflowed text.
+  "BLOCKS as the page's reflowed text, measured by PROFILE, joined by VOCABULARY.
 HEADINGS are the org heading lines the outline puts on this page.
 `pdf-text--assign-headings' says which block each one belongs at: a
 section starts where the page starts it, not where the page it sits
@@ -1609,3 +1664,6 @@ on RET works without the mode."
         (with-current-buffer pdf
           (remove-hook 'pdf-view-after-change-page-hook
                        #'pdf-text-sync--follow-pdf t))))))
+
+(provide 'pdf-text)
+;;; pdf-text.el ends here

@@ -1,4 +1,4 @@
-;;; tests/pdf/corpus.el --- real-book cases for the pdf-text reflow -*- lexical-binding: t; -*-
+;;; tests/corpus.el --- real-book cases for the pdf-text reflow -*- lexical-binding: t; -*-
 
 ;; Synthetic geometry proves a rule; it never proves a book renders.
 ;; Books cannot go in the repo and epdfinfo cannot run in CI, so a case

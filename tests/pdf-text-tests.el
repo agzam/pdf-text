@@ -1,4 +1,4 @@
-;;; tests/pdf/pdf-text-tests.el --- pdf/autoload/pdf-text.el specs -*- lexical-binding: t; -*-
+;;; tests/pdf-text-tests.el --- pdf-text.el specs -*- lexical-binding: t; -*-
 
 (require 'test-helper
          (expand-file-name
@@ -7,7 +7,7 @@
                                   "helper.el")))
 (require 'buttercup)
 
-(load-module-file "modules/pdf/autoload/pdf-text.el")
+(require 'pdf-text)
 
 (require 'org)
 (require 'org-element)

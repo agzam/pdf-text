@@ -1,0 +1,87 @@
+{:tasks
+ {:requires ([babashka.fs :as fs]
+             [babashka.process :as p]
+             [clojure.string :as str])
+  ;; *file* is cwd-relative under --config; the system property is not
+  :init (do (def root (str (fs/parent (fs/canonicalize
+                                       (or (System/getProperty "babashka.config")
+                                           *file*)))))
+            (def elpa (str (fs/path root ".local" "elpa")))
+            ;; Neither -Q nor --batch relocates `user-emacs-directory', so an
+            ;; unadorned batch Emacs drops trampolines, auto-save lists and
+            ;; package droppings into whatever config the developer runs.
+            ;; Everything this repo generates belongs under .local/.
+            (def emacs-batch
+              ["emacs" "-Q" "--batch"
+               "--init-directory" (str (fs/path root ".local" "emacs"))
+               ;; Guarded: an Emacs built without native comp dies on a void
+               ;; native-comp-eln-load-path.
+               "--eval" (format "(when (and (featurep 'native-compile) (fboundp 'startup-redirect-eln-cache)) (startup-redirect-eln-cache %s))"
+                                (pr-str (str (fs/path root ".local" "eln"))))])
+            (defn corpus-task
+              "Run scripts/pdf-corpus.el and call FORM in it; the exit code is ours."
+              [form]
+              (System/exit
+               (:exit (apply p/shell {:continue true :dir root}
+                             (concat emacs-batch
+                                     ["-l" (str (fs/path root "scripts" "pdf-corpus.el"))
+                                      "--eval" form]))))))
+
+  deps {:doc "Install test deps (buttercup) into .local/elpa"
+        :task (apply p/shell
+                     (concat emacs-batch
+                             ["--eval" (format "(setq package-user-dir %s)" (pr-str elpa))
+                              "--eval" "(require 'package)"
+                              "--eval" "(add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\"))"
+                              "-f" "package-initialize"
+                              "--eval" "(dolist (p '(buttercup)) (unless (assq p package-alist) (unless package-archive-contents (package-refresh-contents)) (package-install (cadr (assq p package-archive-contents)))))"]))}
+
+  lint {:doc "check-parens over every tracked .el, byte-compile and checkdoc over pdf-text.el"
+        :task (let [files (->> (p/shell {:out :string :dir root}
+                                        "git" "ls-files" "-co" "--exclude-standard" "*.el")
+                               :out
+                               str/split-lines
+                               (remove str/blank?)
+                               ;; -c lists deleted-but-unstaged files too
+                               (filter (fn [f] (fs/exists? (fs/path root f)))))]
+                (apply p/shell {:dir root}
+                       (concat emacs-batch ["-l" "scripts/lint.el" "pdf-text.el"]
+                               (remove #{"pdf-text.el"} files))))}
+
+  test {:doc "Run the buttercup suites in tests/ - no PDF, no epdfinfo"
+        :depends [deps]
+        ;; :dir matters: buttercup-run-discover finds nothing from foreign cwds
+        :task (apply p/shell {:dir root}
+                     (concat emacs-batch
+                             ["--eval" (format "(setq package-user-dir %s)" (pr-str elpa))
+                              "-f" "package-initialize"
+                              "--eval" "(setq buttercup-stack-frame-style 'omit)"
+                              "-f" "buttercup-run-discover" (str (fs/path root "tests"))]))}
+
+  corpus-add {:doc "Capture a page of a real book into tests/corpus: `bb corpus-add BOOK PAGE [SLUG]'. BOOK is a path or a fragment of one under ~/SyncMobile/Books; the page travels with its neighbours, since the reflow reads geometry across pages. Needs epdfinfo built."
+              :task (let [[book page slug] *command-line-args*]
+                      (when-not (and book page)
+                        (println "usage: bb corpus-add BOOK PAGE [SLUG]")
+                        (System/exit 2))
+                      (corpus-task (format "(pdf-corpus-add %s %s %s)"
+                                           (pr-str book) (pr-str page) (pr-str slug))))}
+
+  corpus-accept {:doc "Rewrite corpus goldens from the stored records after an intended change, so the review happens in `git diff': `bb corpus-accept [SLUG]'. Opens no PDF."
+                 :task (corpus-task (format "(pdf-corpus-accept %s)"
+                                            (pr-str (first *command-line-args*))))}
+
+  corpus-sweep {:doc "Render a whole book and rank its pages by the invariants they break: `bb corpus-sweep BOOK [FIRST] [LAST]'. Where the next case comes from. Needs epdfinfo built."
+                :task (let [[book first last] *command-line-args*]
+                        (when-not book
+                          (println "usage: bb corpus-sweep BOOK [FIRST] [LAST]")
+                          (System/exit 2))
+                        (corpus-task (format "(pdf-corpus-sweep %s %s %s)"
+                                             (pr-str book) (pr-str first) (pr-str last))))}
+
+  corpus-audit {:doc "Render every book under ~/SyncMobile/Books and account for the conversion, one line each: `bb corpus-audit [FRAGMENT] [LIMIT]'. Where the library-wide verdict comes from. Needs epdfinfo built."
+                :task (let [[fragment limit] *command-line-args*]
+                        (corpus-task (format "(pdf-corpus-audit %s %s)"
+                                             (pr-str fragment) (pr-str limit))))}
+
+  ci {:doc "deps + lint + test"
+      :depends [deps lint test]}}}
