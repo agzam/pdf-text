@@ -56,8 +56,8 @@
 (declare-function pdf-info-gettext "ext:pdf-info")
 (declare-function pdf-info-number-of-pages "ext:pdf-info")
 (declare-function pdf-info-outline "ext:pdf-info")
-(declare-function pdf-view-current-page "ext:pdf-view")
 (declare-function pdf-view-goto-page "ext:pdf-view")
+(declare-function image-mode-window-get "image-mode")
 (declare-function pdf-view-image-size "ext:pdf-view")
 (declare-function org-cycle-overview "org-cycle")
 (declare-function org-fold-show-set-visibility "org-fold")
@@ -1513,6 +1513,43 @@ when the whole page fits the window; approximate under
           0.0))
     (error 0.0)))
 
+(defun pdf-text--pdf-page ()
+  "Page the current `pdf-view' buffer shows.
+`pdf-view-current-page' is a macro, so compiled without pdf-tools on
+the load path it becomes a function call no session can resolve; its
+expansion - the page from image-mode's window properties - is called
+directly instead."
+  (image-mode-window-get 'page))
+
+(defvar pdf-text-gc-cons-threshold (* 256 1024 1024)
+  "Consing one render may do before garbage collection runs.
+The reflow allocates on the order of 2000 glyph conses per page, and
+in a live session every collection scans the user's whole working
+heap, not just the render's share - measured at 60% of the render's
+cost against the stock threshold.  256MB absorbs a 60-page window
+without a single collection and caps the longest books at a handful;
+more only enlarges the transient heap spike it licenses.")
+
+(defmacro pdf-text--with-render-gc (&rest body)
+  "Run BODY with garbage collection deferred.
+`gc-cons-threshold' rises to `pdf-text-gc-cons-threshold', and
+`gc-cons-percentage' to 0.6 - the collector fires on whichever rule
+allows more consing, and on a multi-GB heap the percentage rule is
+the one that fires.  Both bindings unwind when BODY exits, error
+included, so the deferred collection runs against the session's own
+thresholds afterwards."
+  (declare (indent 0) (debug t))
+  `(let ((gc-cons-threshold pdf-text-gc-cons-threshold)
+         (gc-cons-percentage 0.6))
+     ,@body))
+
+(defvar pdf-text-sync-mode)
+
+(defvar pdf-text-sync-default t
+  "Non-nil starts `pdf-text-sync-mode' on a freshly rendered companion.
+Reuse keeps whatever the reader last set, so switching the sync off
+holds for that book until its next re-render.")
+
 ;;;###autoload
 (defun pdf-view-as-text ()
   "Read the current PDF as reflowed text in a companion buffer.
@@ -1521,56 +1558,70 @@ as far into the page's text as the window top sits down the image.
 The companion is reused as long as the PDF file on disk is unchanged;
 a stale or missing one is re-extracted through epdfinfo.  The PDF
 outline becomes org headings; without one, numbered section lines
-found in the text stand in.  A document whose pages carry almost no
-text - a scan - signals an error instead of an empty buffer."
+found in the text stand in.  A fresh companion starts
+`pdf-text-sync-mode' when `pdf-text-sync-default' is non-nil.  A
+document whose pages carry almost no text - a scan - signals an
+error instead of an empty buffer."
   (interactive)
   (unless (derived-mode-p 'pdf-view-mode)
     (user-error "Not in a pdf-view buffer"))
   (let* ((pdf-buf (current-buffer))
-         (page (pdf-view-current-page))
+         (page (pdf-text--pdf-page))
          (fraction (pdf-text--view-fraction))
          (stamp (pdf-text--file-stamp buffer-file-name))
          (name (format "*pdf-text: %s*" (buffer-name)))
-         (buf (get-buffer name)))
-    (unless (and buf stamp
-                 (equal stamp (buffer-local-value 'pdf-text--source-stamp buf)))
-      ;; the layout carries the text as well as its geometry, so gettext
-      ;; only runs for a page epdfinfo lays out no glyphs for
-      (let* ((layouts (cl-loop for p from 1 to (pdf-info-number-of-pages)
-                               collect (condition-case nil
-                                           (pdf-info-charlayout p)
-                                         (error nil))))
-             (raw (cl-loop for p from 1
-                           for layout in layouts
-                           collect (if layout
-                                       (pdf-text--layout-text layout)
-                                     (pdf-info-gettext p '(0 0 1 1))))))
-        (when (pdf-text--scanned-p raw)
-          (user-error "%s has no text layer (%d of %d pages carry text)"
-                      (buffer-name)
-                      (cl-count-if-not #'string-blank-p raw) (length raw)))
-        (let* ((outline (pdf-info-outline))
-               (rendered (pdf-text-render-pages
-                          raw layouts
-                          (pdf-text-page-headings outline 1 (length raw))))
-               (pages (if outline
-                          (pdf-text--interleave-outline rendered outline)
-                        (pdf-text--synthesize-headings rendered))))
-          (setq buf (get-buffer-create name))
-          (with-current-buffer buf
-            (let ((inhibit-read-only t))
-              (erase-buffer)
-              (pdf-text-mode)
-              (pdf-text--insert-pages pages)
-              (setq pdf-text--source-stamp stamp
-                    pdf-text--has-outline
-                    (and (save-excursion
-                           (goto-char (point-min))
-                           (re-search-forward "^\\*+ " nil t))
-                         t))
-              (when pdf-text--has-outline (org-cycle-overview)))))))
+         (buf (get-buffer name))
+         (fresh (not (and buf stamp
+                          (equal stamp (buffer-local-value
+                                        'pdf-text--source-stamp buf))))))
+    (when fresh
+      ;; the render blocks until it is done; say so up front
+      (message "pdf-text: extracting text from %s..." (buffer-name))
+      (pdf-text--with-render-gc
+        ;; the layout carries the text as well as its geometry, so gettext
+        ;; only runs for a page epdfinfo lays out no glyphs for
+        (let* ((start (float-time))
+               (layouts (cl-loop for p from 1 to (pdf-info-number-of-pages)
+                                 collect (condition-case nil
+                                             (pdf-info-charlayout p)
+                                           (error nil))))
+               (raw (cl-loop for p from 1
+                             for layout in layouts
+                             collect (if layout
+                                         (pdf-text--layout-text layout)
+                                       (pdf-info-gettext p '(0 0 1 1))))))
+          (when (pdf-text--scanned-p raw)
+            (user-error "%s has no text layer (%d of %d pages carry text)"
+                        (buffer-name)
+                        (cl-count-if-not #'string-blank-p raw) (length raw)))
+          (let* ((outline (pdf-info-outline))
+                 (rendered (pdf-text-render-pages
+                            raw layouts
+                            (pdf-text-page-headings outline 1 (length raw))))
+                 (pages (if outline
+                            (pdf-text--interleave-outline rendered outline)
+                          (pdf-text--synthesize-headings rendered))))
+            (setq buf (get-buffer-create name))
+            (with-current-buffer buf
+              (let ((inhibit-read-only t))
+                (erase-buffer)
+                (pdf-text-mode)
+                (pdf-text--insert-pages pages)
+                (setq pdf-text--source-stamp stamp
+                      pdf-text--has-outline
+                      (and (save-excursion
+                             (goto-char (point-min))
+                             (re-search-forward "^\\*+ " nil t))
+                           t))
+                (when pdf-text--has-outline (org-cycle-overview)))))
+          (message "pdf-text: extracting text from %s...done (%.1fs)"
+                   (buffer-name) (- (float-time) start)))))
     (with-current-buffer buf
-      (setq pdf-text--pdf-buffer pdf-buf))
+      (setq pdf-text--pdf-buffer pdf-buf)
+      ;; re-enabling on reuse re-arms the pdf-side hook after the PDF
+      ;; buffer was killed and reopened; an explicit off stays off
+      (when (or (and fresh pdf-text-sync-default) pdf-text-sync-mode)
+        (pdf-text-sync-mode 1)))
     (setq pdf-text--companion buf)
     (pop-to-buffer buf)
     (goto-char (pdf-text--page-position page fraction))
@@ -1606,7 +1657,7 @@ side, not about flipping pages in a buried buffer."
                   (win (get-buffer-window pdf t)))
         (let ((pdf-text-sync--inhibit t))
           (with-selected-window win
-            (unless (eql page (pdf-view-current-page))
+            (unless (eql page (pdf-text--pdf-page))
               (pdf-view-goto-page page))))))))
 
 (defun pdf-text-sync--follow-pdf ()
@@ -1615,7 +1666,7 @@ Removes itself once the companion is gone or dropped the mode - the
 hook must not outlive its buffer.  A companion already on the page
 stays put, so the explicit RET jump keeps its exact position."
   (let ((companion pdf-text--companion)
-        (page (pdf-view-current-page)))
+        (page (pdf-text--pdf-page)))
     (cond
      ((not (and (buffer-live-p companion)
                 (buffer-local-value 'pdf-text-sync-mode companion)))

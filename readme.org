@@ -12,7 +12,7 @@ The buffer is an ~org-mode~ derivative, so folding, sparse trees (~C-c /~), subt
 
 - ~pdf-view-as-text~ - open (or re-show) the companion.
 - ~pdf-text-show-in-pdf~ - jump the PDF back to the page at point.
-- ~pdf-text-sync-mode~ - keep the two buffers on the same page, both directions.
+- ~pdf-text-sync-mode~ - keep the two buffers on the same page, both directions. On by default in a fresh companion (~pdf-text-sync-default~); toggling it off sticks until the book re-renders.
 
 The companion is reused as long as the file on disk has not changed, so re-opening a 600-page book costs a millisecond rather than seconds.
 
@@ -90,6 +90,17 @@ bb corpus-audit [FRAGMENT] [LIMIT]   # account for a whole library, one line per
 #+end_src
 
 ~BOOK~ is a path or a fragment matched under ~$BOOKS~ (default =~/SyncMobile/Books=). ~$PDF_TOOLS~ overrides where a built pdf-tools is looked for.
+
+** Timing
+
+A performance claim is a number that reruns:
+
+#+begin_src sh
+bb perf BOOK             # the render stage by stage: seconds, ms/page, share
+bb perf-ipc BOOK [PAGES] # the charlayout stage split into epdfinfo and pdf-info's parsing
+#+end_src
+
+~bb perf~ runs the byte-compiled form the package ships as; ~FORM=source~ prices the interpreted penalty, ~PROFILE=1~ adds a CPU self-time profile. The staging mirrors the product pipeline and a run fails if the two ever disagree.
 
 * License
 

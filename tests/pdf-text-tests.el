@@ -1201,3 +1201,90 @@ monospaced one."
       (dolist (page '(1 2 3 4))
         (goto-char (pdf-text--page-start page))
         (expect (pdf-text-page-at-point) :to-equal page)))))
+
+(describe "pdf-text-sync-mode"
+  (it "arms hooks on both buffers and disarms them on toggle"
+    (let ((pdf (generate-new-buffer " *sync-pdf*"))
+          (companion (generate-new-buffer " *sync-text*")))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            (setq pdf-text--pdf-buffer pdf)
+            (pdf-text-sync-mode 1)
+            (expect (memq #'pdf-text-sync--follow-text post-command-hook)
+                    :to-be-truthy)
+            (expect (memq #'pdf-text-sync--follow-pdf
+                          (buffer-local-value 'pdf-view-after-change-page-hook
+                                              pdf))
+                    :to-be-truthy)
+            (pdf-text-sync-mode -1)
+            (expect (memq #'pdf-text-sync--follow-text post-command-hook)
+                    :to-be nil)
+            (expect (memq #'pdf-text-sync--follow-pdf
+                          (buffer-local-value 'pdf-view-after-change-page-hook
+                                              pdf))
+                    :to-be nil))
+        (kill-buffer companion)
+        (kill-buffer pdf))))
+
+  (it "re-enabling arms a reopened source buffer"
+    (let ((pdf1 (generate-new-buffer " *sync-pdf1*"))
+          (pdf2 (generate-new-buffer " *sync-pdf2*"))
+          (companion (generate-new-buffer " *sync-text*")))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            (setq pdf-text--pdf-buffer pdf1)
+            (pdf-text-sync-mode 1)
+            (kill-buffer pdf1)
+            (setq pdf-text--pdf-buffer pdf2)
+            (pdf-text-sync-mode 1)
+            (expect pdf-text-sync-mode :to-be-truthy)
+            (expect (memq #'pdf-text-sync--follow-pdf
+                          (buffer-local-value 'pdf-view-after-change-page-hook
+                                              pdf2))
+                    :to-be-truthy))
+        (when (buffer-live-p pdf1) (kill-buffer pdf1))
+        (kill-buffer pdf2)
+        (kill-buffer companion))))
+
+  (it "refuses outside pdf-text and without a live source"
+    (with-temp-buffer
+      (expect (pdf-text-sync-mode 1) :to-throw 'user-error))
+    (let ((companion (generate-new-buffer " *sync-text*")))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            (expect (pdf-text-sync-mode 1) :to-throw 'user-error)
+            (expect pdf-text-sync-mode :to-be nil))
+        (kill-buffer companion)))))
+
+(describe "pdf-text--pdf-page"
+  (it "reads the page from image-mode window properties"
+    (with-temp-buffer
+      (require 'image-mode)
+      (setq-local image-mode-winprops-alist
+                  (list (cons t (list (cons 'page 7)))))
+      (expect (pdf-text--pdf-page) :to-equal 7))))
+
+(describe "pdf-text--with-render-gc"
+  (it "raises the thresholds for the body's extent only"
+    (let ((threshold gc-cons-threshold)
+          (percentage gc-cons-percentage))
+      (pdf-text--with-render-gc
+        (expect gc-cons-threshold :to-equal pdf-text-gc-cons-threshold)
+        (expect gc-cons-percentage :to-equal 0.6))
+      (expect gc-cons-threshold :to-equal threshold)
+      (expect gc-cons-percentage :to-equal percentage)))
+
+  (it "restores the thresholds when the body signals"
+    (let ((threshold gc-cons-threshold)
+          (percentage gc-cons-percentage))
+      (expect (pdf-text--with-render-gc
+                (user-error "The render refused"))
+              :to-throw 'user-error)
+      (expect gc-cons-threshold :to-equal threshold)
+      (expect gc-cons-percentage :to-equal percentage)))
+
+  (it "returns the body's value"
+    (expect (pdf-text--with-render-gc 42) :to-equal 42)))

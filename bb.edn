@@ -18,14 +18,15 @@
                ;; native-comp-eln-load-path.
                "--eval" (format "(when (and (featurep 'native-compile) (fboundp 'startup-redirect-eln-cache)) (startup-redirect-eln-cache %s))"
                                 (pr-str (str (fs/path root ".local" "eln"))))])
-            (defn corpus-task
-              "Run scripts/pdf-corpus.el and call FORM in it; the exit code is ours."
-              [form]
+            (defn script-task
+              "Run a scripts/ file and call FORM in it; the exit code is ours."
+              [script form]
               (System/exit
                (:exit (apply p/shell {:continue true :dir root}
                              (concat emacs-batch
-                                     ["-l" (str (fs/path root "scripts" "pdf-corpus.el"))
-                                      "--eval" form]))))))
+                                     ["-l" (str (fs/path root "scripts" script))
+                                      "--eval" form])))))
+            (defn corpus-task [form] (script-task "pdf-corpus.el" form)))
 
   deps {:doc "Install test deps (buttercup) into .local/elpa"
         :task (apply p/shell
@@ -82,6 +83,22 @@
                 :task (let [[fragment limit] *command-line-args*]
                         (corpus-task (format "(pdf-corpus-audit %s %s)"
                                              (pr-str fragment) (pr-str limit))))}
+
+  perf {:doc "Time the render stage by stage over a real book: `bb perf BOOK'. FORM=source prices the interpreted penalty; PROFILE=1 adds a CPU self-time profile. Needs epdfinfo built."
+        :task (let [[book] *command-line-args*]
+                (when-not book
+                  (println "usage: bb perf BOOK")
+                  (System/exit 2))
+                (script-task "pdf-perf.el" (format "(pdf-perf-stages %s)"
+                                                   (pr-str book))))}
+
+  perf-ipc {:doc "Split the charlayout stage into epdfinfo's work and pdf-info's response parsing: `bb perf-ipc BOOK [PAGES]'. Needs epdfinfo built."
+            :task (let [[book pages] *command-line-args*]
+                    (when-not book
+                      (println "usage: bb perf-ipc BOOK [PAGES]")
+                      (System/exit 2))
+                    (script-task "pdf-perf.el" (format "(pdf-perf-ipc %s %s)"
+                                                       (pr-str book) (pr-str pages))))}
 
   ci {:doc "deps + lint + test"
       :depends [deps lint test]}}}
