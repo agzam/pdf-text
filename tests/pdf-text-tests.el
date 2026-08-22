@@ -149,6 +149,121 @@ monospaced one."
            (page (pdf-text--page-profile lines doc)))
       (expect (plist-get page :left) :to-be-close-to 0.20 2))))
 
+;;; Reading-order repair
+
+(describe "pdf-text--merge-script-fragments"
+  (let ((profile '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
+                   :space 0.005)))
+    (it "rejoins a script fragment to its typeset line"
+      (let* ((lines (pdf-text-tests--page
+                     '(("that is, A |= ∧m" :x0 0.10 :x1 0.45 :base 0.40)
+                       ("k=1 Fjk ." :x0 0.44 :x1 0.50 :base 0.403))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (length merged) :to-be 1)
+        (expect (pdf-text-line-text (car merged))
+                :to-equal "that is, A |= ∧m k=1 Fjk .")
+        (expect (pdf-text-line-x1 (car merged)) :to-be-close-to 0.50 2)
+        ;; the host's baseline speaks for the merged line
+        (expect (pdf-text-line-base (car merged)) :to-be-close-to 0.40 4)))
+
+    (it "keeps a page number away from the entry it shares a baseline with"
+      (let* ((lines (pdf-text-tests--page
+                     '(("2.1 Syntax" :x0 0.10 :x1 0.40 :base 0.40)
+                       ("33" :x0 0.85 :x1 0.90 :base 0.40))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (length merged) :to-be 2)))
+
+    (it "keeps real next lines apart"
+      (let* ((lines (pdf-text-tests--page
+                     '(("first line of the paragraph runs on" :x1 0.90 :base 0.40)
+                       ("second line continues below it" :x1 0.88 :base 0.42))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (length merged) :to-be 2)))
+
+    (it "leaves the running head and its folio to the marginal rules"
+      (let* ((lines (pdf-text-tests--page
+                     '(("Preface" :x0 0.40 :x1 0.55 :base 0.06)
+                       ("xiv" :x0 0.56 :x1 0.60 :base 0.06))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (length merged) :to-be 2)))))
+
+(describe "pdf-text--reassemble-zones"
+  (let ((profile '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
+                   :space 0.005)))
+    (it "puts a scattered aligned array back into rows"
+      (let* ((lines (pdf-text-tests--page
+                     '(("the final set of rewrite rules are" :x0 0.10 :x1 0.55
+                        :base 0.30)
+                       ("1" :x0 0.30 :x1 0.31 :base 0.34)
+                       ("e∗x" :x0 0.35 :x1 0.40 :base 0.34)
+                       ("2" :x0 0.30 :x1 0.31 :base 0.36)
+                       ("i(x) ∗ x" :x0 0.35 :x1 0.42 :base 0.36)
+                       ("→" :x0 0.50 :x1 0.52 :base 0.34)
+                       ("→" :x0 0.50 :x1 0.52 :base 0.36)
+                       ("x" :x0 0.60 :x1 0.61 :base 0.34)
+                       ("e" :x0 0.60 :x1 0.61 :base 0.36)
+                       ("All the critical pairs can be reduced." :x0 0.10
+                        :x1 0.88 :base 0.40))))
+             (rows (pdf-text--reassemble-zones lines profile)))
+        (expect (length rows) :to-be 4)
+        (expect (pdf-text-line-text (nth 1 rows)) :to-equal "1 e∗x → x")
+        (expect (pdf-text-line-text (nth 2 rows)) :to-equal "2 i(x) ∗ x → e")))
+
+    (it "leaves a two-column page as it came"
+      (let* ((specs (append
+                     (cl-loop for n from 0 below 6
+                              collect (list (format "left column line %d" n)
+                                            :x0 0.10 :x1 0.45
+                                            :base (+ 0.10 (* n 0.02))))
+                     (cl-loop for n from 0 below 6
+                              collect (list (format "right column line %d" n)
+                                            :x0 0.55 :x1 0.90
+                                            :base (+ 0.10 (* n 0.02))))))
+             (lines (pdf-text-tests--page specs))
+             (out (pdf-text--reassemble-zones lines profile)))
+        (expect (mapcar #'pdf-text-line-text out)
+                :to-equal (mapcar (lambda (spec) (car spec)) specs))))
+
+    (it "does not fold the folio's jump back up the page into a zone"
+      (let* ((specs '(("a first full line of body prose here" :base 0.60)
+                      ("a second full line of body prose too" :base 0.62)
+                      ("a third full line closes the page" :base 0.64)
+                      ("255" :x0 0.85 :x1 0.90 :base 0.05)))
+             (lines (pdf-text-tests--page specs))
+             (out (pdf-text--reassemble-zones lines profile)))
+        (expect (mapcar #'pdf-text-line-text out)
+                :to-equal (mapcar #'car specs))))))
+
+(describe "pdf-text-reading-order"
+  (it "merges and reorders, never drops a glyph"
+    (let* ((pages (list (pdf-text-tests--page
+                         '(("a first line of prose pins the leading" :base 0.26)
+                           ("a second line of prose pins it too" :base 0.28)
+                           ("prose before the display runs full" :base 0.30)
+                           ("1" :x0 0.30 :x1 0.31 :base 0.34)
+                           ("e∗x" :x0 0.35 :x1 0.40 :base 0.34)
+                           ("2" :x0 0.30 :x1 0.31 :base 0.36)
+                           ("i(x) ∗ x" :x0 0.35 :x1 0.42 :base 0.36)
+                           ("→" :x0 0.50 :x1 0.52 :base 0.34)
+                           ("→" :x0 0.50 :x1 0.52 :base 0.36)
+                           ("prose after, A |= ∧m" :x0 0.10 :x1 0.45 :base 0.40)
+                           ("k=1 ." :x0 0.44 :x1 0.50 :base 0.403)))))
+           (glyphs (lambda (lines)
+                     (sort (string-to-list
+                            (replace-regexp-in-string
+                             "[^[:alnum:]]" ""
+                             (mapconcat #'pdf-text-line-text lines "")))
+                           #'<)))
+           (before (funcall glyphs (car pages)))
+           (after (funcall glyphs (car (pdf-text-reading-order pages)))))
+      (expect after :to-equal before)))
+
+  (it "passes a page without geometry through untouched"
+    (let ((pages (list (mapcar (lambda (text) (pdf-text-line-create :text text))
+                               '("plain first line" "plain second line")))))
+      (expect (mapcar #'pdf-text-line-text (car (pdf-text-reading-order pages)))
+              :to-equal '("plain first line" "plain second line")))))
+
 ;;; Classification
 
 (describe "pdf-text--mark-monospace"
@@ -210,6 +325,95 @@ monospaced one."
                       :space 0.005)))
       (pdf-text--mark-alignment lines profile)
       (expect (mapcar #'pdf-text-line-align lines) :to-equal '(nil nil)))))
+
+(describe "pdf-text-mathish-text-p"
+  (it "reads operator-dense text as mathematics"
+    (expect (pdf-text-mathish-text-p "φ ∧ ψ ⊢ ψ ∧ φ") :to-be-truthy)
+    (expect (pdf-text-mathish-text-p "H2 : ` (A → (B → C)) → ((A → B) → (A → C)),")
+            :to-be-truthy))
+
+  (it "reads single-letter variables beside an operator as mathematics"
+    (expect (pdf-text-mathish-text-p "e∗x") :to-be-truthy)
+    (expect (pdf-text-mathish-text-p "13 x ∗ (i(x) ∗ y)") :to-be-truthy))
+
+  (it "reads prose as prose"
+    (expect (pdf-text-mathish-text-p "The fact that variables are only allowed")
+            :to-be nil)
+    (expect (pdf-text-mathish-text-p "Mia, Philippe and Sylvie, my children,")
+            :to-be nil)
+    (expect (pdf-text-mathish-text-p "(a) There is a possible world") :to-be nil)
+    (expect (pdf-text-mathish-text-p
+             "• pickEquation(E) will pick an equation from E;")
+            :to-be nil)))
+
+(describe "pdf-text--mark-math"
+  (let ((profile '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
+                   :space 0.005)))
+    (it "tags a displayed math line"
+      (let ((lines (pdf-text-tests--page
+                    '(("H1 : ` (A → (B → A))," :x0 0.31 :x1 0.52)))))
+        (pdf-text--mark-math lines profile)
+        (expect (pdf-text-line-kind (car lines)) :to-equal 'math)))
+
+    (it "leaves inline math inside a full prose line alone"
+      (let ((lines (pdf-text-tests--page
+                    '(("for any formulas A and B, A |= B iff |= A → B holds"
+                       :x0 0.10 :x1 0.90)))))
+        (pdf-text--mark-math lines profile)
+        (expect (pdf-text-line-kind (car lines)) :to-be nil)))
+
+    (it "leaves an inset quotation alone"
+      (let ((lines (pdf-text-tests--page
+                    '(("a passage set in from the margin reads" :x0 0.20 :x1 0.75)
+                      ("as a quotation and not as mathematics" :x0 0.20 :x1 0.73)))))
+        (pdf-text--mark-math lines profile)
+        (expect (mapcar #'pdf-text-line-kind lines) :to-equal '(nil nil))))
+
+    (it "does not touch a line the monospace rule owns"
+      (let ((lines (pdf-text-tests--page
+                    '(("x = f(y, z);" :x0 0.31 :x1 0.52 :cv 0.0)))))
+        (pdf-text--mark-monospace lines)
+        (pdf-text--mark-math lines profile)
+        (expect (pdf-text-line-kind (car lines)) :to-equal 'mono)))
+
+    (it "spreads to a wordless neighbour of the display"
+      (let ((lines (pdf-text-tests--page
+                    '(("⟨" :x0 0.55 :x1 0.57)
+                      ("(11) i(x ∗ y)" :x0 0.58 :x1 0.69 :gap 0.6)))))
+        (pdf-text--mark-math lines profile)
+        (expect (mapcar #'pdf-text-line-kind lines) :to-equal '(math math))))))
+
+(describe "pdf-text display maths"
+  (it "renders a display block verbatim between its paragraphs"
+    (let ((rendered (pdf-text-tests--render
+                     '(("The Hilbert system H contains three axiom" :x1 0.90)
+                       ("rules plus MP, the rule of modus ponens:" :x1 0.63)
+                       ("H1 : ` (A → (B → A))," :x0 0.31 :x1 0.52 :gap 1.6)
+                       ("H2 : ` (A → (B → C)) → ((A → B) → (A → C)),"
+                        :x0 0.31 :x1 0.75)
+                       ("MP : A, A → B ` B." :x0 0.31 :x1 0.49)
+                       ("The axiom rule H3 is not needed if the arrow"
+                        :x1 0.90 :gap 1.6)
+                       ("is the only operator in all the formulas." :x1 0.60)))))
+      (expect rendered :to-equal
+              (concat "The Hilbert system H contains three axiom"
+                      " rules plus MP, the rule of modus ponens:"
+                      "\n\n"
+                      "  H1 : ` (A → (B → A)),\n"
+                      "  H2 : ` (A → (B → C)) → ((A → B) → (A → C)),\n"
+                      "  MP : A, A → B ` B."
+                      "\n\n"
+                      "The axiom rule H3 is not needed if the arrow"
+                      " is the only operator in all the formulas."))))
+
+  (it "keeps an enumerated displayed equation out of the lists"
+    (let ((rendered (pdf-text-tests--render
+                     '(("and generates the twelfth rewrite rule:" :x1 0.55)
+                       ("12 i(x ∗ y) → i(y) ∗ i(x)" :x0 0.41 :x1 0.64 :gap 1.6)
+                       ("The final critical pair comes from the rules"
+                        :x1 0.90 :gap 1.6)))))
+      (expect rendered :to-match "^  12 i(x")
+      (expect rendered :not :to-match "^- "))))
 
 (describe "pdf-text--list-marker"
   (it "reads a bullet glyph anywhere"
@@ -614,12 +818,29 @@ monospaced one."
             :to-equal "the quick brown fox")))
 
 (describe "pdf-text--dedup-adjacent"
-  (it "collapses the same title on adjacent lines"
+  (it "collapses the same title painted twice on one visual line"
+    ;; the shadow paint lands a point lower, a fraction of the leading
     (expect (mapcar #'pdf-text-line-text
                     (pdf-text--dedup-adjacent
                      (pdf-text-tests--page
-                      '(("PATTERNS OF CONFLICT") ("PATTERNS OF CONFLICT") ("body")))))
+                      '(("PATTERNS OF CONFLICT")
+                        ("PATTERNS OF CONFLICT" :gap 0.1)
+                        ("body")))))
             :to-equal '("PATTERNS OF CONFLICT" "body")))
+
+  (it "collapses the echo of a page with no geometry"
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--dedup-adjacent
+                     (mapcar (lambda (text) (pdf-text-line-create :text text))
+                             '("PATTERNS OF CONFLICT" "PATTERNS OF CONFLICT"
+                               "body"))))
+            :to-equal '("PATTERNS OF CONFLICT" "body")))
+
+  (it "keeps an operator column that repeats its glyph on every row"
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--dedup-adjacent
+                     (pdf-text-tests--page '(("→") ("→") ("→")))))
+            :to-equal '("→" "→" "→")))
 
   (it "keeps identical lines separated by a blank"
     (expect (mapcar #'pdf-text-line-text
@@ -632,15 +853,23 @@ monospaced one."
     (expect (mapcar #'pdf-text-line-text
                     (pdf-text--drop-split-echoes
                      (pdf-text-tests--page
-                      '(("PATTERNS OF CONFLICT") ("PATTERNS OF") ("CONFLICT")
+                      '(("PATTERNS OF CONFLICT") ("PATTERNS OF" :gap 0.1)
+                        ("CONFLICT" :gap 0)
                         ("body")))))
             :to-equal '("PATTERNS OF CONFLICT" "body")))
+
+  (it "keeps a repeated value set a whole line step down"
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--drop-split-echoes
+                     (pdf-text-tests--page '(("e") ("e") ("body")))))
+            :to-equal '("e" "e" "body")))
 
   (it "keeps partial overlaps that never equal the line"
     (expect (mapcar #'pdf-text-line-text
                     (pdf-text--drop-split-echoes
                      (pdf-text-tests--page
-                      '(("PATTERNS OF CONFLICT") ("PATTERNS OF") ("WAR")))))
+                      '(("PATTERNS OF CONFLICT") ("PATTERNS OF" :gap 0.1)
+                        ("WAR" :gap 0)))))
             :to-equal '("PATTERNS OF CONFLICT" "PATTERNS OF" "WAR"))))
 
 (describe "pdf-text-join-small-caps"

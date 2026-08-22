@@ -175,6 +175,17 @@ which is what makes this render the one the book gets."
     (list :reflowed (funcall number reflowed)
           :headed (funcall number (nthcdr (1- start) headed)))))
 
+(defun pdf-corpus-sources (pages)
+  "Per-page source lines of PAGES, an alist of (PAGE . LINES), repaired.
+The reflow reads a page in repaired reading order - script fragments
+rejoined to their typeset line, scattered arrays back in rows - so
+that order is what text survival is measured against.  The repairs
+merge and reorder records, never drop one, which
+`pdf-text-reading-order''s own specs hold it to."
+  (cl-loop for entry in pages
+           for lines in (pdf-text-reading-order (mapcar #'cdr pages))
+           collect (cons (car entry) (mapcar #'pdf-text-line-text lines))))
+
 ;;; Invariants
 
 (defvar pdf-corpus-insert-tolerance 200
@@ -212,8 +223,12 @@ which is what a paragraph cut in two looks like from here."
           (if (string-prefix-p piece (substring stream position))
               (setq position (+ position (length piece)))
             ;; not where the source says: either the render dropped the
-            ;; line, or it inserted something just ahead of it
-            (if-let* ((found (string-search piece stream position))
+            ;; line, or it inserted something just ahead of it.  A piece
+            ;; of a character or two is not worth searching for - it
+            ;; matches inside any word, and a false match strands the
+            ;; walk - so it reads as lost where it stands
+            (if-let* (((<= 3 (length piece)))
+                      (found (string-search piece stream position))
                       ((< (- found position) pdf-corpus-insert-tolerance)))
                 (progn (push (substring stream position found) added)
                        (setq position (+ found (length piece))))
@@ -226,14 +241,18 @@ which is what a paragraph cut in two looks like from here."
   "Pairs of rendered lines in TEXT that read as one sentence cut in two.
 A line closing on a lowercase word or a comma, and the next opening
 lowercase, is a paragraph the reflow broke - or display maths and code
-inside prose, which is why cases carry a budget."
+inside prose, which is why cases carry a budget.  A pair whose either
+side reads as mathematics is the page interrupting its own sentence
+with a display, which is the correct rendering, not a break."
   (let ((case-fold-search nil)          ; batch defaults to t, where
         (lines (mapcar #'string-trim    ; [[:lower:]] matches capitals
                        (seq-remove #'string-blank-p (split-string text "\n"))))
         breaks)
     (cl-loop for (this next) on lines while next
              do (when (and (string-match-p "[[:lower:],;]\\'" this)
-                           (string-match-p "\\`[[:lower:]]" next))
+                           (string-match-p "\\`[[:lower:]]" next)
+                           (not (pdf-text-mathish-text-p this))
+                           (not (pdf-text-mathish-text-p next)))
                   (push (cons this next) breaks)))
     (nreverse breaks)))
 
@@ -330,9 +349,8 @@ it tolerates."
   "Every invariant CASE's subject page breaks.
 RENDERED is `pdf-corpus-render' output, computed when not supplied."
   (let* ((page (pdf-corpus-subject case))
-         ;; before the render, which closes small-caps gaps in place
-         (source (mapcar #'pdf-text-line-text
-                         (alist-get page (plist-get case :pages))))
+         ;; before the render, whose cleanups mutate the records in place
+         (source (alist-get page (pdf-corpus-sources (plist-get case :pages))))
          (rendered (or rendered (pdf-corpus-render case)))
          (meta (plist-get case :meta)))
     (pdf-corpus-violations

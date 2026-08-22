@@ -60,7 +60,7 @@ Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (parag
 * Known limits
 
 - Two-column pages: a table of contents arrives with its page numbers as a separate run of lines and stays that way. Real column detection is the fix.
-- Display maths and code inside prose break the sentence around them.
+- Code inside prose still breaks the sentence around it, and maths set in a legacy symbol font with scrambled codepoints escapes the display-maths detection.
 - Paragraphs are not joined across a page boundary.
 - Pseudocode set in proportional type reflows as prose - nothing in the geometry says it is a listing.
 - A scan has no text layer; ~pdf-view-as-text~ names the page counts and refuses rather than opening an empty buffer.
@@ -101,6 +101,11 @@ bb perf-ipc BOOK [PAGES] # the charlayout stage split into epdfinfo and pdf-info
 #+end_src
 
 ~bb perf~ runs the byte-compiled form the package ships as; ~FORM=source~ prices the interpreted penalty, ~PROFILE=1~ adds a CPU self-time profile. The staging mirrors the product pipeline and a run fails if the two ever disagree.
+
+* License
+
+GPL-3.0-or-later.
+a CPU self-time profile. The staging mirrors the product pipeline and a run fails if the two ever disagree.
 
 * License
 

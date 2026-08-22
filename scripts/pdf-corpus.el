@@ -171,8 +171,7 @@ The rendering comes from the records as the file holds them, rounded,
 so the suite reproduces this golden exactly."
   (let* ((case (pdf-corpus-read slug))
          (page (pdf-corpus-subject case))
-         (source (mapcar #'pdf-text-line-text
-                         (alist-get page (plist-get case :pages))))
+         (source (alist-get page (pdf-corpus-sources (plist-get case :pages))))
          (rendered (pdf-corpus-render case))
          (reflowed (alist-get page (plist-get rendered :reflowed)))
          (headed (alist-get page (plist-get rendered :headed)))
@@ -285,9 +284,7 @@ own cannot show that."
          (pages (pdf-corpus-script-pages file 1 total))
          (outline (pdf-corpus-script-outline file))
          (entries (pdf-corpus--outline-entries outline))
-         (sources (mapcar (lambda (page)
-                            (mapcar #'pdf-text-line-text (cdr page)))
-                          pages))
+         (sources (mapcar #'cdr (pdf-corpus-sources pages)))
          (reflowed (pdf-text-render-lines
                     (mapcar #'cdr pages)
                     (pdf-text-page-headings entries 1 (length pages))))
@@ -388,9 +385,7 @@ FIRST and LAST limit the range; the whole book by default."
          (pages (pdf-corpus-script-pages file first last))
          (outline (pdf-corpus-script-outline file))
          (entries (pdf-corpus--outline-entries outline))
-         (sources (mapcar (lambda (page)
-                            (mapcar #'pdf-text-line-text (cdr page)))
-                          pages))
+         (sources (mapcar #'cdr (pdf-corpus-sources pages)))
          (reflowed (pdf-text-render-lines
                     (mapcar #'cdr pages)
                     (pdf-text-page-headings entries first (length pages))))

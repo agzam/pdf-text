@@ -132,6 +132,11 @@ that moved; this reports the line and its number."
   (it "does not read a capital as lowercase in batch"
     ;; case-fold-search defaults to t there, where [[:lower:]] matches A
     (expect (pdf-corpus-mid-sentence-breaks "an opening clause,\nAnd a capital")
+            :to-be nil))
+
+  (it "does not read a display interrupting its sentence as a break"
+    (expect (pdf-corpus-mid-sentence-breaks
+             "the final set of rewrite rules are\n  x ∗ i(x) → e\nwhere e is the identity element of the group")
             :to-be nil)))
 
 (describe "pdf-corpus-page-marker-lines"

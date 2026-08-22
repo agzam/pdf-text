@@ -242,6 +242,240 @@ for itself keeps the document's edges."
                                          0.005 widths))
         page))))
 
+;;; Reading-order repair
+
+(defvar pdf-text-margin-band 0.12
+  "Fraction of the page, at top and bottom, where running heads sit.")
+
+(defvar pdf-text-fragment-step 0.5
+  "Baseline step, in modal leadings, under which two records share a typeset line.
+Poppler breaks a line at a super- or subscript because the script's
+baseline is offset, and the offset is a fraction of the leading where
+a real next line is a whole leading down.")
+
+(defvar pdf-text-fragment-gap 3
+  "Horizontal gap, in modal spaces, above which same-baseline records stay apart.
+A table-of-contents entry and its page number, or a margin note beside
+its paragraph, share a baseline without sharing a line.")
+
+(defvar pdf-text-zone-height 0.35
+  "Fraction of the page's ink height a reassembled zone may span.
+A backward baseline jump inside the column marks an aligned array the
+reading order scattered; one that spans most of the page is a page of
+two columns, or the jump up to the folio, and reassembly would
+interleave what are really parallel flows.")
+
+(defun pdf-text--x-gap (a b)
+  "Horizontal gap between the ink of lines A and B, zero where they overlap."
+  (max 0.0
+       (- (pdf-text-line-x0 b) (pdf-text-line-x1 a))
+       (- (pdf-text-line-x0 a) (pdf-text-line-x1 b))))
+
+(defun pdf-text--wider-line (a b)
+  "The wider-inked of lines A and B."
+  (if (< (- (pdf-text-line-x1 a) (pdf-text-line-x0 a))
+         (- (pdf-text-line-x1 b) (pdf-text-line-x0 b)))
+      b
+    a))
+
+(defun pdf-text--merge-records (records text)
+  "One line record spanning RECORDS, carrying TEXT.
+The baseline and spacing come from the widest record: a script
+fragment's own baseline is offset by design, and letting it speak for
+the merged line would skew every leading measured against it."
+  (let ((widest (cl-reduce #'pdf-text--wider-line records)))
+    (pdf-text-line-create
+     :text text
+     :x0 (apply #'min (mapcar #'pdf-text-line-x0 records))
+     :x1 (apply #'max (mapcar #'pdf-text-line-x1 records))
+     :top (apply #'min (mapcar #'pdf-text-line-top records))
+     :bot (apply #'max (mapcar #'pdf-text-line-bot records))
+     :base (pdf-text-line-base widest)
+     :height (apply #'max (mapcar #'pdf-text-line-height records))
+     :space (pdf-text-line-space widest)
+     :cv (pdf-text-line-cv widest)
+     :first-width (pdf-text-line-first-width (car records)))))
+
+(defun pdf-text--merge-script-fragments (lines profile)
+  "LINES with script fragments rejoined to the typeset line they came from.
+A record whose baseline sits within `pdf-text-fragment-step' of its
+stream neighbour's, close enough in x to touch it, is the piece of a
+super- or subscript stack - the limits of a big operator, a lone
+raised exponent - that poppler emitted as a line of its own.  The text
+joins in stream order; PROFILE's leading and space are the measures.
+Rejoining is what keeps the sentence around an inline formula whole."
+  (let ((leading (plist-get profile :leading))
+        (space (or (plist-get profile :space) 0.005)))
+    (if (null leading)
+        lines
+      (let (out)
+        (dolist (line lines)
+          (let ((prev (car out)))
+            (if (and prev
+                     (pdf-text-line-base prev) (pdf-text-line-base line)
+                     (pdf-text-line-x0 prev) (pdf-text-line-x0 line)
+                     ;; not in the margin bands: a running head and its
+                     ;; folio share a baseline too, and merging them would
+                     ;; hide the page marker from the marginal-line rules
+                     (< pdf-text-margin-band (pdf-text-line-base prev))
+                     (< (pdf-text-line-base prev) (- 1 pdf-text-margin-band))
+                     (< (abs (- (pdf-text-line-base line)
+                                (pdf-text-line-base prev)))
+                        (* pdf-text-fragment-step leading))
+                     (< (pdf-text--x-gap prev line)
+                        (* pdf-text-fragment-gap space)))
+                (setcar out (pdf-text--merge-records
+                             (list prev line)
+                             (concat (pdf-text-line-text prev) " "
+                                     (string-trim (pdf-text-line-text line)))))
+              (push line out))))
+        (nreverse out)))))
+
+(defun pdf-text--zone-row (rows base leading)
+  "The row of ROWS that BASE belongs to, within half a LEADING."
+  (cl-find-if (lambda (row)
+                (< (abs (- base (car row))) (* pdf-text-fragment-step leading)))
+              rows))
+
+(defun pdf-text--collect-zone (vec start limit leading space left right)
+  "The zone opening at index START of VEC, as (END . ROWS), or nil.
+Records accrete into baseline rows while they stay inside the column
+and above LIMIT - the bottom of the run the first jump returned from,
+which every parallel run of the zone revisits.  A record that
+overlaps the ink already on its row is the resuming flow, not another
+cell, and closes the zone there.  ROWS come back with their cells in
+stream order."
+  (let ((i start)
+        (rows nil)
+        (open t))
+    (while (and open (< i (length vec)))
+      (let* ((line (aref vec i))
+             (base (pdf-text-line-base line))
+             (x0 (pdf-text-line-x0 line))
+             (x1 (pdf-text-line-x1 line)))
+        (if (not (and base x0
+                      (<= base limit)
+                      (<= (- left (* 2 space)) x0)
+                      (<= x1 (+ right (* 2 space)))))
+            (setq open nil)
+          (let ((row (pdf-text--zone-row rows base leading)))
+            (cond
+             ((null row)
+              (push (cons base (list line)) rows)
+              (setq i (1+ i)))
+             ((cl-some (lambda (cell)
+                         (and (< (pdf-text-line-x0 cell) x1)
+                              (< x0 (pdf-text-line-x1 cell))))
+                       (cdr row))
+              (setq open nil))
+             (t (push line (cdr row))
+                (setq i (1+ i))))))))
+    (when rows
+      (cons i (mapcar (lambda (row) (nreverse (cdr row)))
+                      (sort rows (lambda (a b) (< (car a) (car b)))))))))
+
+(defun pdf-text--page-ink-span (lines)
+  "Vertical distance between the first and the last ink of LINES."
+  (let ((tops (delq nil (mapcar #'pdf-text-line-top lines)))
+        (bots (delq nil (mapcar #'pdf-text-line-bot lines))))
+    (if (and tops bots)
+        (- (apply #'max bots) (apply #'min tops))
+      0)))
+
+(defun pdf-text--reassemble-zones (lines profile)
+  "LINES with the aligned arrays reading order scattered put back in rows.
+Poppler serves an aligned display - a rewrite-rule table, an equation
+array - column run by column run, jumping back up the page between
+runs.  The jump marks the zone: its records re-sort into baseline
+rows, each row's cells in x order, one line per row.  A zone that
+runs past `pdf-text-zone-height' of the page is parallel columns or
+the folio and stays untouched, as does one with nothing to merge.
+PROFILE's leading, space and column edges are the measures."
+  (let ((leading (plist-get profile :leading))
+        (space (or (plist-get profile :space) 0.005))
+        (left (plist-get profile :left))
+        (right (plist-get profile :right)))
+    (if (not (and leading left right))
+        lines
+      (let* ((vec (vconcat lines))
+             (span (pdf-text--page-ink-span lines))
+             (out nil)
+             (i 0))
+        (while (< i (length vec))
+          (let* ((line (aref vec i))
+                 (prev (and (< 0 i) (aref vec (1- i))))
+                 (jump (and prev
+                            (pdf-text-line-base line) (pdf-text-line-base prev)
+                            (< (pdf-text-line-base line)
+                               (- (pdf-text-line-base prev)
+                                  (* pdf-text-fragment-step leading))))))
+            (if (not jump)
+                (progn (push line out) (setq i (1+ i)))
+              ;; walk back to where the run this jump returns to began
+              (let ((start (1- i))
+                    (limit (+ (pdf-text-line-base prev)
+                              (* pdf-text-fragment-step leading)))
+                    (floor (- (pdf-text-line-base line)
+                              (* pdf-text-fragment-step leading))))
+                (while (and (< 0 start)
+                            (pdf-text-line-base (aref vec (1- start)))
+                            (<= floor (pdf-text-line-base (aref vec (1- start)))))
+                  (setq start (1- start)))
+                (let* ((zone (pdf-text--collect-zone vec start limit leading space
+                                                     left right))
+                       (rows (cdr zone))
+                       (cells (apply #'+ 0 (mapcar #'length rows)))
+                       (bases (mapcar (lambda (row)
+                                        (pdf-text-line-base (car row)))
+                                      rows)))
+                  (if (and zone
+                           ;; a zone that closed before its own jump is
+                           ;; no zone, and taking it would walk the scan
+                           ;; backwards over the same jump forever
+                           (< i (car zone))
+                           (<= 2 (length rows))
+                           (< (length rows) cells)
+                           (< 0 span)
+                           (<= (- (apply #'max bases) (apply #'min bases))
+                               (* pdf-text-zone-height span)))
+                      (progn
+                        ;; unwind what the zone claims back off OUT
+                        (dotimes (_ (- i start)) (pop out))
+                        (dolist (row rows)
+                          (let ((sorted (sort (copy-sequence row)
+                                              (lambda (a b)
+                                                (< (pdf-text-line-x0 a)
+                                                   (pdf-text-line-x0 b))))))
+                            (push (if (cdr sorted)
+                                      (pdf-text--merge-records
+                                       sorted
+                                       (mapconcat (lambda (cell)
+                                                    (string-trim
+                                                     (pdf-text-line-text cell)))
+                                                  sorted " "))
+                                    (car sorted))
+                                  out)))
+                        (setq i (car zone)))
+                    (push line out)
+                    (setq i (1+ i))))))))
+        (nreverse out)))))
+
+(defun pdf-text-reading-order (pages)
+  "PAGES of `pdf-text-line' records, cleaned and in repaired reading order.
+Script fragments rejoin the typeset line poppler split them from, by
+`pdf-text--merge-script-fragments', and the aligned arrays reading
+order scattered come back row by row, by `pdf-text--reassemble-zones'.
+These are the lines the reflow reads, and the lines the corpus
+measures survival against: the repairs merge and reorder records,
+never drop one."
+  (let* ((page-lines (pdf-text-clean-pages pages))
+         (profile (pdf-text--profile page-lines)))
+    (mapcar (lambda (lines)
+              (pdf-text--reassemble-zones
+               (pdf-text--merge-script-fragments lines profile)
+               profile))
+            page-lines)))
+
 ;;; Line classification
 
 (defvar pdf-text-monospace-variation 0.05
@@ -362,6 +596,106 @@ as prose."
                 (setf (pdf-text-line-align line) align))))))))
   lines)
 
+(defun pdf-text--math-char-p (ch)
+  "Whether CH is a glyph mathematics is written in.
+Operators, arrows, Greek, letterlike symbols, the mathematical
+alphanumerics, and the private-use area math fonts map their glyphs
+to.  ASCII comparison and relation characters count too; parentheses,
+digits and Latin letters do not."
+  (or (memq ch '(?= ?+ ?< ?> ?| ?\\ ?^ ?~ ?`))
+      (memq ch '(?\N{NOT SIGN} ?\N{PLUS-MINUS SIGN}
+                 ?\N{MULTIPLICATION SIGN} ?\N{DIVISION SIGN}
+                 ?\N{FRACTION SLASH}))
+      (<= #x0370 ch #x03FF)             ; Greek
+      (<= #x2032 ch #x2037)             ; primes
+      (<= #x2070 ch #x209F)             ; superscripts and subscripts
+      (<= #x2100 ch #x214F)             ; letterlike
+      (<= #x2190 ch #x21FF)             ; arrows
+      (<= #x2200 ch #x23FF)             ; operators, misc technical
+      (<= #x27C0 ch #x27EF)             ; misc mathematical A
+      (<= #x27F0 ch #x27FF)             ; supplemental arrows A
+      (<= #x2900 ch #x297F)             ; supplemental arrows B
+      (<= #x2980 ch #x29FF)             ; misc mathematical B
+      (<= #x2A00 ch #x2AFF)             ; supplemental operators
+      (<= #xE000 ch #xF8FF)             ; private use
+      (<= #x1D400 ch #x1D7FF)))        ; mathematical alphanumerics
+
+(defun pdf-text--math-chars (text)
+  "Counts of TEXT's mathematical and word glyphs, as (MATHY . WORDY)."
+  (let ((mathy 0) (wordy 0))
+    (dotimes (i (length text))
+      (let ((ch (aref text i)))
+        (cond ((pdf-text--math-char-p ch) (cl-incf mathy))
+              ((if (< ch 128)
+                   (or (<= ?a ch ?z) (<= ?A ch ?Z))
+                 (string-match-p "[[:alpha:]]" (char-to-string ch)))
+               (cl-incf wordy)))))
+    (cons mathy wordy)))
+
+(defun pdf-text--wordless-p (text)
+  "Whether TEXT carries no word - no run of three letters or more.
+A bare variable, a rule number, a lone bracket."
+  (not (string-match-p "[[:alpha:]]\\{3,\\}" text)))
+
+(defun pdf-text-mathish-text-p (text)
+  "Whether TEXT reads as mathematics rather than prose.
+Either its glyphs are substantially operators and symbols, or what
+letters it has are single-letter variables next to at least one
+operator.  Words of three letters and more read as prose and vote
+against."
+  (pcase-let ((`(,mathy . ,wordy) (pdf-text--math-chars text)))
+    (or (and (<= 2 mathy) (<= wordy (* 3 mathy)))
+        (and (<= 1 mathy)
+             (let* ((words (seq-filter (lambda (w) (string-match-p "[[:alpha:]]" w))
+                                       (split-string text "[^[:alnum:]]+" t)))
+                    (short (seq-count (lambda (w) (<= (length w) 2)) words)))
+               (and words (<= (* 3 (length words)) (* 5 short))))))))
+
+(defun pdf-text--displayed-p (line profile)
+  "Whether the page sets LINE apart from PROFILE's column, as display maths.
+In from the left margin and short of the right, or centred - the
+setting a displayed equation gets, where prose is flush or justified."
+  (let ((space (or (plist-get profile :space) 0.005))
+        (left (plist-get profile :left))
+        (right (plist-get profile :right))
+        (x0 (pdf-text-line-x0 line))
+        (x1 (pdf-text-line-x1 line)))
+    (and x0 x1 left right
+         (or (eq 'center (pdf-text-line-align line))
+             (and (< (+ left (* 3 space)) x0)
+                  (< x1 (- right (* 6 space))))))))
+
+(defun pdf-text--mark-math (lines profile)
+  "Tag the LINES set as display mathematics, which render verbatim.
+A line is display maths when its glyphs read as mathematics -
+operators and single-letter variables rather than words - and PROFILE
+says the page sets it apart from the column.  A displayed line with no
+words at all - a lone bracket, a bare variable under an operator run -
+joins a neighbouring display, the way a short brace joins its
+listing."
+  (dolist (line lines)
+    (when (and (null (pdf-text-line-kind line))
+               (pdf-text--displayed-p line profile)
+               (pdf-text-mathish-text-p (pdf-text-line-text line)))
+      (setf (pdf-text-line-kind line) 'math)))
+  (let ((vec (vconcat lines))
+        (changed t))
+    (while changed
+      (setq changed nil)
+      (dotimes (i (length vec))
+        (let ((line (aref vec i)))
+          (when (and (null (pdf-text-line-kind line))
+                     (pdf-text--displayed-p line profile)
+                     (pdf-text--wordless-p (pdf-text-line-text line))
+                     (not (string-blank-p (pdf-text-line-text line)))
+                     (cl-some (lambda (j)
+                                (and (<= 0 j) (< j (length vec))
+                                     (eq 'math (pdf-text-line-kind (aref vec j)))))
+                              (list (1- i) (1+ i))))
+            (setf (pdf-text-line-kind line) 'math)
+            (setq changed t))))))
+  lines)
+
 (defvar pdf-text-preformatted-indent 4
   "Leading spaces at which a line counts as preformatted.")
 
@@ -458,9 +792,6 @@ the plain text stream."
                             (string-blank-p (pdf-text-line-text line)))
                           lines)))
     (cl-remove-duplicates (delq nil (list (car nb) (car (last nb)))))))
-
-(defvar pdf-text-margin-band 0.12
-  "Fraction of the page, at top and bottom, where running heads sit.")
 
 (defvar pdf-text-recurring-min-count 3
   "Occurrences in the margin band before a line counts as a running head.")
@@ -592,16 +923,31 @@ string doubled around a single space is that artifact, not prose."
         (substring trimmed 0 mid)
       line)))
 
+(defun pdf-text--echo-band-p (line piece)
+  "Whether PIECE sits where a shadow echo of LINE would: on its line.
+The second paint lands a point lower, never a leading down, so a
+piece with a baseline of its own must hold it near LINE's.  Records
+without geometry cannot argue and pass."
+  (let ((base (pdf-text-line-base line))
+        (other (pdf-text-line-base piece))
+        (height (pdf-text-line-height line)))
+    (or (null base) (null other)
+        (< (abs (- other base)) (* 0.5 (or height 0.02))))))
+
 (defun pdf-text--dedup-adjacent (lines)
   "LINES with runs of identical non-blank neighbours collapsed to one.
 The shadow-draw artifact: the second paint lands a point lower, so
-gettext emits the same title on two adjacent lines."
+gettext emits the same title on two adjacent lines.  Two records whose
+baselines sit a real line step apart are not an echo - a column of an
+aligned array repeats its operator on every row - so geometry, where
+a line carries it, has the veto."
   (let (out)
     (dolist (line lines (nreverse out))
       (unless (and out
                    (not (string-blank-p (pdf-text-line-text line)))
                    (equal (string-trim (pdf-text-line-text line))
-                          (string-trim (pdf-text-line-text (car out)))))
+                          (string-trim (pdf-text-line-text (car out))))
+                   (pdf-text--echo-band-p (car out) line))
         (push line out)))))
 
 (defun pdf-text--drop-split-echoes (lines)
@@ -609,7 +955,10 @@ gettext emits the same title on two adjacent lines."
 The shadow paint's second copy can also split across lines: after
 \"PATTERNS OF CONFLICT\" come \"PATTERNS OF\" and \"CONFLICT\".  When
 the space-join of the following lines equals the previous line, they
-are that echo, not text.  A blank line ends the candidate run."
+are that echo, not text.  A blank line ends the candidate run, and so
+does a piece set a whole line step down the page - the operator column
+of an aligned array repeats its glyph on every row, and rows are not
+echoes of one another."
   (let (out)
     (while lines
       (let* ((line (pop lines))
@@ -620,6 +969,7 @@ are that echo, not text.  A blank line ends the candidate run."
             (while (and rest
                         (not matched)
                         (not (string-blank-p (pdf-text-line-text (car rest))))
+                        (pdf-text--echo-band-p line (car rest))
                         (< (length acc) (length trimmed)))
               (setq acc (string-trim
                          (concat acc " " (string-trim (pdf-text-line-text (car rest)))))
@@ -885,8 +1235,11 @@ geometry - PROFILE's body measures, PAGE-WIDTH - decides the rest."
     (cond
      ((string-blank-p (pdf-text-line-text line)) 'blank)
      ((eq 'blank kind) 'text)
-     ((not (eq (pdf-text--mono-p line) (eq 'mono kind))) 'face)
-     ((eq 'mono kind) (and (pdf-text--gap-break-p line prev profile) 'gap))
+     ((not (eq (pdf-text-line-kind line)
+               (and (memq kind '(mono math)) kind)))
+      'face)
+     ((memq kind '(mono math))
+      (and (pdf-text--gap-break-p line prev profile) 'gap))
      ((eq 'fixed kind)
       (if (pdf-text--preformatted-p (pdf-text-line-text line))
           (and (pdf-text--gap-break-p line prev profile) 'gap)
@@ -933,6 +1286,7 @@ PROFILE gives the column margin the block's own is measured from."
          (marker (pdf-text--list-marker text indented))
          (kind (cond ((string-blank-p text) 'blank)
                      ((pdf-text--mono-p line) 'mono)
+                     ((eq 'math (pdf-text-line-kind line)) 'math)
                      ((pdf-text--preformatted-p text) 'fixed)
                      (marker 'item)
                      (t 'para))))
@@ -984,7 +1338,7 @@ A short line is the end of a paragraph, an entry or an item; the rule
 needs the block's measure - PROFILE's column edge only where the block
 starts at it, PAGE-WIDTH throughout - so it runs once the grouping
 settled it."
-  (if (or (memq (pdf-text-block-kind block) '(mono fixed blank))
+  (if (or (memq (pdf-text-block-kind block) '(mono math fixed blank))
           (< (length (pdf-text-block-lines block)) 2))
       (list block)
     (let* ((right (pdf-text--block-margin block profile))
@@ -1017,7 +1371,9 @@ settled it."
 (defun pdf-text--blocks (lines profile)
   "LINES of one page grouped into `pdf-text-block' records against PROFILE."
   (let ((page-width (pdf-text--page-width lines))
-        (marked (pdf-text--mark-alignment (pdf-text--mark-monospace lines) profile)))
+        (marked (pdf-text--mark-math
+                 (pdf-text--mark-alignment (pdf-text--mark-monospace lines) profile)
+                 profile)))
     (cl-mapcan (lambda (block)
                  (pdf-text--split-short-lines block profile page-width))
                (pdf-text--group-lines marked profile page-width))))
@@ -1046,12 +1402,13 @@ stays as the document wrote it."
       (concat pad text))))
 
 (defun pdf-text--render-mono (block profile left)
-  "BLOCK's listing lines, verbatim, with their own indentation restored.
-LEFT is the margin of the listing this block belongs to, which spans
-every block the vertical gaps inside a listing split it into - measure
-each block against itself and the second half of a listing loses its
-nesting.  The step is the listing's own space width, PROFILE's where
-its lines carry none."
+  "BLOCK's lines, verbatim, with their own indentation restored.
+Listings and display mathematics render this way: one source line per
+rendered line, never joined into prose.  LEFT is the margin of the run
+this block belongs to, which spans every block the vertical gaps
+inside it split it into - measure each block against itself and the
+second half of a listing loses its nesting.  The step is the run's own
+space width, PROFILE's where its lines carry none."
   (let* ((lines (pdf-text-block-lines block))
          (unit (or (car (delq nil (mapcar #'pdf-text-line-space lines)))
                    (plist-get profile :space)
@@ -1216,8 +1573,8 @@ on does."
         (when (eq 'item kind)
           (let ((nesting (pdf-text--item-indent block stack profile)))
             (setq indent (car nesting) stack (cdr nesting))))
-        (if (eq 'mono kind)
-            (unless (eq 'mono (and previous (pdf-text-block-kind previous)))
+        (if (memq kind '(mono math))
+            (unless (eq kind (and previous (pdf-text-block-kind previous)))
               (setq listing-left (pdf-text-block-left block)))
           (setq listing-left nil))
         (unless (eq 'blank kind)
@@ -1228,7 +1585,8 @@ on does."
             (push "" out))
           (push (or (and (cadr placement) head)
                     (pcase kind
-                      ('mono (pdf-text--render-mono block profile listing-left))
+                      ((or 'mono 'math)
+                       (pdf-text--render-mono block profile listing-left))
                       ('fixed (mapconcat (lambda (line)
                                            (string-trim-right (pdf-text-line-text line)))
                                          (pdf-text-block-lines block) "\n"))
@@ -1280,7 +1638,7 @@ the outline puts on it, from `pdf-text-page-headings'.  A page gets
 its headings at the lines they name; only the caller knows which page
 of the book each entry of PAGES is, which is why they arrive already
 lined up."
-  (let* ((page-lines (pdf-text-clean-pages pages))
+  (let* ((page-lines (pdf-text-reading-order pages))
          (profile (pdf-text--profile page-lines))
          (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
                            page-lines))
@@ -1488,7 +1846,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 4
+(defconst pdf-text-render-version 5
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

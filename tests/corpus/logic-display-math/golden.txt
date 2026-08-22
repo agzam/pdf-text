@@ -1,0 +1,31 @@
+The soundness of an inference system comes from the soundness of all the inference rules. In general, we require all inference rules be sound to preserves truth of all the derived formulas. For a sound inference system S, every derived formula B ∈ T (A). If A is a set of tautologies, then B is a tautology, too.
+
+Theorem 3.2.2. If an inference system S is sound and A `S B, then A |= B.
+
+Proof. A `S B means there is a proof of B in S. Suppose the proof is F1 , F2 , ..., Fn = B. By induction on n, we show that A |= Fi for all i = 1, ..., n. If Fi is in A, then A |= Fi . If Fi is derived from an inference rule P1 , P2 , ..., Pm ` C, using Fj1 , Fj2 , ..., Fjm as premises, by induction hypotheses, A |= Fjk , because jk < i, for
+
+all 1 ≤ k ≤ m. That is, A |= ∧m k=1 Fjk .
+
+Since the inference rule is sound, ∧m k=1 Pk |= C. Applying the substitution m theorem, ∧k=1 Fjk |= Fi . Because |= is transitive, A |= Fi .
+
+Diﬀerent inference systems are obtained by changing the axioms or the inference rules. In propositional logic, all these systems are equivalent in the sense that they are sound and complete.
+
+*** 3.2.2 Hilbert Systems
+Hilbert systems, sometimes called Hilbert calculus, or Hilbert-style inference
+
+systems, are a type of deduction system attributed to Gottlob Frege and David Hilbert. Variants of Hilbert systems for propositional logic exist and these deductive systems are extended to ﬁrst-order logic and other logics.
+
+Deﬁnition 3.2.3. The Hilbert system H contains three axiom rules plus MP (modus ponens):
+
+   H1 : ` (A → (B → A)),
+   H2 : ` (A → (B → C)) → ((A → B) → (A → C)),
+   H3 : ` (¬B → ¬A) → (A → B),
+  MP : A, A → B ` B.
+
+The axiom rule H3 is not needed if → is the only operator in all formulas. Other logical operators can be deﬁned using either → and ¬. For example, A ∧ B ≡
+
+¬(A → ¬B) and A ∨ B ≡ ¬A ∨ B. ¬A can be replaced by A → ⊥ in H3 . It will
+
+turn out that all tautologies are derivable from the three formulas H1 , H2 , and H3 .
+
+Example 3.2.4. Assume A = ∅, to show that A `H (p → p), we have the following

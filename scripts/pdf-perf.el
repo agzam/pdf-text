@@ -93,8 +93,8 @@ what the reader pays."
          (pages (pdf-info-number-of-pages file))
          (whole (float-time))
          (pdf-perf--stages nil)
-         layouts raw records cleaned profile profiles marginal vocabulary
-         outline heads rendered composed)
+         layouts raw records cleaned repaired profile profiles marginal
+         vocabulary outline heads rendered composed)
     (princ (format "%s: %d pages, %s\n"
                    (file-name-base file) pages (pdf-perf--form-name)))
     (when (getenv "PROFILE") (profiler-start 'cpu))
@@ -110,15 +110,23 @@ what the reader pays."
                     (cl-loop for text in raw for layout in layouts
                              collect (pdf-text--page-lines text layout))))
     (setq cleaned (pdf-perf--stage "clean-pages" (pdf-text-clean-pages records)))
-    (setq profile (pdf-perf--stage "document profile" (pdf-text--profile cleaned)))
+    (setq repaired (pdf-perf--stage "reading-order repair"
+                     (let ((pre (pdf-text--profile cleaned)))
+                       (mapcar (lambda (lines)
+                                 (pdf-text--reassemble-zones
+                                  (pdf-text--merge-script-fragments lines pre)
+                                  pre))
+                               cleaned))))
+    (setq profile (pdf-perf--stage "document profile"
+                    (pdf-text--profile repaired)))
     (setq profiles (pdf-perf--stage "page profiles"
                      (mapcar (lambda (l) (pdf-text--page-profile l profile))
-                             cleaned)))
+                             repaired)))
     (setq outline (pdf-perf--stage "outline (epdfinfo)" (pdf-info-outline file)))
     (setq heads (pdf-perf--stage "page-headings"
                   (pdf-text-page-headings outline 1 pages)))
     (setq marginal (pdf-perf--stage "marginal lines"
-                     (pdf-text-remove-marginal-lines cleaned profiles heads)))
+                     (pdf-text-remove-marginal-lines repaired profiles heads)))
     (setq vocabulary (pdf-perf--stage "hyphen vocabulary"
                        (pdf-text--hyphenated-words marginal)))
     (setq rendered
