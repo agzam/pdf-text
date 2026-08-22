@@ -1325,7 +1325,27 @@ monospaced one."
       (expect (invisible-p (1- (point))) :to-be-truthy)
       (goto-char (point-min))
       (search-forward "front matter")
-      (expect (invisible-p (1- (point))) :to-equal nil))))
+      (expect (invisible-p (1- (point))) :to-equal nil)))
+
+  (it "reveals every section the page shows, not just the landing lineage"
+    (with-temp-buffer
+      (let ((inhibit-read-only t))
+        (pdf-text-mode)
+        (pdf-text--insert-pages
+         '("front matter"
+           "* One\ntail of section one\n** Two\ntwo opens mid-page"
+           "* Three\nthree body overleaf"))
+        (setq-local pdf-text--has-outline t)
+        (org-cycle-overview))
+      (goto-char (pdf-text--page-start 2))
+      (pdf-text--reveal-page 2)
+      (goto-char (point-min))
+      (search-forward "tail of section one")
+      (expect (invisible-p (1- (point))) :to-equal nil)
+      (search-forward "two opens mid-page")
+      (expect (invisible-p (1- (point))) :to-equal nil)
+      (search-forward "three body overleaf")
+      (expect (invisible-p (1- (point))) :to-be-truthy))))
 
 (describe "pdf-text--insert-pages"
   (it "separates pages with form-feed lines"

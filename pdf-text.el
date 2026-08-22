@@ -61,6 +61,7 @@
 (declare-function pdf-view-image-size "ext:pdf-view")
 (declare-function org-cycle-overview "org-cycle")
 (declare-function org-fold-show-set-visibility "org-fold")
+(declare-function org-fold-show-entry "org-fold")
 
 ;;; Statistics over glyph measurements
 
@@ -1983,9 +1984,30 @@ error instead of an empty buffer."
     (setq pdf-text--companion buf)
     (pop-to-buffer buf)
     (goto-char (pdf-text--page-position page fraction))
-    (when pdf-text--has-outline (org-fold-show-set-visibility 'lineage))
+    (pdf-text--reveal-page page)
     (beginning-of-visual-line)
     (recenter 0)))
+
+(defun pdf-text--reveal-page (page)
+  "Open every section that shows on PAGE of the companion.
+The lineage of point opens the section the page begins inside; a
+section starting at a heading further down the page would stay folded,
+and the reader following along the PDF side would have to open it by
+hand.  Every heading line inside the page's span shows its lineage and
+its body text; what runs past the page keeps its fold, so a chapter
+whose title closes the page opens only as far as its opening text."
+  (when pdf-text--has-outline
+    (org-fold-show-set-visibility 'lineage)
+    (save-excursion
+      (let ((end (pdf-text--page-end page)))
+        (goto-char (pdf-text--page-start page))
+        (while (re-search-forward "^\\*+ " end t)
+          ;; the reveals run regexps of their own and clobber the match
+          (let ((next (match-end 0)))
+            (goto-char (match-beginning 0))
+            (org-fold-show-set-visibility 'lineage)
+            (org-fold-show-entry)
+            (goto-char next)))))))
 
 (defun pdf-text-show-in-pdf ()
   "Jump the source PDF buffer to the page at point and focus it."
@@ -2033,18 +2055,16 @@ stays put, so the explicit RET jump keeps its exact position."
       (let ((pdf-text-sync--inhibit t))
         (with-current-buffer companion
           (setq pdf-text-sync--last-page page)
-          (unless (eql page (pdf-text-page-at-point))
-            (let ((pos (pdf-text--page-position page 0))
-                  (win (get-buffer-window companion t)))
-              (if win
-                  (with-selected-window win
-                    (goto-char pos)
-                    (when pdf-text--has-outline
-                      (org-fold-show-set-visibility 'lineage))
-                    (recenter 0))
-                (goto-char pos)
-                (when pdf-text--has-outline
-                  (org-fold-show-set-visibility 'lineage)))))))))))
+          (let* ((moved (not (eql page (pdf-text-page-at-point))))
+                 (pos (and moved (pdf-text--page-position page 0)))
+                 (win (get-buffer-window companion t)))
+            (if win
+                (with-selected-window win
+                  (when moved (goto-char pos))
+                  (pdf-text--reveal-page page)
+                  (when moved (recenter 0)))
+              (when moved (goto-char pos))
+              (pdf-text--reveal-page page)))))))))
 
 (define-minor-mode pdf-text-sync-mode
   "Keep the companion and its PDF on the same page, both directions.
