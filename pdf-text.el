@@ -826,7 +826,13 @@ PROFILE's leading, space and column edges are the measures."
                             (pdf-text-line-base line) (pdf-text-line-base prev)
                             (< (pdf-text-line-base line)
                                (- (pdf-text-line-base prev)
-                                  (* pdf-text-fragment-step leading))))))
+                                  (* pdf-text-fragment-step leading)))
+                            ;; a drop cap's baseline sits at the last
+                            ;; line it spans while poppler emits it
+                            ;; first: the step back to the paragraph's
+                            ;; first line is typesetting, not a column
+                            ;; run
+                            (not (pdf-text--drop-cap-p prev profile)))))
             (if (not jump)
                 (progn (push line out) (setq i (1+ i)))
               ;; walk back to where the run this jump returns to began
@@ -1370,7 +1376,13 @@ given; the seeding by `pdf-text-extra-recurring-forms' and
           (when (and line (not (string-blank-p (pdf-text-line-text line))))
             (when (pdf-text--folio-merged-p (pdf-text-line-text line))
               (cl-incf folio-merged))
-            (when (cdr candidate)
+            ;; a running head carries words and a folio digits; a lone
+            ;; brace or bar at a page edge recurs like a head in a
+            ;; listings book but is the page's own text, and must not
+            ;; arm the drop-anywhere rule against every copy of itself
+            (when (and (cdr candidate)
+                       (string-match-p "[[:alnum:]]"
+                                       (pdf-text-line-text line)))
               (cl-incf (gethash (pdf-text--normalize-line (pdf-text-line-text line))
                                 counts 0)))))))
     (maphash (lambda (form n)
@@ -2508,7 +2520,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 9
+(defconst pdf-text-render-version 10
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

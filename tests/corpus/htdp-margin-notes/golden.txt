@@ -1,0 +1,36 @@
+Although the function consumes only atomic forms of data, its purpose statement and the examples suggest that it differentiates between two kinds of MouseEvts: "button-down" and all others. Such a case split suggests a cond expression:
+
+  (define (reset-dot p x y me)
+    (cond
+      [(mouse=? "button-down" me) (... p ... x y ...)]
+      [else (... p ... x y ...)]))
+
+Following the design recipe, this skeleton mentions the parameters to remind you of what data is available.
+
+The rest is straightforward again because the purpose statement itself dictates what the function computes in each of the two cases:
+
+  (define (reset-dot p x y me)
+    (cond
+      [(mouse=? me "button-down") (make-posn x y)]
+      [else p]))
+
+As above, we could have mentioned that make-posn creates instances of Posn, but you know this and we don’t need to remind you constantly.
+
+Exercise 74. Copy all relevant constant and function definitions to Dr-Racket’s definitions area. Add the tests and make sure they pass. Then run the program and use the mouse to place the red dot.
+
+Many programs deal with nested structures. We illustrate this point with another small excerpt from a world program:
+
+  Sample Problem Your team is designing a game program that keeps track of an object that moves across the canvas at changing speed. The chosen data representation requires two data definitions:
+
+  (define-struct ufo [loc vel])
+
+  ; A UFO is a structure: ;
+
+(make-ufo Posn Vel)
+; interpretation (make-ufo p v) is at location
+
+  ; p moving at velocity v
+
+  It is your task to develop ufo-move-1. The function computes the location of a given UFO after one clock tick passes.
+
+  Remember, it’s about physics.

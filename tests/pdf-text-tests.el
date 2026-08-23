@@ -488,6 +488,24 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
              (lines (pdf-text-tests--page specs))
              (out (pdf-text--reassemble-zones lines profile)))
         (expect (mapcar #'pdf-text-line-text out)
+                :to-equal (mapcar #'car specs))))
+
+    (it "does not read a drop cap's jump back as a zone"
+      ;; the initial spans its paragraph's first lines, so its baseline
+      ;; sits at the last of them while poppler emits it first: the
+      ;; step back to the paragraph's first line is typesetting, not a
+      ;; column run.  Without the guard the cap lands beside the second
+      ;; line - "T understand learning" - and the first dangles bare
+      (let* ((specs '(("T" :x0 0.10 :x1 0.14 :base 0.315 :height 0.05)
+                      ("his book can make a profound difference"
+                       :x0 0.145 :x1 0.75 :base 0.30)
+                      ("understand learning. You will learn"
+                       :x0 0.145 :x1 0.86 :base 0.32)
+                      ("efficient techniques researchers know"
+                       :x0 0.10 :x1 0.87 :base 0.34)))
+             (lines (pdf-text-tests--page specs))
+             (out (pdf-text--reassemble-zones lines profile)))
+        (expect (mapcar #'pdf-text-line-text out)
                 :to-equal (mapcar #'car specs))))))
 
 (describe "pdf-text-reading-order"
@@ -1025,6 +1043,33 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
                                        "body line two filling the column"
                                        "body line three filling the column"
                                        "body line four ends here")))))
+
+  (it "does not read a recurring lone brace as a running head"
+    ;; a listings book ends pages on a closing brace often enough for
+    ;; the form to recur as a detached narrow candidate; a running head
+    ;; carries words and a folio digits, so a punctuation-only line
+    ;; never joins the recurring set - the drop-anywhere rule was
+    ;; eating every listing's closing braces across Programming Rust
+    (let* ((pages (mapcar
+                   (lambda (n)
+                     (pdf-text-tests--page
+                      `(("body line one filling the column" :base 0.20)
+                        ("body line two filling the column")
+                        (,(format "let x%d = value;" n) :x0 0.20 :x1 0.60)
+                        ("}" :x0 0.20 :x1 0.22 :base 0.93))))
+                   '(1 2 3)))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                      (pdf-text-remove-marginal-lines pages profiles))
+              :to-equal (mapcar
+                         (lambda (n)
+                           (list "body line one filling the column"
+                                 "body line two filling the column"
+                                 (format "let x%d = value;" n)
+                                 "}"))
+                         '(1 2 3)))))
 
   (it "keeps a footnote block, which is neither narrow nor detached"
     (let* ((pages (mapcar

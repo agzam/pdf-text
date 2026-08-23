@@ -1,0 +1,22 @@
+5. Overfitting and Its Avoidance. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 111 Fundamental concepts: Generalization; Fitting and overfitting; Complexity control. Exemplary techniques: Cross-validation; Attribute selection; Tree pruning; Regularization.
+Generalization 111 Overfitting 113 Overfitting Examined 113
+
+  Holdout Data and Fitting Graphs 113 Overfitting in Tree Induction 116 Overfitting in Mathematical Functions 118
+
+Example: Overfitting Linear Functions 119 * Example: Why Is Overfitting Bad? 124 From Holdout Evaluation to Cross-Validation 126 The Churn Dataset Revisited 129 Learning Curves 130 Overfitting Avoidance and Complexity Control 133
+
+  Avoiding Overfitting with Tree Induction 133 A General Method for Avoiding Overfitting 134 * Avoiding Overfitting for Parameter Optimization 136
+
+Summary 140
+
+6. Similarity, Neighbors, and Clusters. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 141 Fundamental concepts: Calculating similarity of objects described by data; Using similarity for prediction; Clustering as similarity-based segmentation.
+Exemplary techniques: Searching for similar entities; Nearest neighbor methods; Clustering methods; Distance metrics for calculating similarity.
+Similarity and Distance 142 Nearest-Neighbor Reasoning 144
+
+  Example: Whiskey Analytics 144 Nearest Neighbors for Predictive Modeling 146 How Many Neighbors and How Much Influence? 149 Geometric Interpretation, Overfitting, and Complexity Control 151 Issues with Nearest-Neighbor Methods 154
+
+Some Important Technical Details Relating to Similarities and Neighbors 157 Heterogeneous Attributes 157 * Other Distance Functions 158 * Combining Functions: Calculating Scores from Neighbors 161
+
+Clustering 163 Example: Whiskey Analytics Revisited 163 Hierarchical Clustering 164
+
+Table of Contents | v

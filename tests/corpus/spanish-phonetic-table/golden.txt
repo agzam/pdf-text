@@ -1,0 +1,81 @@
+x Abbreviations and conventions
+
+‘Dialogue’ shows that the words quoted are spoken by fictional characters whose opinions and language, which are sometimes comical, sexist or in some other way outrageous, should not be attributed to their author.
+
+We use the term ‘Latin America(n)’ rather than ‘Spanish America(n)’ since it should be obvious that we are not referring to Brazil or to the French-speaking territories, and because the term ‘Spanish American’ potentially annoys Latin Americans as much as ‘British American’ would no doubt irritate Americans and Canadians.
+
+The spelling of Spanish words reflects the Spanish Academy’s latest recommendations, especially noticeable in such words as guion for guión, rio for rió, crie for crié, etc. (see 44.2.4). In the case of unresolved disputes, e.g. whether one should write an accent on the pronouns este/éste, ese/ése and aquel/aquél and on the adverb solo/sólo, we show both forms but recommend the Academy’s advice, which is to omit the accent.
+
+On hearing, out of context, a verb form like habla ‘she/he/you/it speak(s)’, Spanish-speakers do not automatically form a mental image of a male grammatical subject. For this reason we translate such forms by ‘(s)he speaks’ even though the other possibilities − ‘you speak’ (usted) and ‘it speaks’ − are not usually shown. If only ‘she’ or ‘he’ appears in the translation of an attributed example this reflects the gender of the character in the original text. When a third-person plural verb appears without a pronoun, e.g. reciben ‘they receive’, it must be remembered that the translation could also be ‘you receive’ (ustedes reciben) if the meaning of the sentence or phrase allows it.
+
+Phonetic Symbols
+
+Spanish pronunciation is roughly indicated as follows. Previous editions adopted the International Phonetic Alphabet (IPA), but some IPA signs were confusing for students:
+
+Symbol
+Phonetic description
+
+Remarks
+
+  β
+
+voiced bilabial fricative
+Air released steadily through lips held as for
+
+		  English b
+
+  χ
+
+voiceless velar fricative
+Like ch of German lachen or of Scottish ‘loch’
+
+  γ
+
+voiced velar fricative
+Air released steadily through the throat held as
+
+		  for English g in ‘ago’
+
+  θ
+
+voiceless interdental fricative
+Like th of ‘think’
+
+ð
+voiced interdental fricative
+
+  Like th of ‘this’ ʎ
+
+  voiced palatal lateral	Palatalized l, as in Spanish llamo. Tongue flat against roof of mouth
+
+ñ
+voiced palatal nasal
+
+Like gn in French cognac. Tongue flat against
+
+		  roof of mouth (IPA ɲ)
+
+ŋ
+voiced velar nasal
+
+Like ng in American and Southern British ‘sing’
+
+		  (not as in ‘finger’)
+
+ɾ
+voiced alveolar tap or flap	r pronounced with a single flap of the tongue as
+
+  in Spanish caro rr
+
+voiced alveolar trill
+Rolled r as in Spanish carro (IPA r)
+
+y
+voiced palatal approximant
+
+  Like y in ‘yes’ (IPA j) ch
+
+voiceless palatal stop
+Like ch in ‘mischief’ (IPA tʃ)
+
+A dash separates syllables and the stressed syllable is marked with an accent: [a-βlá-mos] = hablamos; see 44.5.
