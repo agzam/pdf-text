@@ -112,13 +112,12 @@ page 0 - carry nothing a heading can be placed by."
 The layout carries the text as well as its geometry, so gettext only
 runs for a page epdfinfo lays out no glyphs for - the same order
 `pdf-view-as-text' uses."
-  (cl-loop for page from first to last
-           collect (let* ((layout (condition-case nil
-                                      (pdf-info-charlayout page nil file)
-                                    (error nil)))
-                          (text (if layout
-                                    (pdf-text--layout-text layout)
-                                  (pdf-info-gettext page '(0 0 1 1) nil file))))
+  (cl-loop for layout in (pdf-text--charlayouts file
+                                                (number-sequence first last))
+           for page from first
+           collect (let ((text (if layout
+                                   (pdf-text--layout-text layout)
+                                 (pdf-info-gettext page '(0 0 1 1) nil file))))
                      (cons page (pdf-text--page-lines text layout)))))
 
 (defun pdf-corpus-script--compounds (lines)

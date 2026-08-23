@@ -99,10 +99,7 @@ what the reader pays."
                    (file-name-base file) pages (pdf-perf--form-name)))
     (when (getenv "PROFILE") (profiler-start 'cpu))
     (setq layouts (pdf-perf--stage "charlayout (epdfinfo)"
-                    (cl-loop for p from 1 to pages
-                             collect (condition-case nil
-                                         (pdf-info-charlayout p nil file)
-                                       (error nil)))))
+                    (pdf-text--charlayouts file (number-sequence 1 pages))))
     (setq raw (pdf-perf--stage "text from layout"
                 (cl-loop for layout in layouts
                          collect (pdf-text--layout-text layout))))
@@ -133,11 +130,12 @@ what the reader pays."
           (pdf-perf--stage "blocks + render + escape"
             (cl-loop for lines in marginal
                      for page-profile in profiles
+                     for number from 1
                      for hs = heads then (cdr hs)
                      collect (pdf-text--escape-org-lines
                               (pdf-text--render-blocks
                                (pdf-text--blocks lines page-profile)
-                               page-profile vocabulary (car hs))
+                               page-profile vocabulary (car hs) number)
                               (car hs)))))
     (setq composed (pdf-perf--stage "interleave outline"
                      (if outline (pdf-text--interleave-outline rendered outline)

@@ -79,6 +79,73 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
                   (setq x (+ x w)))))
             specs)))
 
+;;; Charlayout off the wire
+
+(describe "pdf-text--query-escape"
+  (it "prefixes backslash and colon, writes newline as backslash-n"
+    (expect (pdf-text--query-escape "/a/b:c\\d\ne")
+            :to-equal "/a/b\\:c\\\\d\\ne"))
+  (it "leaves a plain path alone"
+    (expect (pdf-text--query-escape "/tmp/book.pdf")
+            :to-equal "/tmp/book.pdf")))
+
+(describe "pdf-text--charlayout-parse"
+  (it "reads records into the pdf-info-charlayout shape"
+    (expect (pdf-text--charlayout-parse
+             (concat "OK\n"
+                     "0.100000 0.200000 0.300000 0.400000:T\n"
+                     "0.310000 0.200000 0.320000 0.400000: \n"
+                     ".\n"))
+            :to-equal '((?T (0.1 0.2 0.3 0.4))
+                        (?\s (0.31 0.2 0.32 0.4)))))
+  (it "unescapes the three escaped glyphs"
+    (expect (pdf-text--charlayout-parse
+             (concat "OK\n"
+                     "0.100000 0.200000 0.300000 0.400000:\\:\n"
+                     "0.100000 0.200000 0.300000 0.400000:\\\\\n"
+                     "0.100000 0.200000 0.300000 0.400000:\\n\n"
+                     ".\n"))
+            :to-equal '((?: (0.1 0.2 0.3 0.4))
+                        (?\\ (0.1 0.2 0.3 0.4))
+                        (?\n (0.1 0.2 0.3 0.4)))))
+  (it "keeps multibyte glyphs and negative coordinates"
+    (expect (pdf-text--charlayout-parse
+             "OK\n-0.001000 0.200000 0.300000 0.400000:α\n.\n")
+            :to-equal '((?α (-0.001 0.2 0.3 0.4)))))
+  (it "reads an empty page as nil"
+    (expect (pdf-text--charlayout-parse "OK\n.\n") :to-equal nil))
+  (it "signals the server's own error message"
+    (expect (pdf-text--charlayout-parse "ERR\nNo such page 999\n.\n")
+            :to-throw 'error '("epdfinfo: No such page 999")))
+  (it "signals on a response that is not the grammar"
+    (expect (pdf-text--charlayout-parse "mystery meat")
+            :to-throw 'error)))
+
+(defvar pdf-info--queue)
+
+(describe "pdf-text--charlayouts"
+  (it "assembles pages in order and falls back per failed page"
+    (let ((pdf-info--queue 'queue)
+          (pdf-text-charlayout-pool-min 999))
+      (cl-letf (((symbol-function 'pdf-info-process-assert-running)
+                 (lambda () t))
+                ((symbol-function 'tq-enqueue)
+                 (lambda (_tq question _re _closure fn)
+                   ;; the page is the query's third field; answer at once
+                   (let ((page (string-to-number
+                                (nth 2 (split-string question ":")))))
+                     (funcall fn nil
+                              (if (= page 2)
+                                  "ERR\nboom\n.\n"
+                                "OK\n0.100000 0.200000 0.300000 0.400000:A\n.\n")))))
+                ((symbol-function 'pdf-info-charlayout)
+                 (lambda (page &optional _edges _file)
+                   (list (list ?F (list 0 0 0 (float page)))))))
+        (expect (pdf-text--charlayouts "/tmp/x.pdf" '(1 2 3))
+                :to-equal '(((?A (0.1 0.2 0.3 0.4)))
+                            ((?F (0 0 0 2.0)))
+                            ((?A (0.1 0.2 0.3 0.4)))))))))
+
 ;;; Line records and profile
 
 (describe "pdf-text--glyph-line"

@@ -104,10 +104,15 @@ bb perf-ipc BOOK [PAGES] # the charlayout stage split into epdfinfo and pdf-info
 
 ~bb perf~ runs the byte-compiled form the package ships as; ~FORM=source~ prices the interpreted penalty, ~PROFILE=1~ adds a CPU self-time profile. The staging mirrors the product pipeline and a run fails if the two ever disagree.
 
-* License
+Extraction reads the epdfinfo wire directly and fans a whole book over a few worker servers of its own (~pdf-text--charlayouts~), because the measured cost sits in the server: one poppler extraction pass is about 4ms of a page's 4.8, immovable by any response format, while the wire parse (~pdf-text--charlayout-parse~) costs 1.2ms against the 3.6 of pdf-info's generic reader. Workers parallelize the extraction across cores; ~pdf-text-charlayout-workers~ caps the pool and ~pdf-text-charlayout-pool-min~ keeps short windows on the main server. A page that fails anything - a worker death included - retries through ~pdf-info-charlayout~, so the pool can only ever cost speed, never a page.
 
-GPL-3.0-or-later.
-a CPU self-time profile. The staging mirrors the product pipeline and a run fails if the two ever disagree.
+** Upstreaming: the charlayout wire
+
+The package owns the response grammar knowingly: ~OK~, one =X0 Y0 X1 Y1:GLYPH= record per glyph with =%f= coordinates and the glyph escaped as =\\=, =\:= or =\n=, then a lone dot. Two changes are worth bundling into an eventual pdf-tools PR, and one tempting one is not:
+
+- =%.4f= coordinates: a page is 612pt wide, so 1e-4 out-resolves every threshold the reflow compares (the corpus stores records at four decimals for the same reason); the response shrinks by about a third.
+- A page range per request: today a book is one request per page, pipelined by the client; a =FIRST:LAST= form would make the framing explicit instead of relying on queue order.
+- Not line boxes: a per-line response would shrink the wire ~30x, but the super/subscript detector votes per-glyph box bottoms and wraps per-glyph runs, and the line record's own measurements are policy tuned against the corpus - moving either into C freezes them. The glyphs stay on the wire; the extraction pass they ride on is the floor either way.
 
 * License
 

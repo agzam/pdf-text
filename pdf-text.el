@@ -48,6 +48,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'tq)
 
 ;; pdf-tools is a runtime dependency only: every symbol below resolves when a
 ;; command runs, so the transforms load and test without it.  org arrives with
@@ -62,6 +63,161 @@
 (declare-function org-cycle-overview "org-cycle")
 (declare-function org-fold-show-set-visibility "org-fold")
 (declare-function org-fold-show-entry "org-fold")
+(declare-function pdf-info-process-assert-running "ext:pdf-info")
+(declare-function pdf-info-process "ext:pdf-info")
+(defvar pdf-info--queue)
+(defvar pdf-info-epdfinfo-program)
+
+;;; Charlayout off the wire
+
+;; A charlayout response is a fixed grammar: "OK\n", one record
+;; "X0 Y0 X1 Y1:GLYPH\n" per glyph - %f coordinates, the glyph escaped
+;; only as \\ \: or \n - then ".\n".  pdf-info reads it through a
+;; generic per-character walk that costs more than the server's own
+;; work, and one server lays out pages one at a time however many
+;; cores the machine has.  Reading the wire directly and fanning a
+;; whole book over a few worker servers turns extraction time into
+;; the time it takes to drain the answers.
+
+(defvar pdf-text-charlayout-workers 4
+  "Worker servers a whole-book extraction may spawn.
+Capped by `num-processors'.  The measured knee sits at four: past it,
+draining and parsing the responses saturates the Emacs side.")
+
+(defvar pdf-text-charlayout-pool-min 16
+  "Pages below which extraction stays on the main server.
+Spawning workers and opening the document in each is a fixed cost a
+short window never earns back.")
+
+(defvar pdf-text--charlayout-buffer nil
+  "Work buffer `pdf-text--charlayout-parse' reuses across pages.")
+
+(defun pdf-text--query-escape (file)
+  "FILE escaped for the wire: backslash and colon prefixed, newline as \\n."
+  (string-replace "\n" "\\n" (replace-regexp-in-string "[\\:]" "\\\\\\&" file)))
+
+(defun pdf-text--charlayout-parse (response)
+  "Charlayout RESPONSE string as (GLYPH (X0 Y0 X1 Y1)) records.
+The shape `pdf-info-charlayout' returns, read off the wire grammar
+instead: coordinates never contain a colon and every literal backslash
+arrives escaped, so one colon-to-space pass leaves the four floats to
+the native reader - no intermediate strings - and \"\\ \" can only
+name the colon glyph.  Signals on an ERR or malformed response."
+  (with-current-buffer
+      (or (and (buffer-live-p pdf-text--charlayout-buffer)
+               pdf-text--charlayout-buffer)
+          (setq pdf-text--charlayout-buffer
+                (with-current-buffer
+                    (generate-new-buffer " *pdf-text-charlayout*" t)
+                  (buffer-disable-undo)
+                  (current-buffer))))
+    (erase-buffer)
+    (insert response)
+    (goto-char (point-min))
+    (cond
+     ((looking-at "OK\n")
+      (forward-line 1)
+      (subst-char-in-region (point) (point-max) ?: ?\s)
+      (let ((buf (current-buffer))
+            result)
+        (while (not (eq (char-after) ?.))
+          (let* ((x0 (read buf)) (y0 (read buf)) (x1 (read buf)) (y1 (read buf))
+                 (glyph (progn
+                          (forward-char 1)
+                          (let ((c (char-after)))
+                            (if (eq c ?\\)
+                                (progn
+                                  (forward-char 1)
+                                  (let ((e (char-after)))
+                                    (cond ((eq e ?n) ?\n)
+                                          ((eq e ?\s) ?:)
+                                          (t e))))
+                              c)))))
+            (unless (numberp y1)
+              (error "Malformed charlayout record"))
+            ;; past the glyph's last character and the record's newline
+            (forward-char 2)
+            (push (list glyph (list x0 y0 x1 y1)) result)))
+        (nreverse result)))
+     ((looking-at "ERR\n")
+      (forward-line 1)
+      (error "epdfinfo: %s"
+             (buffer-substring-no-properties
+              (point) (progn (re-search-forward "^\\.\n")
+                             (1- (match-beginning 0))))))
+     (t (error "Invalid charlayout response")))))
+
+(defun pdf-text--charlayout-pool (n)
+  "N transaction queues over worker epdfinfo servers of our own."
+  (cl-loop repeat n
+           collect (let* ((process-connection-type nil)
+                          (default-directory temporary-file-directory)
+                          (proc (start-process "pdf-text-epdfinfo" nil
+                                               pdf-info-epdfinfo-program)))
+                     (set-process-query-on-exit-flag proc nil)
+                     (set-process-coding-system proc 'utf-8-unix 'utf-8-unix)
+                     (tq-create proc))))
+
+(defun pdf-text--charlayout-pool-stop (pool)
+  "Quit and reap POOL's workers; their queue buffers go with them."
+  (dolist (tq pool)
+    (ignore-errors (process-send-string (tq-process tq) "quit\n"))
+    (ignore-errors (tq-close tq))))
+
+(defun pdf-text--charlayouts (file pages)
+  "Charlayout of FILE's PAGES, a list in that order, nil where a page fails.
+Every query goes down the wire before the first answer is read, so the
+server never waits on a round trip; past `pdf-text-charlayout-pool-min'
+pages the queries fan out over `pdf-text-charlayout-workers' worker
+servers, which parallelizes poppler across cores.  A page that fails
+any of it - an ERR response, a malformed parse, a worker death -
+retries once through `pdf-info-charlayout' on the main server, so a
+password the main server holds or a crashed worker costs speed, never
+a page."
+  (pdf-info-process-assert-running)
+  (let* ((file (expand-file-name file))
+         (total (length pages))
+         (workers (max 1 (min pdf-text-charlayout-workers (num-processors))))
+         (pool (and (< 1 workers)
+                    (<= pdf-text-charlayout-pool-min total)
+                    (stringp pdf-info-epdfinfo-program)
+                    (file-executable-p pdf-info-epdfinfo-program)
+                    (condition-case nil (pdf-text--charlayout-pool workers)
+                      (error nil))))
+         (queues (or pool (list pdf-info--queue)))
+         (results (make-vector total nil))
+         (got 0))
+    (unwind-protect
+        (progn
+          (cl-loop for p in pages
+                   for i from 0
+                   do (let ((slot i))
+                        (tq-enqueue (nth (mod i (length queues)) queues)
+                                    (concat "charlayout:"
+                                            (pdf-text--query-escape file)
+                                            ":" (number-to-string p)
+                                            ":0 0 1 1\n")
+                                    "^\\.\n" nil
+                                    (lambda (_ r)
+                                      (aset results slot r)
+                                      (setq got (1+ got))))))
+          ;; a dead worker never answers; wait only while a live queue
+          ;; still owes something, and let the fallback cover the rest
+          (while (and (< got total)
+                      (cl-some (lambda (tq)
+                                 (and (eq (process-status (tq-process tq)) 'run)
+                                      (not (tq-queue-empty tq))))
+                               queues))
+            (accept-process-output nil 0.05)))
+      (when pool (pdf-text--charlayout-pool-stop pool)))
+    (cl-loop for r across results
+             for p in pages
+             collect (or (and r (condition-case nil
+                                    (pdf-text--charlayout-parse r)
+                                  (error nil)))
+                         (condition-case nil
+                             (pdf-info-charlayout p nil file)
+                           (error nil))))))
 
 ;;; Statistics over glyph measurements
 
@@ -2411,10 +2567,9 @@ error instead of an empty buffer."
         ;; the layout carries the text as well as its geometry, so gettext
         ;; only runs for a page epdfinfo lays out no glyphs for
         (let* ((start (float-time))
-               (layouts (cl-loop for p from 1 to (pdf-info-number-of-pages)
-                                 collect (condition-case nil
-                                             (pdf-info-charlayout p)
-                                           (error nil))))
+               (layouts (pdf-text--charlayouts
+                         buffer-file-name
+                         (number-sequence 1 (pdf-info-number-of-pages))))
                (raw (cl-loop for p from 1
                              for layout in layouts
                              collect (if layout
