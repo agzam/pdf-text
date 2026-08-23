@@ -68,6 +68,17 @@ monospaced one."
                   (setq x (+ x advance)))))
             (append text nil))))
 
+(defun pdf-text-tests--boxed (specs)
+  "Charlayout glyphs from SPECS, each (CHAR WIDTH BOT HEIGHT), laid left to right.
+The box bottom is the glyph's baseline, the way poppler anchors font
+boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
+  (let ((x 0.10))
+    (mapcar (lambda (s)
+              (cl-destructuring-bind (ch w bot h) s
+                (prog1 (list ch (list x (- bot h) (+ x w) bot))
+                  (setq x (+ x w)))))
+            specs)))
+
 ;;; Line records and profile
 
 (describe "pdf-text--glyph-line"
@@ -94,6 +105,105 @@ monospaced one."
     (let ((line (pdf-text--glyph-line nil)))
       (expect (pdf-text-line-text line) :to-equal "")
       (expect (pdf-text-line-x0 line) :to-be nil))))
+
+(describe "pdf-text--glyph-line script detection"
+  (it "wraps a raised smaller run as a superscript, exponent sign included"
+    (expect (pdf-text-line-text
+             (pdf-text--glyph-line
+              (pdf-text-tests--boxed
+               '((?1 0.010 0.3400 0.0134) (?0 0.010 0.3400 0.0134)
+                 (?- 0.006 0.3336 0.0089) (?4 0.006 0.3336 0.0089)
+                 (?3 0.006 0.3336 0.0089)
+                 (?s 0.010 0.3400 0.0134)))))
+            :to-equal "10^{-43}s"))
+
+  (it "wraps a far-raised footnote asterisk, symbols alone sufficing"
+    (expect (pdf-text-line-text
+             (pdf-text--glyph-line
+              (pdf-text-tests--boxed
+               '((?d 0.010 0.3400 0.0134) (?. 0.005 0.3400 0.0134)
+                 (?* 0.006 0.3336 0.0089)))))
+            :to-equal "d.^{*}"))
+
+  (it "wraps a dropped smaller run as a subscript"
+    (expect (pdf-text-line-text
+             (pdf-text--glyph-line
+              (pdf-text-tests--boxed
+               '((?F 0.012 0.3400 0.0134)
+                 (?j 0.006 0.3413 0.0089) (?k 0.006 0.3413 0.0089)))))
+            :to-equal "F_{jk}"))
+
+  (it "re-bases a fragment set mostly in subscript on its full-size glyphs"
+    (let ((line (pdf-text--glyph-line
+                 (pdf-text-tests--boxed
+                  '((?k 0.007 0.3424 0.0089) (?= 0.007 0.3424 0.0089)
+                    (?1 0.007 0.3424 0.0089) (?\s 0.002 0.3424 0.0089)
+                    (?F 0.0124 0.3394 0.0134) (?. 0.005 0.3394 0.0134))))))
+      (expect (pdf-text-line-text line) :to-equal "_{k=1} F.")
+      (expect (pdf-text-line-base line) :to-be-close-to 0.3394 4)))
+
+  (it "leaves an inline code font alone, its raise being under a script's"
+    (expect (pdf-text-line-text
+             (pdf-text--glyph-line
+              (pdf-text-tests--boxed
+               '((?l 0.008 0.5000 0.0214) (?a 0.008 0.5000 0.0214)
+                 (?\s 0.005 0.5000 0.0214)
+                 (?c 0.008 0.4968 0.0181) (?o 0.008 0.4968 0.0181)
+                 (?d 0.008 0.4968 0.0181) (?e 0.008 0.4968 0.0181)))))
+            :to-equal "la code"))
+
+  (it "leaves a slightly raised operator alone, symbols needing a symbol's offset"
+    (expect (pdf-text-line-text
+             (pdf-text--glyph-line
+              (pdf-text-tests--boxed
+               '((?x 0.008 0.3400 0.0134) (?\s 0.005 0.3400 0.0134)
+                 (?⋯ 0.012 0.3414 0.0094)))))
+            :to-equal "x ⋯"))
+
+  (it "keeps the baseline on the letters when a symbol font hangs below it"
+    (let ((line (pdf-text--glyph-line
+                 (pdf-text-tests--boxed
+                  '((?a 0.008 0.3400 0.0134) (?b 0.008 0.3400 0.0134)
+                    (?∧ 0.012 0.3424 0.0196))))))
+      (expect (pdf-text-line-text line) :to-equal "ab∧")
+      (expect (pdf-text-line-base line) :to-be-close-to 0.3400 4)))
+
+  (it "breaks a literal script pair so org will not parse it"
+    (expect (pdf-text-line-text
+             (pdf-text--glyph-line
+              (pdf-text-tests--boxed
+               '((?x 0.008 0.3400 0.0134) (?_ 0.008 0.3400 0.0134)
+                 (?{ 0.006 0.3400 0.0134) (?i 0.004 0.3400 0.0134)
+                 (?} 0.006 0.3400 0.0134)))))
+            :to-equal "x_\u200B{i}"))
+
+  (it "absorbs the hair space a font switch leaves before a script"
+    (expect (pdf-text-line-text
+             (pdf-text--glyph-line
+              (pdf-text-tests--boxed
+               '((?i 0.008 0.3400 0.0134) (?n 0.008 0.3400 0.0134)
+                 (?\s 0.005 0.3400 0.0134)
+                 (?α 0.0095 0.3400 0.0134)
+                 (?\s 0.0015 0.3400 0.0134)
+                 (?2 0.006 0.3424 0.0089)))))
+            :to-equal "in α_{2}"))
+
+  (it "marks nothing on a line set in one size, script or not"
+    (expect (pdf-text-line-text
+             (pdf-text--glyph-line
+              (pdf-text-tests--boxed
+               '((?k 0.006 0.3424 0.0089) (?= 0.006 0.3424 0.0089)
+                 (?1 0.006 0.3424 0.0089)))))
+            :to-equal "k=1"))
+
+  (it "reads a glyph past a script's reach as another line, not a script"
+    (expect (pdf-text-line-text
+             (pdf-text--glyph-line
+              (pdf-text-tests--boxed
+               '((?T 0.030 0.4200 0.0500)
+                 (?h 0.008 0.3400 0.0134) (?i 0.008 0.3400 0.0134)
+                 (?s 0.008 0.3400 0.0134)))))
+            :to-equal "This")))
 
 (describe "pdf-text--page-lines"
   (it "takes text and geometry from the same glyph stream"
@@ -185,7 +295,49 @@ monospaced one."
                      '(("Preface" :x0 0.40 :x1 0.55 :base 0.06)
                        ("xiv" :x0 0.56 :x1 0.60 :base 0.06))))
              (merged (pdf-text--merge-script-fragments lines profile)))
-        (expect (length merged) :to-be 2)))))
+        (expect (length merged) :to-be 2)))
+
+    (it "wraps a dropped smaller fragment as the subscript it is"
+      (let* ((lines (pdf-text-tests--page
+                     '(("sound, ∧" :x0 0.10 :x1 0.45 :base 0.40)
+                       ("k=1" :x0 0.45 :x1 0.50 :base 0.403 :height 0.0089))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (pdf-text-line-text (car merged)) :to-equal "sound, ∧_{k=1}")))
+
+    (it "wraps a raised smaller fragment as the superscript it is"
+      (let* ((lines (pdf-text-tests--page
+                     '(("the value x" :x0 0.10 :x1 0.30 :base 0.40)
+                       ("m" :x0 0.30 :x1 0.32 :base 0.3936 :height 0.0089))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (pdf-text-line-text (car merged)) :to-equal "the value x^{m}")))
+
+    (it "stacks both limits of an operator, superscript then subscript"
+      (let* ((lines (pdf-text-tests--page
+                     '(("that is, A |= ∧" :x0 0.10 :x1 0.45 :base 0.40)
+                       ("m" :x0 0.45 :x1 0.47 :base 0.3936 :height 0.0089)
+                       ("k=1" :x0 0.45 :x1 0.50 :base 0.403 :height 0.0089))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (length merged) :to-be 1)
+        (expect (pdf-text-line-text (car merged))
+                :to-equal "that is, A |= ∧^{m}_{k=1}")))
+
+    (it "attaches a fragment the glyph pass dissected without a space"
+      (let* ((lines (pdf-text-tests--page
+                     '(("A |= ∧^{m}" :x0 0.10 :x1 0.45 :base 0.40)
+                       ("_{k=1} F_{jk} ." :x0 0.44 :x1 0.50 :base 0.4001
+                        :height 0.0134))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (pdf-text-line-text (car merged))
+                :to-equal "A |= ∧^{m}_{k=1} F_{jk} .")))
+
+    (it "keeps a long offset fragment as text, limits being a few glyphs"
+      (let* ((lines (pdf-text-tests--page
+                     '(("⟨ (11) i(x ∗ y) ⇒" :x0 0.10 :x1 0.45 :base 0.40)
+                       ("(4) i(y) ∗ i(x)" :x0 0.45 :x1 0.70 :base 0.403
+                        :height 0.0089))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (pdf-text-line-text (car merged))
+                :to-equal "⟨ (11) i(x ∗ y) ⇒ (4) i(y) ∗ i(x)")))))
 
 (describe "pdf-text--reassemble-zones"
   (let ((profile '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
@@ -986,7 +1138,40 @@ monospaced one."
     (with-temp-buffer
       (insert (pdf-text--escape-org-lines "* item one"))
       (goto-char (point-min))
-      (expect (search-forward "* item one" nil t) :to-be-truthy))))
+      (expect (search-forward "* item one" nil t) :to-be-truthy)))
+
+  (it "leaves generated script markup untouched"
+    (expect (pdf-text--escape-org-lines "back to 10^{-43}seconds\nand F_{jk} holds")
+            :to-equal "back to 10^{-43}seconds\nand F_{jk} holds")))
+
+(describe "pdf-text script rendering"
+  (it "breaks literal pairs and only those"
+    (expect (pdf-text--escape-script-literals "a^{b} c_{d} keeps x_1 and y^2")
+            :to-equal "a^\u200B{b} c_\u200B{d} keeps x_1 and y^2"))
+
+  (it "displays generated scripts and nothing literal"
+    (with-temp-buffer
+      (let ((inhibit-read-only t))
+        (pdf-text-mode)
+        (insert "back to 10^{-43} seconds\n"
+                "literal x_1 stays\n"
+                (pdf-text--escape-script-literals "literal x_{i} stays\n")))
+      (font-lock-ensure)
+      (expect org-use-sub-superscripts :to-equal '{})
+      ;; buffer-local: a user config disabling script display for its
+      ;; org files must not reach into a rendered book
+      (expect (local-variable-p 'org-pretty-entities-include-sub-superscripts)
+              :to-be-truthy)
+      (expect org-pretty-entities-include-sub-superscripts :to-be t)
+      (goto-char (point-min))
+      (search-forward "-43")
+      (expect (get-text-property (match-beginning 0) 'display) :to-be-truthy)
+      (goto-char (point-min))
+      (search-forward "x_1")
+      (expect (get-text-property (1- (point)) 'display) :to-be nil)
+      (goto-char (point-min))
+      (search-forward "{i}")
+      (expect (get-text-property (match-beginning 0) 'display) :to-be nil))))
 
 (describe "pdf-text--interleave-outline"
   (it "prepends a heading of the entry's depth at its page start"

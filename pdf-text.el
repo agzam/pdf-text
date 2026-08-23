@@ -129,8 +129,197 @@ mirror the line breaks of the gettext stream."
     (when cur (push (nreverse cur) lines))
     (nreverse lines)))
 
+(defvar pdf-text-script-size 0.78
+  "Glyph height, in body heights, at and under which a glyph can be a script.
+Super- and subscripts are set at 0.5-0.7 of their body size; the
+impostors run larger - an inline code font at 0.85 of the serif body,
+small caps at 0.8 - and the gap between the two is real.")
+
+(defvar pdf-text-script-raise 0.25
+  "Baseline raise, in body heights, past which a smaller glyph is a superscript.
+Real superscripts sit 0.35-0.5 body heights up.  An inline code font
+whose boxes anchor a shade high sits under 0.2, and stays text.")
+
+(defvar pdf-text-script-drop 0.06
+  "Baseline drop, in body heights, past which a smaller glyph is a subscript.
+First-level subscripts drop as little as 0.1 body heights, and glyphs
+of one font on one baseline agree on their box bottoms exactly, so the
+floor guards against float dust rather than typography.")
+
+(defvar pdf-text-script-reach 0.8
+  "How far, in body heights, a script baseline can sit from the typeset one.
+Scripts are offset by a fraction of the glyph size - the deepest
+observed drop is 0.22, the highest raise 0.5.  A glyph past the reach
+is another typeset line poppler folded into the record - a drop cap,
+a merged pair - and both the baseline vote and the per-glyph
+classification must leave it alone.")
+
+(defun pdf-text--escape-script-literals (text)
+  "TEXT with a zero-width space breaking every literal ^{ and _{ pair.
+The reflow writes org sub- and superscripts as ^{...}/_{...}, and org
+must parse only those: the same pair extracted from the page itself -
+a line of LaTeX source in a listing - stays plain text."
+  (replace-regexp-in-string "\\([_^]\\){" "\\1\u200B{" text))
+
+(defun pdf-text--glyph-baseline (glyphs)
+  "The typeset baseline of GLYPHS and its body height, as (BASE . HEIGHT).
+Letters and digits anchor their boxes at the pen position, so their
+box bottoms cluster on the baselines the line was set at; symbol
+fonts hang their boxes below the same pen and stay out of the vote.
+The widest cluster names the baseline, but every cluster within a
+raise of it - each measured by its own glyph size - contests, and the
+highest wins: a fragment set mostly in subscript cedes to its few
+full-size glyphs, and a line of math-font variables, whose alphabetic
+boxes hang below the pen like their operators, cedes to the words set
+beside them.  Nothing legitimate sits below a baseline within a
+raise's reach of it.  Nil without alphanumeric ink."
+  (let (boxes)
+    (dolist (g glyphs)
+      (when (and (not (memq (car g) '(?\s ?\t)))
+                 (string-match-p "[[:alnum:]]" (string (car g))))
+        (push (cadr g) boxes)))
+    (when boxes
+      (let* ((sorted (sort boxes (lambda (a b) (< (nth 3 a) (nth 3 b)))))
+             (heights (mapcar (lambda (b) (- (nth 3 b) (nth 1 b))) sorted))
+             (gap (* 0.04 (pdf-text--quantile heights 0.5)))
+             (levels nil)
+             (current (list (car sorted))))
+        (dolist (b (cdr sorted))
+          (if (< (- (nth 3 b) (nth 3 (car current))) gap)
+              (push b current)
+            (push current levels)
+            (setq current (list b))))
+        (push current levels)
+        (let* ((stats (mapcar
+                       (lambda (level)
+                         (list (nth 3 (car (last level)))
+                               (pdf-text--quantile
+                                (mapcar (lambda (b) (- (nth 3 b) (nth 1 b)))
+                                        level)
+                                0.5)
+                               (apply #'+ (mapcar (lambda (b)
+                                                    (- (nth 2 b) (nth 0 b)))
+                                                  level))))
+                       levels))
+               (widest (cl-reduce (lambda (a b) (if (< (nth 2 a) (nth 2 b)) b a))
+                                  stats))
+               (contest (cl-remove-if-not
+                         (lambda (level)
+                           (<= (abs (- (nth 0 level) (nth 0 widest)))
+                               (* pdf-text-script-raise (nth 1 level))))
+                         stats))
+               (ref (cl-reduce (lambda (a b) (if (< (nth 0 b) (nth 0 a)) b a))
+                               (or contest (list widest)))))
+          (cons (nth 0 ref) (nth 1 ref)))))))
+
+(defun pdf-text--script-dir (glyph base height)
+  "Which script GLYPH reads as against baseline BASE and body HEIGHT.
+`up', `down', or nil for a glyph on the baseline, too large to be a
+script, or past `pdf-text-script-reach' - another typeset line the
+record carries, not a script of this one.  Box bottoms are baselines:
+a descender does not lower its glyph's box, so any real offset is
+typeset, not ink."
+  (let* ((box (cadr glyph))
+         (h (- (nth 3 box) (nth 1 box)))
+         (offset (- (nth 3 box) base)))
+    (when (and (< h (* pdf-text-script-size height))
+               (< (abs offset) (* pdf-text-script-reach height)))
+      (cond ((< offset (* (- pdf-text-script-raise) height)) 'up)
+            ((< (* pdf-text-script-drop height) offset) 'down)))))
+
+(defvar pdf-text-script-symbol-offset 0.25
+  "Baseline offset, in body heights, a run of pure symbols needs to be a script.
+A footnote asterisk sits half a body height up; an operator font whose
+boxes anchor a shade off the baseline - a midline ellipsis - sits
+within 0.15 of it, and stays text.")
+
+(defun pdf-text--script-segments (glyphs base height)
+  "GLYPHS split into script runs and plain text, as (DIR . GLYPHS) segments.
+DIR is `up', `down' or nil, each glyph read against the typeset
+baseline BASE and body HEIGHT.  A space joins the run around it only
+when the ink on both sides continues it."
+  (let ((vec (vconcat glyphs))
+        (segments nil))
+    (cl-flet ((dir-at (i)
+                (let ((g (aref vec i)))
+                  (unless (memq (car g) '(?\s ?\t))
+                    (pdf-text--script-dir g base height))))
+              (next-ink (i)
+                (cl-loop for j from i below (length vec)
+                         unless (memq (car (aref vec j)) '(?\s ?\t))
+                         return j)))
+      (let ((i 0))
+        (while (< i (length vec))
+          (let* ((g (aref vec i))
+                 (space (memq (car g) '(?\s ?\t)))
+                 (dir (unless space (dir-at i)))
+                 (current (car segments)))
+            (cond
+             ;; a space continues the segment around it only when the
+             ;; ink on both sides agrees; otherwise it reads as plain
+             (space
+              (let* ((j (next-ink i))
+                     (ahead (and j (dir-at j))))
+                (if (and current (car current) (eq ahead (car current)))
+                    (push g (cdr current))
+                  (if (and current (null (car current)))
+                      (push g (cdr current))
+                    (push (cons nil (list g)) segments)))))
+             ((and current (eq dir (car current)))
+              (push g (cdr current)))
+             (t (push (cons dir (list g)) segments)))
+            (setq i (1+ i))))))
+    (mapcar (lambda (segment)
+              (cons (car segment) (nreverse (cdr segment))))
+            (nreverse segments))))
+
+(defun pdf-text--script-markup (glyphs base height space)
+  "The text of GLYPHS with script runs wrapped as org ^{...}/_{...} markup.
+BASE and HEIGHT are the line's typeset baseline and body height, SPACE
+its median word gap.  A run's edge spaces stay outside the wrap; a
+lone space poppler set between a run and its host at a fraction of a
+word gap - a font switch, not a space the page set - goes, so the
+markup attaches where the page attaches.  A run that fails its own
+test - symbols alone without a symbol's offset, a brace among the
+glyphs - reads as the plain text it was, and literal ^{ and _{ pairs
+from the page are broken so org never parses them."
+  (let ((out nil)
+        (last-ink nil))
+    (dolist (segment (pdf-text--script-segments glyphs base height))
+      (let* ((dir (car segment))
+             (glyphs (cdr segment))
+             (text (apply #'string (mapcar #'car glyphs)))
+             (ink (cl-remove-if (lambda (g) (memq (car g) '(?\s ?\t))) glyphs)))
+        (if (null dir)
+            (push (pdf-text--escape-script-literals text) out)
+          (let* ((trimmed (string-trim text))
+                 (symbols (not (string-match-p "[[:alnum:]]" trimmed)))
+                 (weak (and symbols
+                            (cl-some
+                             (lambda (g)
+                               (< (abs (- (nth 3 (cadr g)) base))
+                                  (* pdf-text-script-symbol-offset height)))
+                             ink))))
+            (if (or weak (string-match-p "[{}]" trimmed) (string-empty-p trimmed))
+                (push (pdf-text--escape-script-literals text) out)
+              ;; a lone space before the run at under half a word gap
+              ;; is the font switch showing, not a space the page set
+              (when (and (stringp (car out))
+                         (string-suffix-p " " (car out))
+                         (not (string-suffix-p "  " (car out)))
+                         space last-ink ink
+                         (< (- (nth 0 (cadr (car ink))) (nth 2 last-ink))
+                            (* 0.5 space)))
+                (setcar out (substring (car out) 0 -1)))
+              (push (concat (if (eq dir 'up) "^{" "_{") trimmed "}") out))))
+        (when ink (setq last-ink (cadr (car (last ink)))))))
+    (apply #'concat (nreverse out))))
+
 (defun pdf-text--glyph-line (glyphs)
-  "Line record for GLYPHS, one line of `pdf-info-charlayout' output."
+  "Line record for GLYPHS, one line of `pdf-info-charlayout' output.
+The text carries org script markup for glyph runs set smaller than and
+offset from the line's baseline - the raised exponent, the subscript
+index - which only exists here, while the per-glyph boxes still do."
   (let* ((text (apply #'string (mapcar #'car glyphs)))
          (ink (cl-remove-if (lambda (g) (memq (car g) '(?\s ?\t))) glyphs))
          (boxes (mapcar #'cadr ink))
@@ -143,24 +332,31 @@ mirror the line breaks of the gettext stream."
          (opening (cl-position-if (lambda (g) (not (eq (car g) ?\s))) glyphs))
          (gap (and opening (cl-position ?\s glyphs :key #'car :start opening))))
     (if (null boxes)
-        (pdf-text-line-create :text text)
-      (pdf-text-line-create
-       :text text
-       :x0 (apply #'min (mapcar (lambda (b) (nth 0 b)) boxes))
-       :x1 (apply #'max (mapcar (lambda (b) (nth 2 b)) boxes))
-       :top (apply #'min (mapcar (lambda (b) (nth 1 b)) boxes))
-       :bot (apply #'max (mapcar (lambda (b) (nth 3 b)) boxes))
-       ;; the median glyph bottom is the baseline: descenders and
-       ;; superscripts are too few to move it, unlike the extremes
-       :base (pdf-text--quantile (mapcar (lambda (b) (nth 3 b)) boxes) 0.5)
-       ;; the upper quantile of ink heights tracks the font size, where
-       ;; the median would only report the x-height of the line's vowels
-       :height (pdf-text--quantile
-                (mapcar (lambda (b) (- (nth 3 b) (nth 1 b))) boxes) 0.8)
-       :space (pdf-text--quantile spaces 0.5)
-       :cv (pdf-text--variation advances)
-       :first-width (- (nth 2 (cadr (nth (1- (or gap (length glyphs))) glyphs)))
-                       (nth 0 (cadr (nth opening glyphs))))))))
+        (pdf-text-line-create :text (pdf-text--escape-script-literals text))
+      (let ((ref (pdf-text--glyph-baseline glyphs))
+            (space (pdf-text--quantile spaces 0.5)))
+        (pdf-text-line-create
+         :text (if ref
+                   (pdf-text--script-markup glyphs (car ref) (cdr ref) space)
+                 (pdf-text--escape-script-literals text))
+         :x0 (apply #'min (mapcar (lambda (b) (nth 0 b)) boxes))
+         :x1 (apply #'max (mapcar (lambda (b) (nth 2 b)) boxes))
+         :top (apply #'min (mapcar (lambda (b) (nth 1 b)) boxes))
+         :bot (apply #'max (mapcar (lambda (b) (nth 3 b)) boxes))
+         ;; the baseline the line's letters anchor at; a line with no
+         ;; letters falls back on the median glyph bottom, which
+         ;; descenders and superscripts are too few to move
+         :base (if ref
+                   (car ref)
+                 (pdf-text--quantile (mapcar (lambda (b) (nth 3 b)) boxes) 0.5))
+         ;; the upper quantile of ink heights tracks the font size, where
+         ;; the median would only report the x-height of the line's vowels
+         :height (pdf-text--quantile
+                  (mapcar (lambda (b) (- (nth 3 b) (nth 1 b))) boxes) 0.8)
+         :space space
+         :cv (pdf-text--variation advances)
+         :first-width (- (nth 2 (cadr (nth (1- (or gap (length glyphs))) glyphs)))
+                         (nth 0 (cadr (nth opening glyphs)))))))))
 
 (defun pdf-text--layout-text (layout)
   "The plain text of LAYOUT's glyph stream, newlines included."
@@ -173,7 +369,9 @@ keeps the two aligned; the fallback path reflows on character
 heuristics alone."
   (if layout
       (mapcar #'pdf-text--glyph-line (pdf-text--layout-lines layout))
-    (mapcar (lambda (line) (pdf-text-line-create :text line))
+    (mapcar (lambda (line)
+              (pdf-text-line-create
+               :text (pdf-text--escape-script-literals line)))
             (split-string text "\n"))))
 
 (defun pdf-text--profile (pages)
@@ -297,14 +495,53 @@ the merged line would skew every leading measured against it."
      :cv (pdf-text-line-cv widest)
      :first-width (pdf-text-line-first-width (car records)))))
 
+(defvar pdf-text-script-fragment-chars 8
+  "Characters an undissected fragment may hold and still wrap as one script.
+The limits poppler splits off an operator are a few glyphs; a longer
+record at a slight offset is a row of an aligned array, whose fonts
+skew the size comparison, and it must stay text.")
+
+(defun pdf-text--merge-script-text (prev line)
+  "The text a merge of records PREV and LINE carries, scripts attached.
+The wider record is the typeset line, the narrower the fragment
+poppler split off it.  A trailing fragment the glyph pass already
+dissected opens with its own ^{}/_{} markup and only needs the space
+dropped, so org attaches it to what it follows; a short one it could
+not dissect - every glyph one size, nothing in-record to contrast
+against - wraps whole, and the side its baseline is offset to picks
+the marker.  Anything else joins with a space, as a plain split line."
+  (let* ((prev-text (pdf-text-line-text prev))
+         (line-text (string-trim (pdf-text-line-text line)))
+         (host (pdf-text--wider-line prev line))
+         (base (pdf-text-line-base host))
+         (height (pdf-text-line-height host))
+         (offset (and base (pdf-text-line-base line)
+                      (- (pdf-text-line-base line) base))))
+    (cond
+     ((string-match-p "\\`[_^]{" line-text)
+      (concat (string-trim-right prev-text) line-text))
+     ((and (eq host prev) offset height
+           (pdf-text-line-height line)
+           (< (pdf-text-line-height line) (* pdf-text-script-size height))
+           (<= (length line-text) pdf-text-script-fragment-chars)
+           (pdf-text--wordless-p line-text)
+           (not (string-match-p "[{}]" line-text))
+           (or (< (* pdf-text-script-drop height) offset)
+               (< offset (* (- pdf-text-script-raise) height))))
+      (concat (string-trim-right prev-text)
+              (if (< offset 0) "^{" "_{") line-text "}"))
+     (t (concat prev-text " " line-text)))))
+
 (defun pdf-text--merge-script-fragments (lines profile)
   "LINES with script fragments rejoined to the typeset line they came from.
 A record whose baseline sits within `pdf-text-fragment-step' of its
 stream neighbour's, close enough in x to touch it, is the piece of a
 super- or subscript stack - the limits of a big operator, a lone
 raised exponent - that poppler emitted as a line of its own.  The text
-joins in stream order; PROFILE's leading and space are the measures.
-Rejoining is what keeps the sentence around an inline formula whole."
+joins in stream order, the fragment as the script its offset says it
+is, by `pdf-text--merge-script-text'; PROFILE's leading and space are
+the measures.  Rejoining is what keeps the sentence around an inline
+formula whole."
   (let ((leading (plist-get profile :leading))
         (space (or (plist-get profile :space) 0.005)))
     (if (null leading)
@@ -327,8 +564,7 @@ Rejoining is what keeps the sentence around an inline formula whole."
                         (* pdf-text-fragment-gap space)))
                 (setcar out (pdf-text--merge-records
                              (list prev line)
-                             (concat (pdf-text-line-text prev) " "
-                                     (string-trim (pdf-text-line-text line)))))
+                             (pdf-text--merge-script-text prev line)))
               (push line out))))
         (nreverse out)))))
 
@@ -1842,12 +2078,20 @@ text it always was."
   (setq buffer-read-only t)
   (visual-line-mode 1)
   (goto-address-mode 1)
+  ;; The reflow writes super- and subscripts as ^{...}/_{...}; org
+  ;; renders only that braced form as real scripts, so a literal ^ or _
+  ;; extracted from the page stays the plain glyph it was.  All three
+  ;; variables are buffer-local: a user's org files owe nothing to how
+  ;; a rendered book displays its exponents.
+  (setq-local org-use-sub-superscripts '{})
+  (setq-local org-pretty-entities t)
+  (setq-local org-pretty-entities-include-sub-superscripts t)
   ;; Render each page-delimiting ^L as a rule instead of a glyph.
   (setq-local buffer-display-table (make-display-table))
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 5
+(defconst pdf-text-render-version 6
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

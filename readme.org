@@ -20,7 +20,7 @@ The companion is reused as long as the file on disk has not changed, so re-openi
 
 ~pdf-view~ renders pages as images, so nothing a text buffer gives you applies: no soft wrap, no text motions, no isearch, no spell checker, no translate-at-point. The text is right there - epdfinfo serves it - but no one turns it into a buffer that reads like a book and stays in step with the page you are on.
 
-Getting there is more than calling ~pdf-info-gettext~. poppler computes paragraphs, columns and blocks internally and then throws them away before serving text: what arrives is a list of lines with no structure at all. So the reflow rebuilds it from the glyph boxes ~pdf-info-charlayout~ returns - where a line ends, how far the next one starts in, how much air sits between their baselines, how big its glyphs are. Out of that come paragraphs, list items, quotations, listings kept verbatim, headings at the line they name, running heads dropped, and hyphens resolved against the book's own vocabulary.
+Getting there is more than calling ~pdf-info-gettext~. poppler computes paragraphs, columns and blocks internally and then throws them away before serving text: what arrives is a list of lines with no structure at all. So the reflow rebuilds it from the glyph boxes ~pdf-info-charlayout~ returns - where a line ends, how far the next one starts in, how much air sits between their baselines, how big its glyphs are. Out of that come paragraphs, list items, quotations, listings kept verbatim, headings at the line they name, running heads dropped, hyphens resolved against the book's own vocabulary, and super- and subscripts rendered as org's ~^{...}~/~_{...}~ - a footnote marker, an exponent, the limits of a big operator - which the buffer displays as real raised and lowered scripts.
 
 * How
 
@@ -55,7 +55,7 @@ In a GUI frame bind ~<return>~ next to ~RET~ if another minor mode (evil-org, sa
 
 ** Tuning
 
-Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (paragraph break as a multiple of the leading), ~pdf-text-blank-factor~, ~pdf-text-size-tolerance~, ~pdf-text-heading-height~ and ~pdf-text-heading-max-words~ (what reads as a heading), ~pdf-text-monospace-variation~ (what reads as a listing), ~pdf-text-margin-band~ and ~pdf-text-recurring-min-count~ (what reads as a running head), ~pdf-text-min-text-fraction~ (below which a document is a scan and the command refuses it).
+Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (paragraph break as a multiple of the leading), ~pdf-text-blank-factor~, ~pdf-text-size-tolerance~, ~pdf-text-heading-height~ and ~pdf-text-heading-max-words~ (what reads as a heading), ~pdf-text-monospace-variation~ (what reads as a listing), ~pdf-text-margin-band~ and ~pdf-text-recurring-min-count~ (what reads as a running head), ~pdf-text-script-size~, ~pdf-text-script-raise~ and ~pdf-text-script-drop~ (what reads as a super- or subscript), ~pdf-text-min-text-fraction~ (below which a document is a scan and the command refuses it).
 
 * Known limits
 
@@ -63,6 +63,7 @@ Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (parag
 - Code inside prose still breaks the sentence around it, and maths set in a legacy symbol font with scrambled codepoints escapes the display-maths detection.
 - Paragraphs are not joined across a page boundary.
 - Pseudocode set in proportional type reflows as prose - nothing in the geometry says it is a listing.
+- A subscript set at full size, only lowered, reads the same as a symbol font whose boxes hang below the baseline, and stays plain text.
 - A scan has no text layer; ~pdf-view-as-text~ names the page counts and refuses rather than opening an empty buffer.
 
 * Development

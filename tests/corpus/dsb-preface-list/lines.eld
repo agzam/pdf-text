@@ -417,7 +417,7 @@
   ("To the Instructor" 0.1429 0.3460 0.4001 0.4344 0.4344 0.0343 0.0059 0.2776 0.0275)
   ("This book has been used successfully as a textbook for a very wide variety of data science" 0.1429 0.8571 0.4409 0.4623 0.4623 0.0214 0.0033 0.3488 0.0372)
   ("courses. Historically, the book arose from the development of Foster’s multidisciplinary" 0.1428 0.8571 0.4599 0.4813 0.4813 0.0214 0.0035 0.3839 0.0671)
-  ("Data Science classes at the Stern School at NYU, starting in the fall of 2005.1 The original" 0.1429 0.8571 0.4790 0.5004 0.5004 0.0214 0.0034 0.3834 0.0396)
+  ("Data Science classes at the Stern School at NYU, starting in the fall of 2005.^{1} The original" 0.1429 0.8571 0.4790 0.5004 0.5004 0.0214 0.0034 0.3834 0.0396)
   ("class was nominally for MBA students and MSIS students, but drew students from" 0.1429 0.8572 0.4980 0.5194 0.5194 0.0214 0.0073 0.3123 0.0385)
   ("schools across the university. The most interesting aspect of the class was not that it" 0.1429 0.8571 0.5171 0.5385 0.5385 0.0214 0.0062 0.2756 0.0617)
   ("appealed to MBA and MSIS students, for whom it was designed. More interesting, it" 0.1429 0.8571 0.5361 0.5575 0.5575 0.0214 0.0059 0.3602 0.0737)

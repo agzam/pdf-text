@@ -2,7 +2,7 @@ and generates the eleventh rule:
 
   11 i(x ∗ y) ∗ x → i(y)
 
-A critical pair comes from rule 11 and rule 4, and the mgu of l11 /1.1 and l4 is σ = [x11 ↼ i(x), y11 ↼ x ∗ y]:
+A critical pair comes from rule 11 and rule 4, and the mgu of l_{11} /1.1 and l_{4} is σ = [x_{11} ↼ i(x), y_{11} ↼ x ∗ y]:
 
   ⟨ (11) i(x ∗ y) i(i(x) ∗ (x ∗ y)) ∗ i(x) ⇒ (4) i(y) ∗ i(x)
 
