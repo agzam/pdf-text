@@ -20,7 +20,7 @@ The companion is reused as long as the file on disk has not changed, so re-openi
 
 ~pdf-view~ renders pages as images, so nothing a text buffer gives you applies: no soft wrap, no text motions, no isearch, no spell checker, no translate-at-point. The text is right there - epdfinfo serves it - but no one turns it into a buffer that reads like a book and stays in step with the page you are on.
 
-Getting there is more than calling ~pdf-info-gettext~. poppler computes paragraphs, columns and blocks internally and then throws them away before serving text: what arrives is a list of lines with no structure at all. So the reflow rebuilds it from the glyph boxes ~pdf-info-charlayout~ returns - where a line ends, how far the next one starts in, how much air sits between their baselines, how big its glyphs are. Out of that come paragraphs, list items, quotations, listings kept verbatim, headings at the line they name, running heads dropped, hyphens resolved against the book's own vocabulary, and super- and subscripts rendered as org's ~^{...}~/~_{...}~ - a footnote marker, an exponent, the limits of a big operator - which the buffer displays as real raised and lowered scripts.
+Getting there is more than calling ~pdf-info-gettext~. poppler computes paragraphs, columns and blocks internally and then throws them away before serving text: what arrives is a list of lines with no structure at all. So the reflow rebuilds it from the glyph boxes ~pdf-info-charlayout~ returns - where a line ends, how far the next one starts in, how much air sits between their baselines, how big its glyphs are. Out of that come paragraphs, list items, quotations, listings kept verbatim, headings at the line they name, running heads dropped, hyphens resolved against the book's own vocabulary, and super- and subscripts rendered as org's ~^{...}~/~_{...}~ - a footnote marker, an exponent, the limits of a big operator - which the buffer displays as real raised and lowered scripts. A footnote marker whose note sits at the foot of its page in smaller type becomes a real org footnote: ~[fn:18-star]~ at the marker, the definition at the page's end, jumpable both ways.
 
 * How
 
@@ -60,10 +60,11 @@ Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (parag
 * Known limits
 
 - Two-column pages: a table of contents arrives with its page numbers as a separate run of lines and stays that way. Real column detection is the fix.
-- Code inside prose still breaks the sentence around it, and maths set in a legacy symbol font with scrambled codepoints escapes the display-maths detection.
+- Code inside prose still breaks the sentence around it, and maths set in a legacy symbol font with scrambled codepoints escapes the display-maths detection. A symbol whose codepoint scrambles into a control character renders as nothing at all - the character would only ever have displayed as line noise.
 - Paragraphs are not joined across a page boundary.
 - Pseudocode set in proportional type reflows as prose - nothing in the geometry says it is a listing.
 - A subscript set at full size, only lowered, reads the same as a symbol font whose boxes hang below the baseline, and stays plain text.
+- A footnote converts only when both halves are present: a marker the body superscripts and a smaller-type block at the page's foot opening with it. A marker whose note sits on another page stays a superscript; a note whose marker the text layer spells flat stays a paragraph. And a note's own exponents can be flat in the text layer even when the body's are real (Bryson writes ~1010~ in the note under a body that superscripts ~10^{-43}~); no geometry can raise them.
 - A scan has no text layer; ~pdf-view-as-text~ names the page counts and refuses rather than opening an empty buffer.
 
 * Development

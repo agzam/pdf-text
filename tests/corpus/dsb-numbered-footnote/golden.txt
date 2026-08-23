@@ -1,0 +1,15 @@
+buried in algorithm details or mathematical propositions. In this book we instead focus on the unifying concepts, presenting specific tasks and algorithms as natural manifestations of them.
+
+As another example, in evaluating the utility of a pattern, we see a notion of lift— how much more prevalent a pattern is than would be expected by chance—recurring broadly across data science. It is used to evaluate very different sorts of patterns in different contexts. Algorithms for targeting advertisements are evaluated by computing the lift one gets for the targeted population. Lift is used to judge the weight of evidence for or against a conclusion. Lift helps determine whether a co-occurrence (an association) in data is interesting, as opposed to simply being a natural consequence of popularity.
+
+We believe that explaining data science around such fundamental concepts not only aids the reader, it also facilitates communication between business stakeholders and data scientists. It provides a shared vocabulary and enables both parties to understand each other better. The shared concepts lead to deeper discussions that may uncover critical issues otherwise missed.
+
+** To the Instructor
+
+This book has been used successfully as a textbook for a very wide variety of data science courses. Historically, the book arose from the development of Foster’s multidisciplinary Data Science classes at the Stern School at NYU, starting in the fall of 2005.[fn:19-1] The original class was nominally for MBA students and MSIS students, but drew students from schools across the university. The most interesting aspect of the class was not that it appealed to MBA and MSIS students, for whom it was designed. More interesting, it also was found to be very valuable by students with strong backgrounds in machine learning and other technical disciplines. Part of the reason seemed to be that the focus on fundamental principles and other issues besides algorithms was missing from their curricula.
+
+At NYU we now use the book in support of a variety of data science–related programs: the original MBA and MSIS programs, undergraduate business analytics, NYU/Stern’s new MS in Business Analytics program, and as the Introduction to Data Science for NYU’s new MS in Data Science. In addition, (prior to publication) the book has been adopted by more than a dozen other universities for programs in seven countries (and counting), in business schools, in computer science programs, and for more general introductions to data science.
+
+Stay tuned to the books’ websites (see below) for information on how to obtain helpful instructional material, including lecture slides, sample homework questions and prob‐
+
+[fn:19-1] Of course, each author has the distinct impression that he did the majority of the work on the book.

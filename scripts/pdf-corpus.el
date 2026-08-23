@@ -255,20 +255,58 @@ review is the diff this leaves behind."
 
 ;;; Sweeping a whole book
 
-(defun pdf-corpus-script--body-line-p (line)
-  "Whether LINE is too long to be the running head a page may lose."
-  (<= pdf-corpus-sweep-body-words (length (split-string (string-trim line)))))
+(defun pdf-corpus-script--recurring-lost (lost-lists)
+  "What LOST-LISTS say about the book's running heads, as (FORMS . FOLIO).
+FORMS is a hash table of digit-normalised forms recurring across the
+lists: a dropped line whose form comes back page after page is a
+running head whatever its length - a section-title head with its
+folio merged in runs sixteen words, and the word-count test alone
+would read the whole book's heads as lost prose.  FOLIO is whether
+the book drops `pdf-text-recurring-min-count' folio-merged lines: a
+book titling its heads by section rotates them before any form
+recurs, and the folio-merged shape is then what tells a head from
+prose - the same reading `pdf-text-remove-marginal-lines' makes."
+  (let ((counts (make-hash-table :test #'equal))
+        (recurring (make-hash-table :test #'equal))
+        (folio 0))
+    (dolist (lost lost-lists)
+      (dolist (line lost)
+        (when (pdf-text--folio-merged-p line)
+          (cl-incf folio))
+        (cl-incf (gethash (pdf-text--normalize-line line) counts 0))))
+    (maphash (lambda (form n)
+               (when (<= pdf-text-recurring-min-count n)
+                 (puthash form t recurring)))
+             counts)
+    (cons recurring (<= pdf-text-recurring-min-count folio))))
 
-(defun pdf-corpus-script--sweep-violations (violations)
+(defun pdf-corpus-script--body-line-p (line &optional heads)
+  "Whether LINE is prose the render lost, not a running head.
+Long enough for `pdf-corpus-sweep-body-words', and not what HEADS -
+`pdf-corpus-script--recurring-lost' output - reads as a head: a form
+the book drops page after page, or a folio-merged line in a book that
+keeps dropping those."
+  (and (<= pdf-corpus-sweep-body-words
+           (length (split-string (string-trim line))))
+       (not (and heads
+                 (or (gethash (pdf-text--normalize-line line) (car heads))
+                     (and (cdr heads)
+                          (pdf-text--folio-merged-p line)))))))
+
+(defun pdf-corpus-script--sweep-violations (violations &optional recurring)
   "VIOLATIONS with the losses a running head explains taken out.
 A sweep has no goldens and no declared drops, so every page would
 report its own running head; what is worth ranking is a page that
-lost prose."
+lost prose.  RECURRING names the forms the whole book keeps losing,
+which is what a head looks like from here."
   (delq nil
         (mapcar (lambda (violation)
                   (if (eq 'lost (car violation))
-                      (when-let* ((lost (seq-filter #'pdf-corpus-script--body-line-p
-                                                    (cdr violation))))
+                      (when-let* ((lost (seq-filter
+                                         (lambda (line)
+                                           (pdf-corpus-script--body-line-p
+                                            line recurring))
+                                         (cdr violation))))
                         (cons 'lost lost))
                     violation))
                 violations)))
@@ -296,14 +334,22 @@ own cannot show that."
                                                  (string-join lines "\n"))
                                                sources)))
          (lost 0) (added 0) (mid 0) (markers 0))
-    (cl-loop for source in sources
-             for text in reflowed
-             do (let ((diff (pdf-corpus-diff source text)))
-                  (cl-incf lost (length (seq-filter #'pdf-corpus-script--body-line-p
-                                                    (plist-get diff :lost))))
-                  (cl-incf added (length (plist-get diff :added)))
-                  (cl-incf mid (length (pdf-corpus-mid-sentence-breaks text)))
-                  (cl-incf markers (length (pdf-corpus-page-marker-lines text)))))
+    (let* ((diffs (cl-loop for source in sources
+                           for text in reflowed
+                           collect (pdf-corpus-diff source text)))
+           (recurring (pdf-corpus-script--recurring-lost
+                       (mapcar (lambda (diff) (plist-get diff :lost)) diffs))))
+      (cl-loop for diff in diffs
+               for text in reflowed
+               do (progn
+                    (cl-incf lost (length (seq-filter
+                                           (lambda (line)
+                                             (pdf-corpus-script--body-line-p
+                                              line recurring))
+                                           (plist-get diff :lost))))
+                    (cl-incf added (length (plist-get diff :added)))
+                    (cl-incf mid (length (pdf-corpus-mid-sentence-breaks text)))
+                    (cl-incf markers (length (pdf-corpus-page-marker-lines text))))))
     (list :file file
           :pages total
           :scanned scanned
@@ -397,20 +443,26 @@ FIRST and LAST limit the range; the whole book by default."
          (elapsed (float-time (time-since start)))
          (totals (make-hash-table))
          ranked)
-    (cl-loop for page from first
-             for source in sources
-             for text in reflowed
-             for with-headings in headed
-             do (when-let* ((violations
-                             (pdf-corpus-script--sweep-violations
-                              (pdf-corpus-violations
-                               :source source
-                               :reflowed text
-                               :headed with-headings
-                               :titles (pdf-corpus-titles outline page)))))
-                  (dolist (violation violations)
-                    (cl-incf (gethash (car violation) totals 0)))
-                  (push (cons page violations) ranked)))
+    (let* ((raw (cl-loop for page from first
+                         for source in sources
+                         for text in reflowed
+                         for with-headings in headed
+                         collect (cons page
+                                       (pdf-corpus-violations
+                                        :source source
+                                        :reflowed text
+                                        :headed with-headings
+                                        :titles (pdf-corpus-titles outline page)))))
+           (recurring (pdf-corpus-script--recurring-lost
+                       (mapcar (lambda (entry)
+                                 (cdr (assq 'lost (cdr entry))))
+                               raw))))
+      (dolist (entry raw)
+        (when-let* ((violations (pdf-corpus-script--sweep-violations
+                                 (cdr entry) recurring)))
+          (dolist (violation violations)
+            (cl-incf (gethash (car violation) totals 0)))
+          (push (cons (car entry) violations) ranked))))
     (setq ranked (sort (nreverse ranked)
                        (lambda (a b) (< (length (cdr b)) (length (cdr a))))))
     (princ (format "%s: pages %d-%d rendered in %.1fs, %d of them break something\n"

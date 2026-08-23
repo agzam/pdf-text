@@ -120,6 +120,29 @@ that moved; this reports the line and its number."
     (expect (plist-get (pdf-corpus-diff '("body") "body extra") :added)
             :to-equal '("extra"))))
 
+(describe "pdf-corpus-stream footnote labels"
+  (it "gives a numeric label's digits back to the stream"
+    ;; 2005.^{1} renders as 2005.[fn:19-1]: the 1 is the page's own
+    ;; text, carried by the label, and must count as kept
+    (expect (pdf-corpus-stream "fall of 2005.[fn:19-1] The original")
+            :to-equal "fallof20051theoriginal"))
+
+  (it "reads a symbol label as nothing at all"
+    (expect (pdf-corpus-stream "of a second.[fn:18-star]")
+            :to-equal "ofasecond"))
+
+  (it "still reads an escaped literal, which is the page's own text"
+    (expect (pdf-corpus-stream "see [\u200Bfn:note] here")
+            :to-equal "seefnnotehere"))
+
+  (it "sees no change in a page rendered with its footnote converted"
+    (expect (pdf-corpus-diff
+             '("the body cites a source.^{1} and reads on"
+               "1. The note at the foot of the page.")
+             (concat "the body cites a source.[fn:7-1] and reads on\n\n"
+                     "[fn:7-1] The note at the foot of the page."))
+            :to-equal '(:lost nil :added nil))))
+
 (describe "pdf-corpus-mid-sentence-breaks"
   (it "reports a paragraph broken between two lowercase words"
     (expect (pdf-corpus-mid-sentence-breaks "the sentence runs on\nand on here")

@@ -34,4 +34,4 @@ All the critical pairs from this set of 10 rules can be reduced to the identity.
 
 The above example illustrates the execution of the Knuth-Bendix completion procedure, which is described by the following pseudo-code.
 
-Procedure 7.2.15. The procedure KnuthBendix(E, ) takes a set E of equations and a simpliﬁcation order , and generates a canonical rewrite system from E when it succeeds. It calls four procedures:
+Procedure 7.2.15. The procedure KnuthBendix(E, ) takes a set E of equations and a simpliﬁcation order , and generates a canonical rewrite system from E when it succeeds. It calls four procedures:

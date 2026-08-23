@@ -154,12 +154,15 @@ is another typeset line poppler folded into the record - a drop cap,
 a merged pair - and both the baseline vote and the per-glyph
 classification must leave it alone.")
 
-(defun pdf-text--escape-script-literals (text)
-  "TEXT with a zero-width space breaking every literal ^{ and _{ pair.
-The reflow writes org sub- and superscripts as ^{...}/_{...}, and org
-must parse only those: the same pair extracted from the page itself -
-a line of LaTeX source in a listing - stays plain text."
-  (replace-regexp-in-string "\\([_^]\\){" "\\1\u200B{" text))
+(defun pdf-text--escape-literals (text)
+  "TEXT with a zero-width space breaking every org-parseable literal.
+The reflow writes org sub- and superscripts as ^{...}/_{...} and org
+footnotes as [fn:...], and org must parse only what the reflow
+generated: the same forms extracted from the page itself - a line of
+LaTeX or org source in a listing - stay plain text."
+  (replace-regexp-in-string
+   "\\[fn:" "[\u200Bfn:"
+   (replace-regexp-in-string "\\([_^]\\){" "\\1\u200B{" text)))
 
 (defun pdf-text--glyph-baseline (glyphs)
   "The typeset baseline of GLYPHS and its body height, as (BASE . HEIGHT).
@@ -291,7 +294,7 @@ from the page are broken so org never parses them."
              (text (apply #'string (mapcar #'car glyphs)))
              (ink (cl-remove-if (lambda (g) (memq (car g) '(?\s ?\t))) glyphs)))
         (if (null dir)
-            (push (pdf-text--escape-script-literals text) out)
+            (push (pdf-text--escape-literals text) out)
           (let* ((trimmed (string-trim text))
                  (symbols (not (string-match-p "[[:alnum:]]" trimmed)))
                  (weak (and symbols
@@ -301,7 +304,7 @@ from the page are broken so org never parses them."
                                   (* pdf-text-script-symbol-offset height)))
                              ink))))
             (if (or weak (string-match-p "[{}]" trimmed) (string-empty-p trimmed))
-                (push (pdf-text--escape-script-literals text) out)
+                (push (pdf-text--escape-literals text) out)
               ;; a lone space before the run at under half a word gap
               ;; is the font switch showing, not a space the page set
               (when (and (stringp (car out))
@@ -332,13 +335,13 @@ index - which only exists here, while the per-glyph boxes still do."
          (opening (cl-position-if (lambda (g) (not (eq (car g) ?\s))) glyphs))
          (gap (and opening (cl-position ?\s glyphs :key #'car :start opening))))
     (if (null boxes)
-        (pdf-text-line-create :text (pdf-text--escape-script-literals text))
+        (pdf-text-line-create :text (pdf-text--escape-literals text))
       (let ((ref (pdf-text--glyph-baseline glyphs))
             (space (pdf-text--quantile spaces 0.5)))
         (pdf-text-line-create
          :text (if ref
                    (pdf-text--script-markup glyphs (car ref) (cdr ref) space)
-                 (pdf-text--escape-script-literals text))
+                 (pdf-text--escape-literals text))
          :x0 (apply #'min (mapcar (lambda (b) (nth 0 b)) boxes))
          :x1 (apply #'max (mapcar (lambda (b) (nth 2 b)) boxes))
          :top (apply #'min (mapcar (lambda (b) (nth 1 b)) boxes))
@@ -362,17 +365,39 @@ index - which only exists here, while the per-glyph boxes still do."
   "The plain text of LAYOUT's glyph stream, newlines included."
   (apply #'string (delq nil (mapcar #'car layout))))
 
+(defun pdf-text--strip-unprinted (text)
+  "TEXT without the characters the page never prints, spaces normalized.
+A soft hyphen marks where a word may break, and prints only where the
+break happened - the end of the line - so everywhere else it goes,
+the head of a continuation line included (some typesetters leave the
+discretionary marker there).  The line-final one stays: the wrap join
+reads it, and whatever survives to the rendered page becomes a plain
+hyphen.  C0 control characters are extraction garbage - a BELL inside
+a heading, a unit separator inside a formula - and go wherever they
+sit; the tab stays, preformatted text indents with it.  The typographic
+space family - en, em, figure, thin, no-break and their kin - prints
+as the same blank a space does, and Emacs highlights the characters
+themselves, so they all read as plain spaces."
+  (replace-regexp-in-string
+   "[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]" " "
+   (replace-regexp-in-string
+    "\u00AD+\\(.\\)" "\\1"
+    (replace-regexp-in-string "[\x00-\x08\x0B-\x1F\x7F]+" "" text))))
+
 (defun pdf-text--page-lines (text &optional layout)
   "Line records for one page, from LAYOUT when it exists, else from TEXT.
 Taking the text from the same glyph stream as its geometry is what
 keeps the two aligned; the fallback path reflows on character
 heuristics alone."
-  (if layout
-      (mapcar #'pdf-text--glyph-line (pdf-text--layout-lines layout))
-    (mapcar (lambda (line)
-              (pdf-text-line-create
-               :text (pdf-text--escape-script-literals line)))
-            (split-string text "\n"))))
+  (let ((lines (if layout
+                   (mapcar #'pdf-text--glyph-line (pdf-text--layout-lines layout))
+                 (mapcar (lambda (line)
+                           (pdf-text-line-create
+                            :text (pdf-text--escape-literals line)))
+                         (split-string text "\n")))))
+    (dolist (line lines lines)
+      (setf (pdf-text-line-text line)
+            (pdf-text--strip-unprinted (pdf-text-line-text line))))))
 
 (defun pdf-text--profile (pages)
   "Modal body geometry of PAGES, each a list of `pdf-text-line'.
@@ -1014,6 +1039,58 @@ names no line of the page, so it stays out."
                           head)))
                 headings)))
 
+;;; Footnote markers
+
+(defvar pdf-text-footnote-size 0.9
+  "Glyph height, in body heights, under which a block can be a footnote.
+Footnote blocks are set at 0.7-0.8 of the body size; body text never
+dips under 1, so the gap between the two is real.")
+
+(defconst pdf-text-footnote-symbols
+  '((?* . "star") (?† . "dagger") (?‡ . "ddagger") (?§ . "sect") (?¶ . "par"))
+  "Footnote marker symbols and the org label names they take.
+An org footnote label is word characters, hyphens and underscores
+only, so the symbol itself cannot serve.")
+
+(defun pdf-text--footnote-open (text)
+  "The footnote marker TEXT opens with, as (TOKEN . BODY-START), or nil.
+A footnote block leads with its own marker: a symbol or a small
+number, flat (`*A word', `1. Of course') or superscripted the way the
+body writes it (`^{*}').  A flat number needs its closing period or
+parenthesis - a bare one opens a table-of-contents entry or a merged
+folio line as often as a footnote - and every form must lead into
+text, not stand alone.  BODY-START is where the note's own words
+begin."
+  (let ((case-fold-search nil))
+    (cond
+     ((string-match "\\`\\^{\\([*†‡§¶]\\|[0-9]\\{1,2\\}\\)}[ \t]*\\([^ \t\n]\\)"
+                    text)
+      (cons (match-string 1 text) (match-beginning 2)))
+     ((string-match "\\`\\([*†‡§¶]\\)[ \t]*\\([[:alpha:]“”\"‘’']\\)" text)
+      (cons (match-string 1 text) (match-beginning 2)))
+     ((string-match "\\`\\([0-9]\\{1,2\\}\\)[.)][ \t]+\\([^ \t\n]\\)" text)
+      (cons (match-string 1 text) (match-beginning 2))))))
+
+(defun pdf-text--footnote-label (page token)
+  "The org label for the footnote TOKEN marks on PAGE.
+A numeric marker keeps its numeral, because the digit is the page's
+own text and the label is what gives it back to the reader; a symbol
+takes its name from `pdf-text-footnote-symbols'.  Pages number their
+markers independently, so the label carries the page to stay unique
+across the book."
+  (format "%d-%s" page
+          (or (cdr (assq (aref token 0) pdf-text-footnote-symbols)) token)))
+
+(defun pdf-text--footnote-marker-re (token)
+  "Regexp matching TOKEN as a rendered footnote reference in body text.
+The body writes the marker as generated superscript markup - literal
+^{ pairs off the page carry a zero-width space and can never match.
+A numeric marker must not hang off a digit: 10^{3} is an exponent,
+not a third footnote.  Group 1 holds what precedes the marker, so a
+replacement can keep it."
+  (concat "\\(" (and (string-match-p "\\`[0-9]" token) "[^0-9]") "\\)"
+          (regexp-quote (concat "^{" token "}"))))
+
 ;;; Cleanups over line records
 
 (defun pdf-text--normalize-line (line)
@@ -1033,6 +1110,26 @@ the plain text stream."
 (defvar pdf-text-recurring-min-count 3
   "Occurrences in the margin band before a line counts as a running head.")
 
+(defvar pdf-text-margin-detachment 1.8
+  "Leadings between a margin line and the body before it stands apart.
+Dense layouts set the running head under two leadings off the body -
+the Spanish grammar runs at 1.9 - while a footnote block's own lines
+sit a single leading apart, which is what keeps the block out however
+low this goes.")
+
+(defvar pdf-text-heading-height 1.15
+  "Glyph height, in body heights, at which a line reads as a heading.")
+
+(defun pdf-text--folio-merged-p (text)
+  "Whether TEXT reads as a running head with its folio set into the line.
+Poppler joins the page number to the head when the gap between them
+is small, and the result opens or closes on a bare number the words
+do not own.  Such a line runs as wide as its title and the narrowness
+test never sees it."
+  (let ((trimmed (string-trim text)))
+    (or (string-match-p "\\`[0-9]\\{1,4\\}[ \t]" trimmed)
+        (string-match-p "[ \t][0-9]\\{1,4\\}\\'" trimmed))))
+
 (defun pdf-text--neighbour-gap (vec index step)
   "Baseline distance from line INDEX of VEC to its neighbour along STEP.
 Lines sharing a baseline are one visual line that poppler split at a
@@ -1051,14 +1148,19 @@ them.  Nil at the end of the page."
 
 (defun pdf-text--margin-candidates (lines profile)
   "LINES of one page that sit apart in the top or bottom margin band.
-Narrow, inside the band, and cut off from the body by more than two of
-PROFILE's leadings - a footnote block fails the last two tests, which
-is what keeps it out of the running-head count."
+An alist of (LINE . NARROW-P).  A candidate sits inside the band, cut
+off from the body by `pdf-text-margin-detachment' of PROFILE's
+leadings, and is either narrow or a folio-merged head running at full
+measure - a footnote block fails the band and detachment tests, which
+is what keeps it out of the running-head count.  NARROW-P carries
+which width test passed: the narrow forms are what the
+drop-anywhere recurrence may trust (a two-up scan embeds them
+mid-text), the folio-merged ones only ever go from the band itself."
   (let ((leading (plist-get profile :leading))
         (left (plist-get profile :left))
         (right (plist-get profile :right)))
     (if (not (and leading left right (cl-some #'pdf-text-line-base lines)))
-        (pdf-text--edge-lines lines)
+        (mapcar (lambda (line) (cons line t)) (pdf-text--edge-lines lines))
       (let ((vec (vconcat lines))
             (width (- right left))
             candidates)
@@ -1066,15 +1168,18 @@ is what keeps it out of the running-head count."
           (let* ((line (aref vec i))
                  (base (pdf-text-line-base line))
                  (before (pdf-text--neighbour-gap vec i -1))
-                 (after (pdf-text--neighbour-gap vec i 1)))
+                 (after (pdf-text--neighbour-gap vec i 1))
+                 (gap (* pdf-text-margin-detachment leading))
+                 (narrow (< (- (pdf-text-line-x1 line) (pdf-text-line-x0 line))
+                            (* 0.6 width))))
             (when (and base
                        (or (< base pdf-text-margin-band)
                            (< (- 1.0 pdf-text-margin-band) base))
-                       (< (- (pdf-text-line-x1 line) (pdf-text-line-x0 line))
-                          (* 0.6 width))
-                       (or (null before) (< (* 2 leading) before))
-                       (or (null after) (< (* 2 leading) after)))
-              (push line candidates))))
+                       (or narrow
+                           (pdf-text--folio-merged-p (pdf-text-line-text line)))
+                       (or (null before) (< gap before))
+                       (or (null after) (< gap after)))
+              (push (cons line narrow) candidates))))
         (nreverse candidates)))))
 
 (defun pdf-text--page-marker-p (text)
@@ -1100,45 +1205,94 @@ puts on it.  A book that runs its section title in the page head
 makes that title a recurring form, and the section's own heading line
 is then dropped along with the head - so a line down in the body that
 the outline names is spared.  The head itself sits in the margin band
-and goes as it should."
+and goes as it should.
+
+A footnote is spared the same way: a line in the bottom band, set
+smaller than the body, opening with a footnote marker and leading
+into words, is the page's own text however often its digit-normalised
+form recurs and whatever baseline the folio beside it holds.  And a
+line the outline names that is set over `pdf-text-heading-height'
+body heights is spared even inside the band: a chapter title opening
+its page at the top is display type, which no book uses for a running
+head, and its digit-normalised form matches the heads that carry it.
+
+Only the narrow candidates feed the drop-anywhere recurrence - they
+are what a two-up scan embeds mid-text.  A folio-merged head cannot
+lean on recurrence at all: a book that titles its heads by section
+rotates them before any form recurs.  What recurs is the style - a
+book showing `pdf-text-recurring-min-count' folio-merged candidates
+anywhere runs its heads that way, and then every folio-merged
+candidate goes from the band, display type excepted."
   (let ((counts (make-hash-table :test #'equal))
+        (folio-merged 0)
         (tolerance (* 0.5 (or (plist-get (car profiles) :leading) 0.01)))
         (candidates (cl-loop for lines in pages
                              for profile in profiles
                              collect (pdf-text--margin-candidates lines profile)))
         recurring)
-    (dolist (lines candidates)
-      (dolist (line lines)
-        (when (and line (not (string-blank-p (pdf-text-line-text line))))
-          (cl-incf (gethash (pdf-text--normalize-line (pdf-text-line-text line))
-                            counts 0)))))
+    (dolist (page-candidates candidates)
+      (dolist (candidate page-candidates)
+        (let ((line (car candidate)))
+          (when (and line (not (string-blank-p (pdf-text-line-text line))))
+            (when (pdf-text--folio-merged-p (pdf-text-line-text line))
+              (cl-incf folio-merged))
+            (when (cdr candidate)
+              (cl-incf (gethash (pdf-text--normalize-line (pdf-text-line-text line))
+                                counts 0)))))))
     (maphash (lambda (form n)
                (when (<= pdf-text-recurring-min-count n) (push form recurring)))
              counts)
     (cl-loop
      for lines in pages
      for marginal in candidates
+     for profile in profiles
      for heads = headings then (cdr heads)
      collect
      (let ((folios (delq nil
-                         (mapcar (lambda (line)
-                                   (and line
-                                        (pdf-text--page-marker-p (pdf-text-line-text line))
-                                        (pdf-text-line-base line)))
+                         (mapcar (lambda (candidate)
+                                   (let ((line (car candidate)))
+                                     (and line
+                                          (pdf-text--page-marker-p (pdf-text-line-text line))
+                                          (pdf-text-line-base line))))
                                  marginal)))
+           (body (plist-get profile :height))
            (titles (mapcar #'car (pdf-text--heading-alist (car heads)))))
        (cl-remove-if
         (lambda (line)
           (let* ((text (pdf-text-line-text line))
                  (base (pdf-text-line-base line))
-                 (in-margin (memq line marginal))
-                 (named (and (not in-margin)
-                             (member (pdf-text--normalize-title text) titles))))
+                 (height (pdf-text-line-height line))
+                 (in-margin (assq line marginal))
+                 (tall (and body height
+                            (< (* pdf-text-heading-height body) height)))
+                 ;; the title may carry its chapter number ("10 GETTING
+                 ;; THE LEAD OUT"), which the outline entry does not
+                 (titled (or (member (pdf-text--normalize-title text) titles)
+                             (member (pdf-text--normalize-title
+                                      (string-trim-left text "[0-9]+[ \t.]+"))
+                                     titles)))
+                 ;; an in-band named line is the chapter's own opener
+                 ;; when it is set in display type or stands alone in
+                 ;; the book; the recurring copies are the running
+                 ;; heads that echo it (DSB), and those still go
+                 (named (and titled
+                             (or (not in-margin)
+                                 tall
+                                 (not (member (pdf-text--normalize-line text)
+                                              recurring)))))
+                 (footnote (and base height body
+                                (< (- 1.0 pdf-text-margin-band) base)
+                                (< height (* pdf-text-footnote-size body))
+                                (pdf-text--footnote-open text))))
             (and (not (string-blank-p text))
                  (not named)
+                 (not footnote)
                  (or (member (pdf-text--normalize-line text) recurring)
                      (and in-margin
                           (or (pdf-text--page-marker-p text)
+                              (and (<= pdf-text-recurring-min-count folio-merged)
+                                   (not tall)
+                                   (pdf-text--folio-merged-p text))
                               (and base
                                    (cl-some (lambda (folio)
                                               (< (abs (- base folio)) tolerance))
@@ -1483,10 +1637,13 @@ geometry - PROFILE's body measures, PAGE-WIDTH - decides the rest."
         'fixed))
      ((pdf-text--preformatted-p (pdf-text-line-text line)) 'fixed)
      ((pdf-text--drop-cap-p prev profile) nil)
+     ;; a change of glyph size outranks the hyphen join: a body line
+     ;; ending on a wrap hyphen above a smaller-type footnote block is
+     ;; two blocks, not a continuation (DSB page 19)
+     ((pdf-text--size-break-p line prev profile) 'size)
      ((pdf-text--wrap-hyphen-p (pdf-text-line-text prev)) nil)
      ((pdf-text--item-break-p line prev block profile page-width) 'item)
      ((pdf-text--gap-break-p line prev profile) 'gap)
-     ((pdf-text--size-break-p line prev profile) 'size)
      ((pdf-text--indent-break-p line block profile) 'indent)
      ((pdf-text--dedent-break-p line block profile) 'dedent))))
 
@@ -1738,9 +1895,6 @@ tight list - stay together."
      (t (< (* pdf-text-blank-factor leading)
            (- (pdf-text-line-base first) (pdf-text-line-base last)))))))
 
-(defvar pdf-text-heading-height 1.15
-  "Glyph height, in body heights, at which a line reads as a heading.")
-
 (defvar pdf-text-heading-max-words 14
   "Words a block may carry and still read as a heading rather than prose.")
 
@@ -1792,19 +1946,75 @@ sets a heading; VOCABULARY joins a title split across lines."
                     (push (list block (cdr (pop pending))) assigned)))
       assigned)))
 
-(defun pdf-text--render-blocks (blocks profile vocabulary &optional headings)
+(defun pdf-text--assign-footnotes (blocks profile vocabulary page)
+  "The footnotes among BLOCKS, as (DEFINITIONS . REFERENCES), or nil.
+DEFINITIONS is an alist of (BLOCK LABEL . TEXT): the trailing blocks
+of the page that define a footnote, with the label PAGE gives them
+and their text cut past the marker.  REFERENCES pairs each marker's
+regexp with its label, for the body blocks that cite it.  A footnote
+takes both halves: a block at the page's foot, set under
+`pdf-text-footnote-size' of PROFILE's body height, opening with a
+marker the body above it cites as a superscript.  A block missing
+either half renders as the ordinary text it may well be.  VOCABULARY
+joins the texts.  Two footnotes sharing one marker on one page would
+share a label, and org would read them as one; books rotate their
+symbols, so the collision stays theoretical."
+  (when-let* ((body (plist-get profile :height)))
+    (let* ((vec (vconcat blocks))
+           (i (1- (length vec)))
+           run)
+      ;; the page's foot: the trailing run of smaller-type prose
+      (while (and (<= 0 i)
+                  (let ((block (aref vec i)))
+                    (or (eq 'blank (pdf-text-block-kind block))
+                        (and (memq (pdf-text-block-kind block) '(para item))
+                             (when-let* ((height (pdf-text--block-height block)))
+                               (< height (* pdf-text-footnote-size body)))))))
+        (unless (eq 'blank (pdf-text-block-kind (aref vec i)))
+          (push (aref vec i) run))
+        (cl-decf i))
+      (when run
+        (let ((texts (cl-loop for j from 0 to i
+                              for block = (aref vec j)
+                              when (memq (pdf-text-block-kind block) '(para item))
+                              collect (pdf-text--join-block block vocabulary)))
+              defs refs)
+          (dolist (block run)
+            (when-let* ((text (pdf-text--join-block block vocabulary))
+                        (open (pdf-text--footnote-open text))
+                        (re (pdf-text--footnote-marker-re (car open)))
+                        ((cl-some (lambda (above) (string-match-p re above))
+                                  texts)))
+              (let ((label (pdf-text--footnote-label page (car open))))
+                (push (cons block (cons label (substring text (cdr open)))) defs)
+                (push (cons re label) refs))))
+          (and defs (cons (nreverse defs) (nreverse refs))))))))
+
+(defun pdf-text--cite-footnotes (text notes)
+  "TEXT with each marker superscript NOTES names replaced by its reference.
+NOTES is `pdf-text--assign-footnotes' output.  The generated ^{...}
+form becomes [fn:LABEL], attached where the page attached its
+marker."
+  (dolist (ref (cdr notes) text)
+    (setq text (replace-regexp-in-string
+                (car ref) (concat "\\1[fn:" (cdr ref) "]") text t))))
+
+(defun pdf-text--render-blocks (blocks profile vocabulary &optional headings page)
   "BLOCKS as the page's reflowed text, measured by PROFILE, joined by VOCABULARY.
 HEADINGS are the org heading lines the outline puts on this page.
 `pdf-text--assign-headings' says which block each one belongs at: a
 section starts where the page starts it, not where the page it sits
-on does."
+on does.  PAGE is the number this page has in the book, which the
+footnote labels carry."
   (let ((placed (pdf-text--assign-headings blocks profile vocabulary headings))
         (inset (pdf-text--inset-blocks blocks profile))
+        (notes (pdf-text--assign-footnotes blocks profile vocabulary (or page 1)))
         out previous stack listing-left)
     (dolist (block blocks)
       (let* ((kind (pdf-text-block-kind block))
              (placement (cdr (assq block placed)))
              (head (car placement))
+             (note (cdr (assq block (car notes))))
              indent)
         (unless (eq 'item kind) (setq stack nil))
         (when (eq 'item kind)
@@ -1821,21 +2031,33 @@ on does."
             (push head out)
             (push "" out))
           (push (or (and (cadr placement) head)
+                    ;; a footnote definition renders at column zero -
+                    ;; org reads [fn:LABEL] as a definition only there -
+                    ;; with the page's own marker cut, the label now
+                    ;; carrying what it carried
+                    (and note (concat "[fn:" (car note) "] " (cdr note)))
                     (pcase kind
                       ((or 'mono 'math)
                        (pdf-text--render-mono block profile listing-left))
                       ('fixed (mapconcat (lambda (line)
                                            (string-trim-right (pdf-text-line-text line)))
                                          (pdf-text-block-lines block) "\n"))
-                      ('item (pdf-text--render-item block vocabulary indent))
-                      (_ (let ((text (pdf-text--collapse-doubled
-                                      (pdf-text--join-block block vocabulary))))
+                      ('item (pdf-text--cite-footnotes
+                              (pdf-text--render-item block vocabulary indent)
+                              notes))
+                      (_ (let ((text (pdf-text--cite-footnotes
+                                      (pdf-text--collapse-doubled
+                                       (pdf-text--join-block block vocabulary))
+                                      notes)))
                            (if (memq block inset)
                                (concat "  " text)
                              text)))))
                 out)
           (setq previous block))))
-    (string-join (nreverse out) "\n")))
+    ;; a soft hyphen still standing marks a break that did happen - a
+    ;; kept compound wrap, a paragraph ending mid-word at the page's
+    ;; last line - so the page printed a hyphen there
+    (replace-regexp-in-string "\u00AD" "-" (string-join (nreverse out) "\n"))))
 
 ;;; Org structure
 
@@ -1863,7 +2085,7 @@ are the structure the folding is for, and stay as they are."
            (split-string text "\n"))
    "\n"))
 
-(defun pdf-text-render-lines (pages &optional headings)
+(defun pdf-text-render-lines (pages &optional headings first)
   "PAGES of `pdf-text-line' records reflowed into readable text.
 One string per page.  Body geometry, running heads and the
 hyphenation vocabulary are all read across the whole of PAGES, so a
@@ -1874,7 +2096,10 @@ HEADINGS carries one entry per page of PAGES - the org heading lines
 the outline puts on it, from `pdf-text-page-headings'.  A page gets
 its headings at the lines they name; only the caller knows which page
 of the book each entry of PAGES is, which is why they arrive already
-lined up."
+lined up.  FIRST is the book's number for the first of PAGES, 1 when
+nil, for the same reason: the footnote labels carry the page number,
+and a corpus window rendering pages 15-21 must label them as the book
+does."
   (let* ((page-lines (pdf-text-reading-order pages))
          (profile (pdf-text--profile page-lines))
          (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
@@ -1883,10 +2108,12 @@ lined up."
          (vocabulary (pdf-text--hyphenated-words page-lines)))
     (cl-loop for lines in page-lines
              for page-profile in profiles
+             for number from (or first 1)
              for heads = headings then (cdr heads)
              collect (pdf-text--escape-org-lines
                       (pdf-text--render-blocks (pdf-text--blocks lines page-profile)
-                                               page-profile vocabulary (car heads))
+                                               page-profile vocabulary (car heads)
+                                               number)
                       (car heads)))))
 
 (defun pdf-text-render-pages (pages &optional layouts headings)
@@ -2091,7 +2318,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 6
+(defconst pdf-text-render-version 9
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

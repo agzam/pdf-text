@@ -218,7 +218,44 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
   (it "falls back to the plain text lines without a layout"
     (let ((lines (pdf-text--page-lines "one\ntwo")))
       (expect (mapcar #'pdf-text-line-text lines) :to-equal '("one" "two"))
-      (expect (pdf-text-line-x0 (car lines)) :to-be nil))))
+      (expect (pdf-text-line-x0 (car lines)) :to-be nil)))
+
+  (it "strips what the page never prints, on both paths"
+    ;; the Spanish grammar leaves the discretionary hyphen at the head
+    ;; of the continuation line and a BELL inside the heading's text
+    (let ((lines (pdf-text--page-lines
+                  "1.2.9\aGender\n\u00ADapplied to hu\u00ADmans\ninforma\u00AD")))
+      (expect (mapcar #'pdf-text-line-text lines)
+              :to-equal '("1.2.9Gender" "applied to humans" "informa\u00AD")))
+    (expect (pdf-text-line-text
+             (car (pdf-text--page-lines
+                   "ignored"
+                   (pdf-text-tests--glyphs "l\u001F11 rule" nil nil 0.01))))
+            :to-equal "l11 rule")))
+
+(describe "pdf-text--strip-unprinted"
+  (it "removes a soft hyphen anywhere but the line's end"
+    (expect (pdf-text--strip-unprinted "\u00ADapplied to hu\u00ADmans")
+            :to-equal "applied to humans"))
+
+  (it "keeps the line-final soft hyphen the wrap join reads"
+    (expect (pdf-text--strip-unprinted "informa\u00AD")
+            :to-equal "informa\u00AD"))
+
+  (it "removes control garbage, tab excepted"
+    (expect (pdf-text--strip-unprinted "a\ab\u001Fc\td")
+            :to-equal "abc\td"))
+
+  (it "reads every typographic space as the plain space it prints as"
+    ;; en spaces in a heading, em-space runs padding a table row: the
+    ;; page shows blanks, Emacs highlights the characters
+    (expect (pdf-text--strip-unprinted
+             "1.2.9\u2002Gender\u00A0of\u2003nouns\u2009here\u202Fnow")
+            :to-equal "1.2.9 Gender of nouns here now"))
+
+  (it "leaves the zero-width space, which the escapes own"
+    (expect (pdf-text--strip-unprinted "x_\u200B{i}")
+            :to-equal "x_\u200B{i}")))
 
 (describe "pdf-text--profile"
   (it "reports the modal body geometry, not the extremes"
@@ -803,6 +840,30 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
   (it "rejoins a drop cap without a space"
     (expect (pdf-text--join-lines "T" "his book") :to-equal "This book")))
 
+(describe "pdf-text soft hyphens the page printed"
+  (it "renders a kept soft-hyphen wrap as a plain hyphen"
+    ;; the keep branch concatenates the wrap char as the page wrote
+    ;; it; a soft hyphen would reach the reader as the odd glyph the
+    ;; Spanish grammar report showed, so the rendered page trades it
+    (expect (pdf-text-tests--render
+             '(("the range spans pages 3\u00AD")
+               ("10 and no further, it says")
+               ("body line three ends here" :x1 0.40)))
+            :to-equal "the range spans pages 3-10 and no further, it says body line three ends here"))
+
+  (it "renders a paragraph ending mid-word at the page break with its hyphen"
+    (expect (pdf-text-tests--render
+             '(("body line one filling the column right here")
+               ("and the page ends on a broken prob\u00AD")))
+            :to-equal "body line one filling the column right here and the page ends on a broken prob-"))
+
+  (it "reads through a discretionary hyphen the page never printed"
+    ;; the report: a heading wrapping over "are / applied" reached the
+    ;; reader as "are ­applied" - the text layer opens the continuation
+    ;; line with the soft hyphen
+    (expect (pdf-text-render-pages '("when they are\n\u00ADapplied to humans"))
+            :to-equal '("when they are applied to humans"))))
+
 (describe "pdf-text-extra-vocabulary"
   (it "keeps a compound the pages at hand never spell out"
     ;; a window of a book is not the book: the compound may be
@@ -916,6 +977,123 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
                              pages)))
       (expect (length (car (pdf-text-remove-marginal-lines pages profiles)))
               :to-equal 6)))
+
+  (it "strips a running head standing under two leadings off a dense page"
+    ;; the Spanish grammar sets "4 Gender of nouns" 1.9 leadings above
+    ;; the body; the old two-leading detachment never counted it
+    (let* ((pages (mapcar
+                   (lambda (n)
+                     (pdf-text-tests--page
+                      `((,(format "%d Gender of nouns" n) :x0 0.10 :x1 0.25
+                         :base 0.062)
+                        ("body line one filling the column" :base 0.10)
+                        ("body line two filling the column")
+                        ("body line three ends here" :x1 0.40))))
+                   '(4 6 8)))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                      (pdf-text-remove-marginal-lines pages profiles))
+              :to-equal (make-list 3 '("body line one filling the column"
+                                       "body line two filling the column"
+                                       "body line three ends here")))))
+
+  (it "strips a full-measure head with its folio merged in, from the band only"
+    ;; the even pages run the section title wide with the page number
+    ;; joined on; a table of contents carries the same words tightly
+    ;; mid-page and must keep them
+    (let* ((head "1.3 Group B: Gender of nouns referring to animals and things")
+           (pages (append
+                   (mapcar
+                    (lambda (n)
+                      (pdf-text-tests--page
+                       `((,(format "%s %d" head n) :x0 0.10 :x1 0.89 :base 0.062)
+                         ("body line one filling the column" :base 0.10)
+                         ("body line two filling the column")
+                         ("body line three ends here" :x1 0.40))))
+                    '(9 11 13))
+                   (list (pdf-text-tests--page
+                          `(("Contents" :x0 0.10 :x1 0.25 :base 0.20)
+                            (,(format "%s %d" head 7) :x0 0.10 :x1 0.89 :gap 3)
+                            ("1.4 The next section title here 12" :x0 0.10 :x1 0.60))))))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages))
+           (stripped (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                             (pdf-text-remove-marginal-lines pages profiles))))
+      (expect (seq-take stripped 3)
+              :to-equal (make-list 3 '("body line one filling the column"
+                                       "body line two filling the column"
+                                       "body line three ends here")))
+      (expect (nth 3 stripped)
+              :to-equal (list "Contents"
+                              (format "%s %d" head 7)
+                              "1.4 The next section title here 12"))))
+
+  (it "spares the chapter title the band holds in display type"
+    ;; the opener's title shares its digit-normalised form with every
+    ;; head that carries it; display type is what tells them apart
+    (let* ((title-page (pdf-text-tests--page
+                        '(("1 Gender of nouns" :x0 0.10 :x1 0.45 :base 0.10
+                           :height 0.045)
+                          ("body line one filling the column" :base 0.20)
+                          ("body line two filling the column")
+                          ("body line three ends here" :x1 0.40))))
+           (pages (cons title-page
+                        (mapcar
+                         (lambda (n)
+                           (pdf-text-tests--page
+                            `((,(format "%d Gender of nouns" n) :x0 0.10 :x1 0.25
+                               :base 0.062)
+                              ("body line one filling the column" :base 0.10)
+                              ("body line two filling the column")
+                              ("body line three ends here" :x1 0.40))))
+                         '(4 6 8))))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages))
+           (stripped (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                             (pdf-text-remove-marginal-lines
+                              pages profiles
+                              '(("* 1 Gender of nouns") nil nil nil)))))
+      (expect (car stripped)
+              :to-equal '("1 Gender of nouns"
+                          "body line one filling the column"
+                          "body line two filling the column"
+                          "body line three ends here"))
+      (expect (cdr stripped)
+              :to-equal (make-list 3 '("body line one filling the column"
+                                       "body line two filling the column"
+                                       "body line three ends here")))))
+
+  (it "spares a short footnote however its form recurs or its folio sits"
+    ;; three pages of near-identical one-line footnotes: digit
+    ;; normalisation makes them one recurring form, and each shares its
+    ;; baseline with the folio beside it - both removal paths must yield
+    ;; to a bottom-band line set small and opening on a marker
+    (let* ((pages (mapcar
+                   (lambda (n)
+                     (pdf-text-tests--page
+                      `(("body line one filling the column" :base 0.20)
+                        ("body line two filling the column")
+                        ("body line three ends here" :x1 0.40)
+                        (,(format "%d. Ibid., page %d." n n) :base 0.90
+                         :height 0.010 :x0 0.10 :x1 0.30)
+                        (,(number-to-string (* 11 n)) :base 0.90
+                         :x0 0.85 :x1 0.87 :height 0.010))))
+                   '(1 2 3)))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                      (pdf-text-remove-marginal-lines pages profiles))
+              :to-equal
+              (cl-loop for n from 1 to 3
+                       collect (list "body line one filling the column"
+                                     "body line two filling the column"
+                                     "body line three ends here"
+                                     (format "%d. Ibid., page %d." n n))))))
 
   (it "spares the heading line a book also runs in its page head"
     ;; the head repeats the section's title on every page of it, which
@@ -1146,7 +1324,7 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
 
 (describe "pdf-text script rendering"
   (it "breaks literal pairs and only those"
-    (expect (pdf-text--escape-script-literals "a^{b} c_{d} keeps x_1 and y^2")
+    (expect (pdf-text--escape-literals "a^{b} c_{d} keeps x_1 and y^2")
             :to-equal "a^\u200B{b} c_\u200B{d} keeps x_1 and y^2"))
 
   (it "displays generated scripts and nothing literal"
@@ -1155,7 +1333,7 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
         (pdf-text-mode)
         (insert "back to 10^{-43} seconds\n"
                 "literal x_1 stays\n"
-                (pdf-text--escape-script-literals "literal x_{i} stays\n")))
+                (pdf-text--escape-literals "literal x_{i} stays\n")))
       (font-lock-ensure)
       (expect org-use-sub-superscripts :to-equal '{})
       ;; buffer-local: a user config disabling script display for its
@@ -1172,6 +1350,195 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
       (goto-char (point-min))
       (search-forward "{i}")
       (expect (get-text-property (match-beginning 0) 'display) :to-be nil))))
+
+(describe "pdf-text--footnote-open"
+  (it "reads a flat symbol marker leading into words"
+    (expect (car (pdf-text--footnote-open "*A word on scientific notation"))
+            :to-equal "*"))
+
+  (it "reads a flat number closed by its period or parenthesis"
+    (expect (car (pdf-text--footnote-open "1. Of course, each author"))
+            :to-equal "1")
+    (expect (car (pdf-text--footnote-open "12) De Moivre gave the curve"))
+            :to-equal "12"))
+
+  (it "reads the superscripted form the body writes"
+    (expect (pdf-text--footnote-open "^{*}A word on notation")
+            :to-equal '("*" . 4)))
+
+  (it "tells the note's own words from the marker"
+    (expect (cdr (pdf-text--footnote-open "1. Of course")) :to-equal 3)
+    (expect (cdr (pdf-text--footnote-open "*A word")) :to-equal 1))
+
+  (it "does not read a bare number: a TOC entry or a merged folio line"
+    (expect (pdf-text--footnote-open "3 Learning Is Creating") :to-be nil)
+    (expect (pdf-text--footnote-open "18 THE BIG BANG") :to-be nil))
+
+  (it "does not read a rule of asterisks or a marker standing alone"
+    (expect (pdf-text--footnote-open "*** DRAFT ***") :to-be nil)
+    (expect (pdf-text--footnote-open "*") :to-be nil)))
+
+(describe "pdf-text--footnote-marker-re"
+  (it "matches the marker's superscript, holding what precedes it"
+    (expect "fall of 2005.^{1} The original"
+            :to-match (pdf-text--footnote-marker-re "1")))
+
+  (it "does not read an exponent as a numeric marker"
+    (expect (string-match-p (pdf-text--footnote-marker-re "3")
+                            "powers run up to 10^{3} here")
+            :to-be nil))
+
+  (it "matches a symbol marker off any base"
+    (expect "of a second.^{*}"
+            :to-match (pdf-text--footnote-marker-re "*"))))
+
+(describe "pdf-text footnotes"
+  (it "renders a symbol marker and its block as an org footnote"
+    (expect (pdf-text-tests--render
+             '(("body line one, closing a sentence on a marker.^{*} then"
+                :height 0.015)
+               ("body line two filling the column continues the paragraph")
+               ("body line three ends here" :x1 0.40)
+               ("*A word on notation: the note itself, set smaller" :gap 3
+                :height 0.010)
+               ("and running one more line" :height 0.010 :x1 0.40)))
+            :to-equal
+            (concat "body line one, closing a sentence on a marker.[fn:1-star]"
+                    " then body line two filling the column continues the"
+                    " paragraph body line three ends here"
+                    "\n\n"
+                    "[fn:1-star] A word on notation: the note itself,"
+                    " set smaller and running one more line")))
+
+  (it "renders a numbered marker, the label keeping the page's numeral"
+    (expect (pdf-text-tests--render
+             '(("the class began in the fall of 2005.^{1} It went on and on"
+                :height 0.015)
+               ("body line two filling the column right along here")
+               ("body line three ends here" :x1 0.40)
+               ("1. Of course, each author did most of the work." :gap 3
+                :height 0.010 :x1 0.60)))
+            :to-equal
+            (concat "the class began in the fall of 2005.[fn:1-1] It went on"
+                    " and on body line two filling the column right along here"
+                    " body line three ends here"
+                    "\n\n"
+                    "[fn:1-1] Of course, each author did most of the work.")))
+
+  (it "does not pair an exponent with a look-alike block"
+    (let ((render (pdf-text-tests--render
+                   '(("the powers of ten run up to 10^{3} and beyond it"
+                      :height 0.015)
+                     ("body line two filling the column right along here")
+                     ("body line three ends here" :x1 0.40)
+                     ("3. A note that nothing in the body cites." :gap 3
+                      :height 0.010 :x1 0.60)))))
+      (expect render :to-match "10\\^{3}")
+      (expect render :not :to-match (rx "[fn:"))))
+
+  (it "leaves a marker without an answering block as the superscript it was"
+    (expect (pdf-text-tests--render
+             '(("a sentence closing on a dangling marker.^{*} and more text"
+                :height 0.015)
+               ("body line two filling the column right along here")
+               ("body line three ends here" :x1 0.40)))
+            :to-match "marker\\.\\^{\\*}"))
+
+  (it "leaves a small trailing block the body never cites as text"
+    (let ((render (pdf-text-tests--render
+                   '(("body line one filling the column with plain prose"
+                      :height 0.015)
+                     ("body line two filling the column right along here")
+                     ("body line three ends here" :x1 0.40)
+                     ("*A note nothing cites, set small at the foot" :gap 3
+                      :height 0.010 :x1 0.60)))))
+      (expect render :not :to-match (rx "[fn:"))
+      (expect render :to-match "\\*A note nothing cites")))
+
+  (it "does not read a body-size block as a footnote"
+    (let ((render (pdf-text-tests--render
+                   '(("a sentence closing on a marker of its own.^{*} yes it"
+                      :height 0.015)
+                     ("body line two filling the column right along here")
+                     ("body line three ends here" :x1 0.40)
+                     ("* A dinkus or a bullet at body size stays put" :gap 3)))))
+      (expect render :not :to-match (rx "[fn:"))))
+
+  (it "breaks a smaller-type block off a body line ending on a wrap hyphen"
+    ;; the size break must outrank the hyphen join, or the block is
+    ;; swallowed before the footnote pass can see it (DSB page 19)
+    (expect (pdf-text-tests--render
+             '(("body text citing a source in passing.^{1} More prose here"
+                :height 0.015)
+               ("body line two of full measure that ends on a hyphen fol-")
+               ("1. The note the hyphenated line above cites." :gap 3
+                :height 0.010 :x1 0.60)))
+            :to-equal
+            (concat "body text citing a source in passing.[fn:1-1] More prose"
+                    " here body line two of full measure that ends on a hyphen"
+                    " fol-"
+                    "\n\n"
+                    "[fn:1-1] The note the hyphenated line above cites.")))
+
+  (it "converts several footnotes, each to its own label"
+    (let ((render (pdf-text-tests--render
+                   '(("first marker in the body of this very page.^{*} and a"
+                      :height 0.015)
+                     ("second right after it before the line closes.^{†} More")
+                     ("body line three ends here" :x1 0.40)
+                     ("*The first note, set small at the foot of the page"
+                      :gap 3 :height 0.010 :x1 0.60)
+                     ("†The second note, set just as small below it"
+                      :gap 2 :height 0.010 :x1 0.60)))))
+      (expect render :to-match (rx "page.[fn:1-star]"))
+      (expect render :to-match (rx "closes.[fn:1-dagger]"))
+      (expect render :to-match (rx bol "[fn:1-star] The first note"))
+      (expect render :to-match (rx bol "[fn:1-dagger] The second note"))))
+
+  (it "numbers labels by the page the book gives the render"
+    (let* ((pages (list (pdf-text-tests--page
+                         '(("a body line citing its own note here.^{*} yes so"
+                            :height 0.015)
+                           ("body line two filling the column right along")
+                           ("body line three ends here" :x1 0.40)
+                           ("*The note at the foot" :gap 3 :height 0.010
+                            :x1 0.60)))))
+           (render (car (pdf-text-render-lines pages nil 18))))
+      (expect render :to-match (rx "here.[fn:18-star]"))
+      (expect render :to-match (rx bol "[fn:18-star] The note at the foot")))))
+
+(describe "pdf-text footnote escape and display"
+  (it "breaks a literal [fn: so only generated footnotes parse"
+    (expect (pdf-text--escape-literals "see [fn:note] in the org source")
+            :to-equal "see [\u200Bfn:note] in the org source"))
+
+  (it "parses the generated definition and reference, and no literal"
+    (with-temp-buffer
+      (let ((inhibit-read-only t))
+        (pdf-text-mode)
+        (insert "prose citing a note.[fn:18-star] more prose\n\n"
+                "[fn:18-star] The note itself.\n\n"
+                (pdf-text--escape-literals "[fn:plain] a literal off the page\n")))
+      (let ((tree (org-element-parse-buffer)))
+        (expect (org-element-map tree 'footnote-reference
+                  (lambda (ref) (org-element-property :label ref)))
+                :to-equal '("18-star"))
+        (expect (org-element-map tree 'footnote-definition
+                  (lambda (def) (org-element-property :label def)))
+                :to-equal '("18-star")))))
+
+  (it "jumps from the reference to its definition"
+    (with-temp-buffer
+      (let ((inhibit-read-only t))
+        (pdf-text-mode)
+        (insert "prose citing a note.[fn:18-star] more prose\n\n"
+                "[fn:18-star] The note itself.\n"))
+      (goto-char (point-min))
+      (search-forward "note.[fn:18-star")
+      (org-open-at-point)
+      (expect (buffer-substring-no-properties (line-beginning-position)
+                                              (line-end-position))
+              :to-match "The note itself"))))
 
 (describe "pdf-text--interleave-outline"
   (it "prepends a heading of the entry's depth at its page start"

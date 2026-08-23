@@ -163,7 +163,8 @@ which is what makes this render the one the book gets."
          (pdf-text-extra-vocabulary (plist-get case :vocabulary))
          (reflowed (pdf-text-render-lines
                     (mapcar #'cdr pages)
-                    (pdf-text-page-headings entries start (length pages))))
+                    (pdf-text-page-headings entries start (length pages))
+                    start))
          (padded (append (make-list (1- start) "") reflowed))
          (headed (if outline
                      (pdf-text--interleave-outline padded entries)
@@ -199,8 +200,16 @@ text would strand every line after it.")
   "TEXT reduced to its letters and digits, downcased.
 Re-wrapping, de-hyphenation, the indent of a quotation and the dashes
 the render sets in front of list items all disappear here, so what is
-left compares the words themselves."
-  (downcase (replace-regexp-in-string "[^[:alnum:]]" "" text)))
+left compares the words themselves.  A generated footnote label
+disappears the same way: a numeric marker's label gives back the
+digits the page wrote - 2005.^{1} renders as [fn:19-1], and the 1 is
+the page's own - while a symbol marker's gives back nothing, the
+page's star being no letter.  A literal [fn: off the page carries a
+zero-width space and never reads as a label."
+  (let ((bare (replace-regexp-in-string
+               "\\[fn:[0-9]+-\\([0-9]+\\)\\]" "\\1"
+               (replace-regexp-in-string "\\[fn:[0-9]+-[a-z]+\\]" "" text))))
+    (downcase (replace-regexp-in-string "[^[:alnum:]]" "" bare))))
 
 (defun pdf-corpus-diff (source render)
   "What RENDER lost of SOURCE and what it added, as a plist.
