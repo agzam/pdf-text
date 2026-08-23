@@ -49,6 +49,7 @@ that moved; this reports the line and its number."
     (let* ((line (car (pdf-corpus-tests--lines "a captured line")))
            (printed (pdf-corpus-print-lines
                      '(4 . 4) '((1 4 "Chapter")) '("well-known")
+                     '(("intro 1") . 5)
                      (list (cons 4 (list line)))))
            (read-back (with-temp-buffer
                         (insert printed)
@@ -58,10 +59,44 @@ that moved; this reports the line and its number."
       (expect (plist-get read-back :window) :to-equal '(4 . 4))
       (expect (plist-get read-back :outline) :to-equal '((1 4 "Chapter")))
       (expect (plist-get read-back :vocabulary) :to-equal '("well-known"))
+      (expect (plist-get read-back :recurring-forms) :to-equal '("intro 1"))
+      (expect (plist-get read-back :folio-merged) :to-equal 5)
       (expect (pdf-text-line-text (pdf-corpus-line record))
               :to-equal "a captured line")
       (expect (pdf-text-line-x1 (pdf-corpus-line record)) :to-be-close-to 0.90 4)
       (expect (pdf-text-line-base (pdf-corpus-line record)) :to-be-close-to 0.12 4)))
+
+  (it "seeds a render with the case's document facts"
+    ;; the head recurs in the book, not in the window: only the stored
+    ;; forms can tell the render so.  Records are built per render -
+    ;; the reflow tags them, and a case reader hands out fresh ones
+    (cl-flet ((make-case (&rest extra)
+                (append
+                 (list :window '(9 . 9)
+                       :vocabulary nil
+                       :outline nil
+                       :pages (list (cons 9 (cons (pdf-text-line-create
+                                                   :text "INTRO | 9"
+                                                   :x0 0.10 :x1 0.30 :base 0.06
+                                                   :top 0.045 :bot 0.06
+                                                   :height 0.015 :space 0.005
+                                                   :cv 0.3 :first-width 0.03)
+                                                  (pdf-corpus-tests--lines
+                                                   "body line one filling the column"
+                                                   "body line two filling the column"
+                                                   "body line three filling the column"
+                                                   "body line four ends here")))))
+                 extra)))
+      (let ((bare (alist-get 9 (plist-get (pdf-corpus-render (make-case))
+                                          :reflowed)))
+            (seeded (alist-get
+                     9 (plist-get
+                        (pdf-corpus-render
+                         (make-case :recurring-forms
+                                    (list (pdf-text--normalize-line "INTRO | 9"))))
+                        :reflowed))))
+        (expect bare :to-match "INTRO")
+        (expect seeded :not :to-match "INTRO"))))
 
   (it "writes a measurement no glyph established as nil"
     (let ((blank (pdf-text-line-create :text "")))

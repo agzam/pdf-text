@@ -1,6 +1,8 @@
 ;; Captured by `bb corpus-add'; regenerate rather than edit.
 (:window (15 . 21)
  :vocabulary nil
+ :recurring-forms ("Short History of Nearly Everything" "Page #" "Bill Bryson")
+ :folio-merged 309
  :outline
  ((1 1 "Bill Bryson - Short History of Nearly Everything")
   (2 1 "Cover")

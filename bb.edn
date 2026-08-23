@@ -71,6 +71,10 @@
                  :task (corpus-task (format "(pdf-corpus-accept %s)"
                                             (pr-str (first *command-line-args*))))}
 
+  corpus-recapture {:doc "Re-capture a case (or all) from the book its case.eld names, keeping the hand-owned half: `bb corpus-recapture [SLUG]'. Needs epdfinfo and the books."
+                    :task (corpus-task (format "(pdf-corpus-recapture %s)"
+                                               (pr-str (first *command-line-args*))))}
+
   corpus-sweep {:doc "Render a whole book and rank its pages by the invariants they break: `bb corpus-sweep BOOK [FIRST] [LAST]'. Where the next case comes from. Needs epdfinfo built."
                 :task (let [[book first last] *command-line-args*]
                         (when-not book

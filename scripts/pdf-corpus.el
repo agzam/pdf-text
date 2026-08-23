@@ -136,19 +136,45 @@ The word before the hyphen and the word after it, the pair
                              (downcase (concat head "-"
                                                (string-trim tail "" "[^[:alnum:]]+"))))))))
 
-(defun pdf-corpus-script-vocabulary (file pages)
-  "Compounds FILE hyphenates elsewhere that PAGES wrap over a line end.
-The whole book has the say, so the whole book is read - by gettext
-alone, which is all the vocabulary needs and a fraction of the cost
-of laying out every glyph."
-  (let* ((total (pdf-info-number-of-pages file))
-         (document (pdf-text--hyphenated-words
-                    (cl-loop for page from 1 to total
-                             collect (pdf-text--page-lines
-                                      (pdf-info-gettext page '(0 0 1 1) nil file)))))
-         (wanted (mapcan (lambda (page) (pdf-corpus-script--compounds (cdr page)))
-                         pages)))
+(defun pdf-corpus-script-vocabulary (book-pages window-pages)
+  "Compounds the book hyphenates elsewhere that WINDOW-PAGES wrap.
+BOOK-PAGES is the whole book as (PAGE . LINES) - the whole book has
+the say on whether a wrap hyphen closes up - and the set stored is
+only what the window's own wrap pairs could form, so a case carries
+two words, not a dictionary."
+  (let ((document (pdf-text--hyphenated-words (mapcar #'cdr book-pages)))
+        (wanted (mapcan (lambda (page) (pdf-corpus-script--compounds (cdr page)))
+                        window-pages)))
     (seq-uniq (seq-filter (lambda (word) (gethash word document)) wanted))))
+
+(defun pdf-corpus-script-facts (book-pages)
+  "`pdf-text--recurring-facts' over BOOK-PAGES, (PAGE . LINES) alist.
+The same prelude `pdf-text-render-lines' runs before the marginal
+rules - reading order, then each page's own profile - so the counts
+are the ones the book's own render works from."
+  (let* ((page-lines (pdf-text-reading-order (mapcar #'cdr book-pages)))
+         (profile (pdf-text--profile page-lines))
+         (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                           page-lines)))
+    (pdf-text--recurring-facts
+     (cl-loop for lines in page-lines
+              for page-profile in profiles
+              collect (pdf-text--margin-candidates lines page-profile)))))
+
+(defun pdf-corpus-script-book-page (book-pages outline page)
+  "PAGE of the whole book rendered as the reader gets it.
+BOOK-PAGES is the full (PAGE . LINES) alist from page 1; the
+composition is the one `pdf-view-as-text' runs, headings and all,
+with no document facts seeded - the book is the document."
+  (let* ((entries (pdf-corpus--outline-entries outline))
+         (rendered (pdf-text-render-lines
+                    (mapcar #'cdr book-pages)
+                    (pdf-text-page-headings entries 1 (length book-pages))
+                    1))
+         (headed (if outline
+                     (pdf-text--interleave-outline rendered entries)
+                   (pdf-text--synthesize-headings rendered))))
+    (nth (1- page) headed)))
 
 ;;; Writing a case
 
@@ -206,10 +232,15 @@ so the suite reproduces this golden exactly."
 
 (defun pdf-corpus-add (book page &optional slug window)
   "Capture PAGE of BOOK, with its neighbours, as the case named SLUG.
-WINDOW overrides how many pages either side travel with it.  The case
-starts out passing whatever it renders today; a page captured for a
-defect wants its golden corrected by hand and `:known-failing' set in
-case.eld, which is what turns it into the acceptance test for the fix."
+WINDOW overrides how many pages either side travel with it.  The
+whole book renders first: the case stores the document facts a window
+cannot establish - the outline, the vocabulary, the recurring-form
+and folio-merged counts - and the capture refuses to stand when the
+window still renders the subject page differently from the book.  The
+case starts out passing whatever it renders today; a page captured
+for a defect wants its golden corrected by hand and `:known-failing'
+set in case.eld, which is what turns it into the acceptance test for
+the fix."
   (pdf-corpus-script-connect)
   (let* ((file (pdf-corpus-script-book book))
          (page (if (stringp page) (string-to-number page) page))
@@ -229,19 +260,69 @@ case.eld, which is what turns it into the acceptance test for the fix."
     (when (file-exists-p (expand-file-name "lines.eld" dir))
       (error "Case %s exists already: delete it, or run bb corpus-accept" slug))
     (princ (format "capturing %s pages %d-%d of %s\n" slug first last file))
-    (let ((window (pdf-corpus-script-pages file first last)))
+    (let* ((book-pages (pdf-corpus-script-pages file 1 total))
+           (outline (pdf-corpus-script-outline file))
+           (window-pages (cl-subseq book-pages (1- first) last))
+           (truth (pdf-corpus-script-book-page book-pages outline page)))
       (pdf-corpus-script--write
        (expand-file-name "lines.eld" dir)
        (pdf-corpus-print-lines (cons first last)
-                               (pdf-corpus-script-outline file)
-                               (pdf-corpus-script-vocabulary file window)
-                               window)))
-    (unless (file-exists-p (expand-file-name "case.eld" dir))
-      (pdf-corpus-script--write (expand-file-name "case.eld" dir)
-                                (pdf-corpus-script--starter file page)))
-    (pdf-corpus-script-report slug (pdf-corpus-script-refresh slug))
+                               outline
+                               (pdf-corpus-script-vocabulary book-pages
+                                                             window-pages)
+                               (pdf-corpus-script-facts book-pages)
+                               window-pages))
+      (unless (file-exists-p (expand-file-name "case.eld" dir))
+        (pdf-corpus-script--write (expand-file-name "case.eld" dir)
+                                  (pdf-corpus-script--starter file page)))
+      (let* ((result (pdf-corpus-script-refresh slug))
+             (golden (plist-get (pdf-corpus-read slug) :golden)))
+        (unless (equal truth golden)
+          ;; the window lies about the book; leave nothing that looks
+          ;; like a case, only the hand-written half survives
+          (dolist (name '("lines.eld" "golden.txt" "dropped.txt"))
+            (let ((file (expand-file-name name dir)))
+              (when (file-exists-p file)
+                (delete-file file))))
+          (let* ((truth-lines (split-string (or truth "") "\n"))
+                 (golden-lines (split-string (or golden "") "\n"))
+                 (at (or (cl-mismatch truth-lines golden-lines :test #'equal) 0)))
+            (error "Refused: the window renders page %d differently from the book\n  book:   %s\n  window: %s"
+                   page
+                   (or (nth at truth-lines) "<nothing>")
+                   (or (nth at golden-lines) "<nothing>"))))
+        (princ (format "  book-verified: the window agrees with the whole book on page %d\n"
+                       page))
+        (pdf-corpus-script-report slug result)))
     (princ (format "  %s\n  say in case.eld what it exercises, then read golden.txt\n"
                    (abbreviate-file-name dir)))))
+
+(defun pdf-corpus-recapture (&optional slug)
+  "Re-capture SLUG, or every case, from the book its case.eld names.
+The stored records re-derive from the PDF - capture-time code decides
+what a case carries - while case.eld, its budgets and its licences
+stay untouched as the hand-owned half.  The book resolves by the
+:source the case recorded, under `pdf-corpus-books-directory'."
+  (dolist (slug (if (and slug (not (string-empty-p slug)))
+                    (list slug)
+                  (pdf-corpus-slugs)))
+    (let* ((dir (file-name-as-directory
+                 (expand-file-name slug pdf-corpus-directory)))
+           (meta (pdf-corpus--read-form (expand-file-name "case.eld" dir)))
+           (source (plist-get meta :source))
+           (page (plist-get meta :page))
+           (stored (plist-get (pdf-corpus--read-form
+                               (expand-file-name "lines.eld" dir))
+                              :window))
+           (width (and stored (max (- page (car stored)) (- (cdr stored) page)))))
+      (unless (and source page)
+        (error "Case %s names no :source or :page in case.eld" slug))
+      (dolist (name '("lines.eld" "golden.txt" "dropped.txt"))
+        (let ((file (expand-file-name name dir)))
+          (when (file-exists-p file)
+            (delete-file file))))
+      (pdf-corpus-add (expand-file-name source pdf-corpus-books-directory)
+                      page slug width))))
 
 (defun pdf-corpus-accept (&optional slug)
   "Rewrite the goldens of SLUG, or of every case, from the stored records.

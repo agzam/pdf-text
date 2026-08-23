@@ -1,6 +1,8 @@
 ;; Captured by `bb corpus-add'; regenerate rather than edit.
 (:window (258 . 264)
  :vocabulary nil
+ :recurring-forms ("#")
+ :folio-merged 0
  :outline
  ()
  :pages

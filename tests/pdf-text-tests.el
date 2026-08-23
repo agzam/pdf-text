@@ -1197,6 +1197,52 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
       (expect (length (car (pdf-text-remove-marginal-lines pages profiles)))
               :to-equal 3))))
 
+(describe "pdf-text-remove-marginal-lines document seeds"
+  (it "drops a head the document shows recurring that the window cannot"
+    ;; one page is not the book: the same head recurs book-wide, and
+    ;; the seeded form is what carries that fact into a window render
+    (let* ((pages (list (pdf-text-tests--page
+                         '(("INTRO | 9" :x0 0.10 :x1 0.30 :base 0.06)
+                           ("body line one filling the column" :base 0.20)
+                           ("body line two filling the column")
+                           ("body line three filling the column")
+                           ("body line four ends here" :x1 0.40)))))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages))
+           (texts (lambda () (mapcar #'pdf-text-line-text
+                                     (car (pdf-text-remove-marginal-lines
+                                           pages profiles))))))
+      (expect (funcall texts)
+              :to-contain "INTRO | 9")
+      (let ((pdf-text-extra-recurring-forms
+             (list (pdf-text--normalize-line "INTRO | 9"))))
+        (expect (funcall texts)
+                :not :to-contain "INTRO | 9"))))
+
+  (it "drops a folio-merged head once the document establishes the style"
+    ;; one candidate in the window, three in the book: the seeded count
+    ;; is what lets the band drop fire the way it does book-wide
+    (let* ((pages (list (pdf-text-tests--page
+                         '(("1.3 Group B nouns referring to lifeless things 9"
+                            :x0 0.10 :x1 0.80 :base 0.06)
+                           ("body line one filling the column" :base 0.20)
+                           ("body line two filling the column")
+                           ("body line three filling the column")
+                           ("body line four ends here" :x1 0.40)))))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages))
+           (texts (lambda () (mapcar #'pdf-text-line-text
+                                     (car (pdf-text-remove-marginal-lines
+                                           pages profiles))))))
+      (expect (funcall texts)
+              :to-contain "1.3 Group B nouns referring to lifeless things 9")
+      (let ((pdf-text-extra-folio-merged 3))
+        (expect (funcall texts)
+                :not :to-contain
+                "1.3 Group B nouns referring to lifeless things 9")))))
+
 (describe "pdf-text--collapse-doubled"
   (it "collapses a line painted twice"
     (expect (pdf-text--collapse-doubled "PATTERNS OF CONFLICT PATTERNS OF CONFLICT")

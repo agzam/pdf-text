@@ -1,6 +1,8 @@
 ;; Captured by `bb corpus-add'; regenerate rather than edit.
 (:window (16 . 22)
  :vocabulary ("nineteenth-century")
+ :recurring-forms ("# Glossary of grammatical terms" "Glossary of grammatical terms #" "#.# The written accent #" "# Spelling, accent rules, punctuation and word division" "#.# Word order not explainable by sentence structure #" "# Word order" "# Relative clauses and relative pronouns" "#.# Por #" "#.# De #" "# Prepositions" "#.# Discourse markers #" "# Conjunctions and discourse markers" "# Expressions of time" "#.# Adverbs of place #" "# Adverbs" "# Ser and estar" "# Passive and impersonal sentences" "#.# Passive with ser #" "#.# Se de matización with miscellaneous verbs #" "#.# Verbs of motion and se de matización #" "# Pronominal verbs" "# Conditional sentences" "# Questions and exclamations" "#.# Further remarks on individual negative words #" "# Negation" "# Personal a" "# Auxiliary verbs" "# The gerund" "# The infinitive" "# The imperative" "# The subjunctive" "# Continuous forms of verbs" "# Use of indicative (non-continuous) compound tenses" "# Use of indicative (non-continuous) verb tenses" "#.# Model irregular and radical-changing verbs #" "# Forms of Spanish verbs" "# Le/les and lo/la/los/las" "# Personal pronouns, object" "# Numerals" "# Miscellaneous adjectives and pronouns" "# Possessive adjectives and pronouns" "# Neuter article and neuter pronouns" "# Comparison of adjectives and adverbs" "#.# Position of adjectives in relation to nouns #" "# Adjectives" "# The indefinite article" "#.# Uses and omission of the definite article #" "# The definite article" "# Plural of Nouns" "# Gender of nouns")
+ :folio-merged 559
  :outline
  ((1 1 "Cover")
   (1 2 "Half Title")

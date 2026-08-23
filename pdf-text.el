@@ -1266,6 +1266,22 @@ the plain text stream."
 (defvar pdf-text-recurring-min-count 3
   "Occurrences in the margin band before a line counts as a running head.")
 
+(defvar pdf-text-extra-recurring-forms nil
+  "Recurring margin forms known from outside the pages being rendered.
+The document decides what recurs - a running head repeats across a
+book, not across a window of it - and `pdf-text-remove-marginal-lines'
+counts only the pages it is handed.  A corpus case carries the
+digit-normalised forms its own window cannot show often enough.")
+
+(defvar pdf-text-extra-folio-merged 0
+  "Folio-merged margin candidates known from outside the rendered pages.
+The folio-merged style is a book-wide reading: heads that rotate per
+section never recur as forms, so what recurs is the shape, counted
+over the whole document.  A window's own count sits under the book's;
+the larger of the two is the document's.")
+
+
+
 (defvar pdf-text-margin-detachment 1.8
   "Leadings between a margin line and the body before it stands apart.
 Dense layouts set the running head under two leadings off the body -
@@ -1338,6 +1354,30 @@ mid-text), the folio-merged ones only ever go from the band itself."
               (push (cons line narrow) candidates))))
         (nreverse candidates)))))
 
+(defun pdf-text--recurring-facts (candidates)
+  "What CANDIDATES - per-page `pdf-text--margin-candidates' - recur as.
+A cons of (FORMS . FOLIO-MERGED): the digit-normalised forms whose
+narrow candidates reach `pdf-text-recurring-min-count', and how many
+candidates read as folio-merged heads.  Raw counts over the pages
+given; the seeding by `pdf-text-extra-recurring-forms' and
+`pdf-text-extra-folio-merged' is the caller's."
+  (let ((counts (make-hash-table :test #'equal))
+        (folio-merged 0)
+        recurring)
+    (dolist (page-candidates candidates)
+      (dolist (candidate page-candidates)
+        (let ((line (car candidate)))
+          (when (and line (not (string-blank-p (pdf-text-line-text line))))
+            (when (pdf-text--folio-merged-p (pdf-text-line-text line))
+              (cl-incf folio-merged))
+            (when (cdr candidate)
+              (cl-incf (gethash (pdf-text--normalize-line (pdf-text-line-text line))
+                                counts 0)))))))
+    (maphash (lambda (form n)
+               (when (<= pdf-text-recurring-min-count n) (push form recurring)))
+             counts)
+    (cons recurring folio-merged)))
+
 (defun pdf-text--page-marker-p (text)
   "Whether TEXT is a bare page marker: a number, a numeral, or a rule."
   (let ((trimmed (string-trim text)))
@@ -1378,26 +1418,20 @@ lean on recurrence at all: a book that titles its heads by section
 rotates them before any form recurs.  What recurs is the style - a
 book showing `pdf-text-recurring-min-count' folio-merged candidates
 anywhere runs its heads that way, and then every folio-merged
-candidate goes from the band, display type excepted."
-  (let ((counts (make-hash-table :test #'equal))
-        (folio-merged 0)
-        (tolerance (* 0.5 (or (plist-get (car profiles) :leading) 0.01)))
-        (candidates (cl-loop for lines in pages
-                             for profile in profiles
-                             collect (pdf-text--margin-candidates lines profile)))
-        recurring)
-    (dolist (page-candidates candidates)
-      (dolist (candidate page-candidates)
-        (let ((line (car candidate)))
-          (when (and line (not (string-blank-p (pdf-text-line-text line))))
-            (when (pdf-text--folio-merged-p (pdf-text-line-text line))
-              (cl-incf folio-merged))
-            (when (cdr candidate)
-              (cl-incf (gethash (pdf-text--normalize-line (pdf-text-line-text line))
-                                counts 0)))))))
-    (maphash (lambda (form n)
-               (when (<= pdf-text-recurring-min-count n) (push form recurring)))
-             counts)
+candidate goes from the band, display type excepted.
+
+Both readings are document-wide, and PAGES may be a window of the
+document: `pdf-text-extra-recurring-forms' and
+`pdf-text-extra-folio-merged' carry what the surrounding pages
+established, the way `pdf-text-extra-vocabulary' does for hyphens."
+  (let* ((tolerance (* 0.5 (or (plist-get (car profiles) :leading) 0.01)))
+         (candidates (cl-loop for lines in pages
+                              for profile in profiles
+                              collect (pdf-text--margin-candidates lines profile)))
+         (facts (pdf-text--recurring-facts candidates))
+         (recurring (cl-union (car facts) pdf-text-extra-recurring-forms
+                              :test #'equal))
+         (folio-merged (max (cdr facts) pdf-text-extra-folio-merged)))
     (cl-loop
      for lines in pages
      for marginal in candidates

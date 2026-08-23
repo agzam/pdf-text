@@ -17,7 +17,12 @@
 ;;
 ;; The window matters: body geometry, running heads and the hyphenation
 ;; vocabulary are read across pages, so a page pulled out alone renders
-;; differently from the same page inside its book.
+;; differently from the same page inside its book.  What even a window
+;; cannot show travels beside it: the whole document's outline, the
+;; compounds the book hyphenates elsewhere, and the recurring-form and
+;; folio-merged counts the running-head rules read book-wide - and
+;; `bb corpus-add' proves the point by rendering the whole book and
+;; refusing a case whose window disagrees with it on the subject page.
 
 (require 'cl-lib)
 (require 'seq)
@@ -61,17 +66,18 @@ into the second."
           (prin1-to-string (pdf-text-line-text line))
           (mapconcat #'pdf-corpus--number (cdr (pdf-corpus-record line)) " ")))
 
-(defun pdf-corpus-print-lines (window outline vocabulary pages)
+(defun pdf-corpus-print-lines (window outline vocabulary facts pages)
   "The lines file for PAGES, a WINDOW of the book, with its OUTLINE.
 WINDOW is (FIRST . LAST), PAGES an alist of (PAGE . LINES), and
 OUTLINE a list of (DEPTH PAGE TITLE) covering the whole document -
 the book's own title and the depth its chapters sit at decide how any
 one page's headings render.  VOCABULARY carries the compounds the
-book hyphenates elsewhere, which is the one thing a window cannot
-reproduce on its own."
+book hyphenates elsewhere, and FACTS - `pdf-text--recurring-facts'
+over the whole book - the running-head forms and the folio-merged
+count a window cannot establish on its own."
   (concat ";; Captured by `bb corpus-add'; regenerate rather than edit.\n"
-          (format "(:window %S\n :vocabulary %S\n :outline\n (%s)\n :pages\n ("
-                  window vocabulary
+          (format "(:window %S\n :vocabulary %S\n :recurring-forms %S\n :folio-merged %d\n :outline\n (%s)\n :pages\n ("
+                  window vocabulary (car facts) (cdr facts)
                   (mapconcat (lambda (entry) (format "%S" entry)) outline "\n  "))
           (mapconcat
            (lambda (page)
@@ -119,6 +125,8 @@ lines it is allowed to lose."
           :meta (pdf-corpus--read-form (expand-file-name "case.eld" dir))
           :window (plist-get lines :window)
           :vocabulary (plist-get lines :vocabulary)
+          :recurring-forms (plist-get lines :recurring-forms)
+          :folio-merged (or (plist-get lines :folio-merged) 0)
           :outline (plist-get lines :outline)
           :pages (mapcar (lambda (page)
                            (cons (car page) (mapcar #'pdf-corpus-line (cdr page))))
@@ -154,13 +162,16 @@ render as empty strings so every page keeps the number it has in the
 book: the outline is keyed by those numbers.
 
 Everything the reflow reads beyond the page itself - the outline, the
-hyphenation vocabulary, the pages either side - comes out of the case,
-which is what makes this render the one the book gets."
+hyphenation vocabulary, the recurring-form and folio-merged facts, the
+pages either side - comes out of the case, which is what makes this
+render the one the book gets."
   (let* ((pages (plist-get case :pages))
          (start (car (plist-get case :window)))
          (outline (plist-get case :outline))
          (entries (pdf-corpus--outline-entries outline))
          (pdf-text-extra-vocabulary (plist-get case :vocabulary))
+         (pdf-text-extra-recurring-forms (plist-get case :recurring-forms))
+         (pdf-text-extra-folio-merged (or (plist-get case :folio-merged) 0))
          (reflowed (pdf-text-render-lines
                     (mapcar #'cdr pages)
                     (pdf-text-page-headings entries start (length pages))

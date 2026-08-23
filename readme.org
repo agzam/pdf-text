@@ -87,11 +87,14 @@ The tasks that do want a real book:
 #+begin_src sh
 bb corpus-add BOOK PAGE [SLUG]   # capture a page and its neighbours as a case
 bb corpus-accept [SLUG]          # re-render goldens after an intended change
+bb corpus-recapture [SLUG]       # re-derive a case (or all) from the book case.eld names
 bb corpus-sweep BOOK [FIRST] [LAST]  # rank a book's pages by what they break
 bb corpus-audit [FRAGMENT] [LIMIT]   # account for a whole library, one line per book
 #+end_src
 
 ~BOOK~ is a path or a fragment matched under ~$BOOKS~ (default =~/SyncMobile/Books=). ~$PDF_TOOLS~ overrides where a built pdf-tools is looked for.
+
+A capture proves the book, not just its window: ~bb corpus-add~ renders the whole book, stores the document facts a window cannot establish - the outline, the hyphenation vocabulary, the recurring running-head forms and the folio-merged count - and refuses to write a case whose window still renders the subject page differently from the book.
 
 ** Timing
 
