@@ -786,7 +786,76 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
                             ("third three" :x0 0.70 :x1 0.84))))
            (out (pdf-text-tests--lanes specs)))
       (expect (mapcar #'pdf-text-line-text out)
-              :to-equal (mapcar #'car specs)))))
+              :to-equal (mapcar #'car specs))))
+
+  (it "reorders facing columns when the profile locked onto one of them"
+    ;; a two-column paper has no full-measure prose to pin a wide
+    ;; column: the modal edges ARE one column's, and the facing
+    ;; column's cells must not read as margin notes - the guard
+    ;; measures the text area, whose strong edges span both columns
+    (let* ((specs '(("second column comes first in" :x0 0.52 :x1 0.90 :base 0.12)
+                    ("the stream and runs justified" :x0 0.52 :x1 0.90)
+                    ("to the shared page bottom by" :x0 0.52 :x1 0.90)
+                    ("lines that face their twins" :x0 0.52 :x1 0.90)
+                    ("over one more line of prose" :x0 0.52 :x1 0.90)
+                    ("first column arrives after but" :x0 0.10 :x1 0.48 :base 0.12)
+                    ("reads before its facing twin" :x0 0.10 :x1 0.48)
+                    ("every line justified flush to" :x0 0.10 :x1 0.48)
+                    ("the middle of the page here" :x0 0.10 :x1 0.48)))
+           (out (pdf-text-tests--lanes specs)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("first column arrives after but"
+                          "reads before its facing twin"
+                          "every line justified flush to"
+                          "the middle of the page here"
+                          "second column comes first in"
+                          "the stream and runs justified"
+                          "to the shared page bottom by"
+                          "lines that face their twins"
+                          "over one more line of prose"))
+      ;; the fold is undone in the geometry too: both lanes land on the
+      ;; modal column's frame - the right lane's here, it carries more
+      ;; ink - and the second lane's baselines continue the first's
+      (expect (pdf-text-line-x0 (nth 0 out)) :to-be-close-to 0.52 2)
+      (expect (pdf-text-line-x0 (nth 4 out)) :to-be-close-to 0.52 2)
+      (expect (pdf-text-line-base (nth 4 out))
+              :to-be-greater-than (pdf-text-line-base (nth 3 out)))))
+
+  (it "reads a smaller foot block after the columns, not inside a lane"
+    ;; an author note resumes the left lane after a paragraph gap, set
+    ;; under footnote size; swallowed into the lane it would read
+    ;; before the facing column whose sentence it interrupts
+    (let* ((specs '(("the right column runs beside" :x0 0.52 :x1 0.90 :base 0.12)
+                    ("the body and keeps running" :x0 0.52 :x1 0.90)
+                    ("past the point where the left" :x0 0.52 :x1 0.90)
+                    ("column body already stopped" :x0 0.52 :x1 0.90)
+                    ("and on down the shared page" :x0 0.52 :x1 0.90)
+                    ("to its own last justified line" :x0 0.52 :x1 0.90)
+                    ("closing at the bottom margin" :x0 0.52 :x1 0.90)
+                    ("the left column body is set" :x0 0.10 :x1 0.48 :base 0.12)
+                    ("in four justified lines that" :x0 0.10 :x1 0.48)
+                    ("stop well short of the page" :x0 0.10 :x1 0.48)
+                    ("bottom leaving room below" :x0 0.10 :x1 0.48)
+                    ("thanks go to a colleague for" :x0 0.10 :x1 0.44 :base 0.22 :height 0.012)
+                    ("reading drafts of this kindly" :x0 0.10 :x1 0.42 :height 0.012)))
+           (out (pdf-text-tests--lanes specs))
+           (note (cl-find "thanks go to a colleague for" out
+                          :key #'pdf-text-line-text :test #'equal)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("the left column body is set"
+                          "in four justified lines that"
+                          "stop well short of the page"
+                          "bottom leaving room below"
+                          "the right column runs beside"
+                          "the body and keeps running"
+                          "past the point where the left"
+                          "column body already stopped"
+                          "and on down the shared page"
+                          "to its own last justified line"
+                          "closing at the bottom margin"
+                          "thanks go to a colleague for"
+                          "reading drafts of this kindly"))
+      (expect (pdf-text-line-claimed note) :to-be nil))))
 
 (describe "table rows through the pipeline"
   (it "escapes a literal bar-opened record at birth, on both paths"
@@ -815,6 +884,24 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
            (out (car (pdf-text-render-lines (list lines)))))
       (expect out :to-match "1\\. alfa\n2\\. beta\n3\\. gamma")
       (expect out :to-match "4\\. delta\n5\\. epsilon")))
+
+  (it "joins the sentence a column seam splits"
+    ;; flush facing columns are one flow folded to fit the page: the
+    ;; left column's hanging sentence continues at the right column's
+    ;; head, and the unfolded geometry lets the ordinary join see it
+    (let* ((lines (pdf-text-tests--page
+                   '(("the right column opens on the" :x0 0.52 :x1 0.90 :base 0.12)
+                     ("closing words of the sentence" :x0 0.52 :x1 0.90)
+                     ("the left column left hanging" :x0 0.52 :x1 0.90)
+                     ("in mid flight without an end" :x0 0.52 :x1 0.90)
+                     ("carrying on to a full stop." :x0 0.52 :x1 0.90)
+                     ("the left column runs justified" :x0 0.10 :x1 0.48 :base 0.12)
+                     ("flush lines that do not close" :x0 0.10 :x1 0.48)
+                     ("their sentence and instead go" :x0 0.10 :x1 0.48)
+                     ("straight across the seam into" :x0 0.10 :x1 0.48))))
+           (out (car (pdf-text-render-lines (list lines)))))
+      (expect out :to-match
+              "straight across the seam into the right column opens on the")))
 
   (it "keeps a claimed flows region out of the zone repair"
     (let* ((lines (pdf-text-tests--page

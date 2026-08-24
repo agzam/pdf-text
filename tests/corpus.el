@@ -68,11 +68,18 @@ into the second."
 
 (defun pdf-corpus--print-profile (profile)
   "PROFILE, a `pdf-text--profile' plist, rounded as a case stores it."
-  (format "(:height %s :leading %s :left %s :right %s :space %s)"
+  (format "(:height %s :leading %s :left %s :right %s%s :space %s)"
           (pdf-corpus--number (plist-get profile :height))
           (pdf-corpus--number (plist-get profile :leading))
           (pdf-corpus--number (plist-get profile :left))
           (pdf-corpus--number (plist-get profile :right))
+          ;; the text-area edges appeared with the two-column-paper fix;
+          ;; earlier cases carry none and render against :left/:right
+          (if (plist-get profile :text-left)
+              (format " :text-left %s :text-right %s"
+                      (pdf-corpus--number (plist-get profile :text-left))
+                      (pdf-corpus--number (plist-get profile :text-right)))
+            "")
           (pdf-corpus--number (plist-get profile :space))))
 
 (defun pdf-corpus--print-clusters (clusters)
