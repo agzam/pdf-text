@@ -126,20 +126,32 @@ what the reader pays."
                      (pdf-text-remove-marginal-lines repaired profiles heads)))
     (setq vocabulary (pdf-perf--stage "hyphen vocabulary"
                        (pdf-text--hyphenated-words marginal)))
-    (setq rendered
-          (pdf-perf--stage "blocks + render + escape"
-            (cl-loop for lines in marginal
-                     for page-profile in profiles
-                     for number from 1
-                     for hs = heads then (cdr hs)
-                     collect (pdf-text--escape-org-lines
-                              (pdf-text--render-blocks
-                               (pdf-text--blocks lines page-profile)
-                               page-profile vocabulary (car hs) number)
-                              (car hs)))))
+    (let* ((blocks (pdf-perf--stage "blocks"
+                     (cl-loop for lines in marginal
+                              for page-profile in profiles
+                              collect (pdf-text--blocks lines page-profile))))
+           (assignments
+            (pdf-perf--stage "heading synthesis"
+              (and (null outline)
+                   (cl-some (lambda (lines) (cl-some #'pdf-text-line-x0 lines))
+                            marginal)
+                   (pdf-text--synth-assignments blocks profiles vocabulary)))))
+      (setq rendered
+            (pdf-perf--stage "render + escape"
+              (cl-loop for page-blocks in blocks
+                       for page-profile in profiles
+                       for number from 1
+                       for hs = heads then (cdr hs)
+                       for assigned = assignments then (cdr assigned)
+                       collect (pdf-text--escape-org-lines
+                                (pdf-text--render-blocks
+                                 page-blocks page-profile vocabulary (car hs)
+                                 number (caar assigned) (cdar assigned))
+                                (append (mapcar #'cadr (caar assigned))
+                                        (car hs)))))))
     (setq composed (pdf-perf--stage "interleave outline"
                      (if outline (pdf-text--interleave-outline rendered outline)
-                       (pdf-text--synthesize-headings rendered))))
+                       rendered)))
     (let ((total (- (float-time) whole)))
       (princ (format "%-26s %8s %8s %6s\n" "stage" "seconds" "ms/page" "share"))
       (dolist (stage (nreverse pdf-perf--stages))
@@ -155,7 +167,7 @@ what the reader pays."
       (let ((log (profiler-cpu-log)))
         (profiler-stop)
         (pdf-perf--print-profile log)))
-    (unless (equal rendered (pdf-text-render-pages raw layouts heads))
+    (unless (equal rendered (pdf-text-render-pages raw layouts heads (null outline)))
       (error "The staging no longer mirrors pdf-text-render-pages; realign the stages"))))
 
 (defun pdf-perf-ipc (book &optional pages)

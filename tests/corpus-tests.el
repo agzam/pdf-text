@@ -49,7 +49,10 @@ that moved; this reports the line and its number."
     (let* ((line (car (pdf-corpus-tests--lines "a captured line")))
            (printed (pdf-corpus-print-lines
                      '(4 . 4) '((1 4 "Chapter")) '("well-known")
-                     '(("intro 1") . 5)
+                     '(:recurring-forms ("intro 1") :folio-merged 5
+                       :profile (:height 0.014 :leading 0.017
+                                 :left 0.14 :right 0.86 :space 0.0047)
+                       :heading-levels ((0.0265 . 0.0266) (0.0221 . 0.0222)))
                      (list (cons 4 (list line)))))
            (read-back (with-temp-buffer
                         (insert printed)
@@ -61,6 +64,10 @@ that moved; this reports the line and its number."
       (expect (plist-get read-back :vocabulary) :to-equal '("well-known"))
       (expect (plist-get read-back :recurring-forms) :to-equal '("intro 1"))
       (expect (plist-get read-back :folio-merged) :to-equal 5)
+      (expect (plist-get (plist-get read-back :profile) :leading)
+              :to-be-close-to 0.017 4)
+      (expect (plist-get read-back :heading-levels)
+              :to-equal '((0.0265 . 0.0266) (0.0221 . 0.0222)))
       (expect (pdf-text-line-text (pdf-corpus-line record))
               :to-equal "a captured line")
       (expect (pdf-text-line-x1 (pdf-corpus-line record)) :to-be-close-to 0.90 4)

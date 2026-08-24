@@ -148,18 +148,25 @@ two words, not a dictionary."
     (seq-uniq (seq-filter (lambda (word) (gethash word document)) wanted))))
 
 (defun pdf-corpus-script-facts (book-pages)
-  "`pdf-text--recurring-facts' over BOOK-PAGES, (PAGE . LINES) alist.
-The same prelude `pdf-text-render-lines' runs before the marginal
-rules - reading order, then each page's own profile - so the counts
-are the ones the book's own render works from."
+  "The document-wide readings of BOOK-PAGES, a (PAGE . LINES) alist.
+A plist: :recurring-forms and :folio-merged from
+`pdf-text--recurring-facts' over the same prelude
+`pdf-text-render-lines' runs before the marginal rules, and :profile
+and :heading-levels from `pdf-text-document-facts' - everything a
+window render has to be seeded with to read as its book does."
   (let* ((page-lines (pdf-text-reading-order (mapcar #'cdr book-pages)))
          (profile (pdf-text--profile page-lines))
          (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
-                           page-lines)))
-    (pdf-text--recurring-facts
-     (cl-loop for lines in page-lines
-              for page-profile in profiles
-              collect (pdf-text--margin-candidates lines page-profile)))))
+                           page-lines))
+         (recurring (pdf-text--recurring-facts
+                     (cl-loop for lines in page-lines
+                              for page-profile in profiles
+                              collect (pdf-text--margin-candidates lines page-profile))))
+         (document (pdf-text-document-facts (mapcar #'cdr book-pages))))
+    (list :recurring-forms (car recurring)
+          :folio-merged (cdr recurring)
+          :profile (plist-get document :profile)
+          :heading-levels (plist-get document :heading-levels))))
 
 (defun pdf-corpus-script-book-page (book-pages outline page)
   "PAGE of the whole book rendered as the reader gets it.
@@ -170,10 +177,10 @@ with no document facts seeded - the book is the document."
          (rendered (pdf-text-render-lines
                     (mapcar #'cdr book-pages)
                     (pdf-text-page-headings entries 1 (length book-pages))
-                    1))
+                    1 (null outline)))
          (headed (if outline
                      (pdf-text--interleave-outline rendered entries)
-                   (pdf-text--synthesize-headings rendered))))
+                   rendered)))
     (nth (1- page) headed)))
 
 ;;; Writing a case
@@ -235,12 +242,12 @@ so the suite reproduces this golden exactly."
 WINDOW overrides how many pages either side travel with it.  The
 whole book renders first: the case stores the document facts a window
 cannot establish - the outline, the vocabulary, the recurring-form
-and folio-merged counts - and the capture refuses to stand when the
-window still renders the subject page differently from the book.  The
-case starts out passing whatever it renders today; a page captured
-for a defect wants its golden corrected by hand and `:known-failing'
-set in case.eld, which is what turns it into the acceptance test for
-the fix."
+and folio-merged counts, the body profile and the heading-height
+clusters - and the capture refuses to stand when the window still
+renders the subject page differently from the book.  The case starts
+out passing whatever it renders today; a page captured for a defect
+keeps the defect in its golden, and the invariants it fires - with no
+`:tolerates' naming them - keep the case red until the fix lands."
   (pdf-corpus-script-connect)
   (let* ((file (pdf-corpus-script-book book))
          (page (if (stringp page) (string-to-number page) page))
@@ -405,10 +412,11 @@ own cannot show that."
          (sources (mapcar #'cdr (pdf-corpus-sources pages)))
          (reflowed (pdf-text-render-lines
                     (mapcar #'cdr pages)
-                    (pdf-text-page-headings entries 1 (length pages))))
+                    (pdf-text-page-headings entries 1 (length pages))
+                    1 (null outline)))
          (headed (if outline
                      (pdf-text--interleave-outline reflowed entries)
-                   (pdf-text--synthesize-headings reflowed)))
+                   reflowed))
          (buffer (string-join headed "\n\f\n"))
          (scanned (pdf-text--scanned-p (mapcar (lambda (lines)
                                                  (string-join lines "\n"))
@@ -514,12 +522,13 @@ FIRST and LAST limit the range; the whole book by default."
          (sources (mapcar #'cdr (pdf-corpus-sources pages)))
          (reflowed (pdf-text-render-lines
                     (mapcar #'cdr pages)
-                    (pdf-text-page-headings entries first (length pages))))
+                    (pdf-text-page-headings entries first (length pages))
+                    first (null outline)))
          (padded (append (make-list (1- first) "") reflowed))
          (headed (nthcdr (1- first)
                          (if outline
                              (pdf-text--interleave-outline padded entries)
-                           (pdf-text--synthesize-headings padded))))
+                           padded)))
          (elapsed (float-time (time-since start)))
          (totals (make-hash-table))
          ranked)

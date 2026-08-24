@@ -589,6 +589,13 @@ geometry of its own."
                            (median)
                            (height (/ height 3.0))))))))
 
+(defvar pdf-text-extra-profile nil
+  "Document profile carried into a render of a window of the document.
+`pdf-text--profile' output.  Modal body geometry is defined over the
+whole book, and a window dominated by exercises or listings measures
+a different body than the book does - the drift the corpus-add
+refusal names.")
+
 (defvar pdf-text-page-profile-min-lines 8
   "Body lines a page needs before its own column edges are trusted.")
 
@@ -893,7 +900,10 @@ These are the lines the reflow reads, and the lines the corpus
 measures survival against: the repairs merge and reorder records,
 never drop one."
   (let* ((page-lines (pdf-text-clean-pages pages))
-         (profile (pdf-text--profile page-lines)))
+         ;; the seeded document profile reaches the repairs too: the
+         ;; merge and zone thresholds are leadings and spaces, and a
+         ;; window measures both differently than its book does
+         (profile (or pdf-text-extra-profile (pdf-text--profile page-lines))))
     (mapcar (lambda (lines)
               (pdf-text--reassemble-zones
                (pdf-text--merge-script-fragments lines profile)
@@ -1348,8 +1358,11 @@ mid-text), the folio-merged ones only ever go from the band itself."
                  (before (pdf-text--neighbour-gap vec i -1))
                  (after (pdf-text--neighbour-gap vec i 1))
                  (gap (* pdf-text-margin-detachment leading))
-                 (narrow (< (- (pdf-text-line-x1 line) (pdf-text-line-x0 line))
-                            (* 0.6 width))))
+                 ;; a record with no ink - a tab-only line - has nothing
+                 ;; to measure and can never sit in a band
+                 (narrow (and (pdf-text-line-x0 line) (pdf-text-line-x1 line)
+                              (< (- (pdf-text-line-x1 line) (pdf-text-line-x0 line))
+                                 (* 0.6 width)))))
             (when (and base
                        (or (< base pdf-text-margin-band)
                            (< (- 1.0 pdf-text-margin-band) base))
@@ -1627,6 +1640,13 @@ The document decides whether a wrap hyphen closes up or stays, and a
 window of pages is not the document: a book can hyphenate
 \"well-known\" once in chapter one and wrap it in chapter nine.  A
 corpus case carries the compounds its own pages cannot show.")
+
+(defvar pdf-text-extra-heading-levels nil
+  "Height clusters carried into a render whose pages cannot establish them.
+The shape `pdf-text--heading-clusters' returns.  A corpus window
+seeds the clusters its book computed, because the rank of a size -
+which org level it maps to - depends on every style the book uses,
+and seven pages need not show them all.")
 
 (defun pdf-text--hyphenated-words (pages)
   "Words PAGES writes with an internal hyphen, downcased, as a set.
@@ -2201,18 +2221,25 @@ marker."
     (setq text (replace-regexp-in-string
                 (car ref) (concat "\\1[fn:" (cdr ref) "]") text t))))
 
-(defun pdf-text--render-blocks (blocks profile vocabulary &optional headings page)
+(defun pdf-text--render-blocks (blocks profile vocabulary &optional headings page
+                                       placed drops)
   "BLOCKS as the page's reflowed text, measured by PROFILE, joined by VOCABULARY.
 HEADINGS are the org heading lines the outline puts on this page.
 `pdf-text--assign-headings' says which block each one belongs at: a
 section starts where the page starts it, not where the page it sits
 on does.  PAGE is the number this page has in the book, which the
-footnote labels carry."
-  (let ((placed (pdf-text--assign-headings blocks profile vocabulary headings))
+footnote labels carry.  PLACED overrides the outline assignment with
+one already decided - the synthesized headings of an outline-less
+book - and DROPS names blocks that render as nothing, because a
+heading a merged pair makes carries both halves' text already."
+  (let ((placed (or placed
+                    (pdf-text--assign-headings blocks profile vocabulary headings)))
         (inset (pdf-text--inset-blocks blocks profile))
         (notes (pdf-text--assign-footnotes blocks profile vocabulary (or page 1)))
         out previous stack listing-left)
-    (dolist (block blocks)
+    (dolist (block (if drops
+                       (cl-remove-if (lambda (b) (memq b drops)) blocks)
+                     blocks))
       (let* ((kind (pdf-text-block-kind block))
              (placement (cdr (assq block placed)))
              (head (car placement))
@@ -2287,7 +2314,7 @@ are the structure the folding is for, and stay as they are."
            (split-string text "\n"))
    "\n"))
 
-(defun pdf-text-render-lines (pages &optional headings first)
+(defun pdf-text-render-lines (pages &optional headings first synthesize)
   "PAGES of `pdf-text-line' records reflowed into readable text.
 One string per page.  Body geometry, running heads and the
 hyphenation vocabulary are all read across the whole of PAGES, so a
@@ -2301,35 +2328,57 @@ of the book each entry of PAGES is, which is why they arrive already
 lined up.  FIRST is the book's number for the first of PAGES, 1 when
 nil, for the same reason: the footnote labels carry the page number,
 and a corpus window rendering pages 15-21 must label them as the book
-does."
+does.
+
+SYNTHESIZE, for a document with no outline, reads headings out of the
+pages themselves: their glyph sizes and section numbers, weighed
+document-wide by `pdf-text--synth-assignments'.  Pages with no glyph
+geometry at all fall back to the text-only
+`pdf-text--synthesize-headings'."
   (let* ((page-lines (pdf-text-reading-order pages))
-         (profile (pdf-text--profile page-lines))
+         (profile (or pdf-text-extra-profile (pdf-text--profile page-lines)))
          (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
                            page-lines))
          (page-lines (pdf-text-remove-marginal-lines page-lines profiles headings))
-         (vocabulary (pdf-text--hyphenated-words page-lines)))
-    (cl-loop for lines in page-lines
-             for page-profile in profiles
-             for number from (or first 1)
-             for heads = headings then (cdr heads)
-             collect (pdf-text--escape-org-lines
-                      (pdf-text--render-blocks (pdf-text--blocks lines page-profile)
-                                               page-profile vocabulary (car heads)
-                                               number)
-                      (car heads)))))
+         (vocabulary (pdf-text--hyphenated-words page-lines))
+         (pages-blocks (cl-loop for lines in page-lines
+                                for page-profile in profiles
+                                collect (pdf-text--blocks lines page-profile)))
+         (geometry (cl-some (lambda (lines) (cl-some #'pdf-text-line-x0 lines))
+                            page-lines))
+         (assignments (and synthesize geometry
+                           (pdf-text--synth-assignments pages-blocks profiles
+                                                        vocabulary)))
+         (rendered
+          (cl-loop for blocks in pages-blocks
+                   for page-profile in profiles
+                   for number from (or first 1)
+                   for heads = headings then (cdr heads)
+                   for assigned = assignments then (cdr assigned)
+                   collect (pdf-text--escape-org-lines
+                            (pdf-text--render-blocks blocks page-profile
+                                                     vocabulary (car heads)
+                                                     number
+                                                     (caar assigned)
+                                                     (cdar assigned))
+                            (append (mapcar #'cadr (caar assigned))
+                                    (car heads))))))
+    (if (and synthesize (not geometry))
+        (pdf-text--synthesize-headings rendered)
+      rendered)))
 
-(defun pdf-text-render-pages (pages &optional layouts headings)
+(defun pdf-text-render-pages (pages &optional layouts headings synthesize)
   "Raw PAGES reflowed into readable text, one string per page.
 PAGES are `pdf-info-gettext' strings and LAYOUTS the matching
 `pdf-info-charlayout' output.  The layout is what carries paragraph
 structure - indents, line fullness, the air between baselines - so a
-page without one falls back to character heuristics.  HEADINGS is
-what `pdf-text-render-lines' takes."
+page without one falls back to character heuristics.  HEADINGS and
+SYNTHESIZE are what `pdf-text-render-lines' takes."
   (pdf-text-render-lines
    (cl-loop for text in pages
             for rest = layouts then (cdr rest)
             collect (pdf-text--page-lines text (car rest)))
-   headings))
+   headings nil synthesize))
 
 (defun pdf-text--outline-heads (outline)
   "OUTLINE as org heading lines, keyed by the page each one names.
@@ -2394,12 +2443,279 @@ unchanged: PDFs without an outline degrade to the flat view."
                 page))
             pages)))
 
+(defvar pdf-text-synth-support 5
+  "Distinct pages a glyph size must head before it reads as a heading style.
+A style the book uses - chapter titles, section heads - recurs across
+it: thirteen chapters, twenty sections.  The display type of a cover
+spread or one paper's private subsection style reaches three or four
+pages, and a junk cluster costs more than it earns - every real
+heading below it drops a level.")
+
+(defvar pdf-text-synth-levels 4
+  "Org levels the size clusters of an outline-less book may occupy.")
+
+(defvar pdf-text-synth-number-min 0.98
+  "Glyph height, in body heights, under which a numbered line is not a heading.
+A real numbered section heading is never set smaller than the body it
+heads; a cross-reference in a running head or a footnote is.")
+
+(defun pdf-text--dotted-number-level (text)
+  "Org level for TEXT opening with a dotted section number, nil otherwise.
+\"2.2 Arguments\" carries one dot and heads a level-2 section; a
+single number is not enough - exercises, footnotes and bibliography
+entries open with one, and section headings that carry no dots at all
+are the size rules' to find.  A trailing page number reads as a table
+of contents entry, not a heading."
+  (let ((case-fold-search nil))
+    (and (string-match "\\`\\([0-9]+\\(?:\\.[0-9]+\\)+\\)\\.? +[[:upper:]]" text)
+         (not (string-match-p "[0-9]\\'" text))
+         (1+ (cl-count ?. (match-string 1 text))))))
+
+(defun pdf-text--synth-banded-p (block)
+  "Whether BLOCK opens inside the top or bottom margin band.
+A running head that slipped the marginal rules - detached a hair
+under the threshold, its base a hair past the band - must not come
+back as a heading."
+  (when-let* ((line (car (pdf-text-block-lines block)))
+              (top (pdf-text-line-top line)))
+    (or (< top pdf-text-margin-band)
+        (< (- 1.0 pdf-text-margin-band) top))))
+
+(defun pdf-text--synth-dotted (text height x1 profile)
+  "Level of TEXT as a numbered heading set at HEIGHT ending at X1, or nil.
+The number gives the level; the geometry gates it: at least
+`pdf-text-synth-number-min' of PROFILE's body - Benji's sections run
+at 1.03, a running head's cross-reference at 0.73 - and ink stopping
+short of the column's right edge, where a full line is prose."
+  (when-let* ((level (pdf-text--dotted-number-level text))
+              (body (plist-get profile :height))
+              (right (plist-get profile :right)))
+    (and height (<= (* pdf-text-synth-number-min body) height)
+         x1 (< x1 (- right 0.02))
+         level)))
+
+(defun pdf-text--synth-tuple (blocks text height x1 profile)
+  "The heading candidate BLOCKS make as TEXT, set at HEIGHT ending at X1.
+A plist (:blocks :text :height :dotted), or nil.  TEXT must read as a
+title: words rather than mathematics, no bracket-assembly glyphs, no
+dot leaders, nothing closing the line, at most
+`pdf-text-heading-max-words' words.  What passes is a heading when
+its number says so (:dotted carries the level) or when it is set over
+`pdf-text-heading-height' of PROFILE's body - the size rules decide
+those against the whole book's clusters."
+  (let ((body (plist-get profile :height))
+        (trimmed (string-trim (or text "")))
+        (case-fold-search nil))
+    (when (and body height
+               ;; a word of three letters or more, and an uppercase
+               ;; letter or a digit opening the line: what every title
+               ;; has and a scrambled legacy-font equation - "ftf", a
+               ;; lone w before its paragraph - does not
+               (string-match-p "[[:alpha:]]\\{3\\}" trimmed)
+               (not (string-match-p "\\`[^[:alnum:]]*[[:lower:]]" trimmed))
+               (not (string-match-p "[\u239B-\u23AD]" trimmed))
+               (not (string-match-p "\\(?:\\. \\)\\{3\\}\\|\\.\\{4\\}" trimmed))
+               (not (pdf-text-mathish-text-p trimmed))
+               ;; operator glyphs no title carries: a Haskell type
+               ;; signature or an equation set at display size defeats
+               ;; the mathish vote when its operands are words; a comma
+               ;; glued to a letter is an equation's typography too
+               (not (string-match-p "[]={}|[`$←→↔⇒⇐∗∷¬≡≤≥≠∈∧∨±×÷−√]" trimmed))
+               (not (string-match-p "[,;][[:alpha:]]" trimmed))
+               (not (string-match-p "[.,;:]\\'" trimmed))
+               (<= (length (split-string trimmed)) pdf-text-heading-max-words))
+      (let ((dotted (pdf-text--synth-dotted trimmed height x1 profile)))
+        (when (or dotted (< (* pdf-text-heading-height body) height))
+          (list :blocks blocks :text trimmed :height height :dotted dotted))))))
+
+(defun pdf-text--synth-pair (block next profile vocabulary)
+  "BLOCK and NEXT as one heading candidate, when the page splits a title.
+Two shapes.  A bare display-size number and the display block it
+belongs to - poppler serves \"1.1\" and \"Functions\" as separate
+lines when the gap between them is wide, and ANAYA hangs its unit
+titles beside a giant unit digit.  And a worded eyebrow: a short
+digit-carrying label like \"Chapter 2\" set over a title at least its
+size.  Both halves must be set over PROFILE's body; VOCABULARY joins
+each half's text."
+  (when-let* ((body (plist-get profile :height))
+              (leading (plist-get profile :leading))
+              ((memq (pdf-text-block-kind block) '(para item)))
+              ((memq (pdf-text-block-kind next) '(para item)))
+              ((not (pdf-text--synth-banded-p block)))
+              (height (pdf-text--block-height block))
+              (next-height (pdf-text--block-height next))
+              ((< (* pdf-text-heading-height body) height))
+              ((< (* pdf-text-heading-height body) next-height))
+              (last-line (car (last (pdf-text-block-lines block))))
+              (base (pdf-text-line-base last-line))
+              (top (pdf-text-line-top (car (pdf-text-block-lines next))))
+              (text (pdf-text--join-block block vocabulary))
+              (next-text (pdf-text--join-block next vocabulary)))
+    (when (or (and (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)*\\.?\\'"
+                                   (string-trim text))
+                   (<= top (+ base leading)))
+              (and (<= (length (split-string text)) 3)
+                   (string-match-p "[[:alpha:]]" text)
+                   ;; a digit, or the number spelled in caps: CHAPTER ONE
+                   (or (string-match-p "[0-9]" text)
+                       (let ((case-fold-search nil))
+                         (not (string-match-p "[[:lower:]]" text))))
+                   (not (pdf-text--dotted-number-level text))
+                   (<= height next-height)
+                   (<= top (+ base (* 4 leading)))))
+      (pdf-text--synth-tuple
+       (list block next)
+       (concat (string-trim text) " " (string-trim next-text))
+       (max height next-height)
+       (apply #'max (delq nil (mapcar #'pdf-text-line-x1
+                                      (append (pdf-text-block-lines block)
+                                              (pdf-text-block-lines next)))))
+       profile))))
+
+(defun pdf-text--synth-single (block profile vocabulary)
+  "BLOCK alone as a heading candidate against PROFILE, or nil.
+A multi-line block can still be a sized heading - a long title wraps -
+but never a numbered one: a numbered line that wraps is prose.
+VOCABULARY joins the text."
+  (when (and (memq (pdf-text-block-kind block) '(para item))
+             (not (pdf-text--synth-banded-p block)))
+    (let* ((lines (pdf-text-block-lines block))
+           (height (pdf-text--block-height block))
+           (body (plist-get profile :height)))
+      ;; joining a block's text walks the vocabulary; a multi-line block
+      ;; of body type - most paragraphs - can never be a heading, so it
+      ;; never pays for the join
+      (when (and height body
+                 (or (and (null (cdr lines))
+                          (<= (* pdf-text-synth-number-min body) height))
+                     (< (* pdf-text-heading-height body) height)))
+        (pdf-text--synth-tuple (list block)
+                               (pdf-text--join-block block vocabulary)
+                               height
+                               (and (null (cdr lines))
+                                    (pdf-text-line-x1 (car lines)))
+                               profile)))))
+
+(defun pdf-text--synth-page-tuples (blocks profile vocabulary)
+  "Heading candidates among one page's BLOCKS, pairs merged.
+PROFILE and VOCABULARY as the render reads them."
+  (let* ((vec (vconcat (cl-remove-if (lambda (b)
+                                       (eq 'blank (pdf-text-block-kind b)))
+                                     blocks)))
+         (i 0)
+         tuples)
+    (while (< i (length vec))
+      (let* ((next (and (< (1+ i) (length vec)) (aref vec (1+ i))))
+             (pair (and next (pdf-text--synth-pair (aref vec i) next
+                                                   profile vocabulary)))
+             (tuple (or pair (pdf-text--synth-single (aref vec i)
+                                                     profile vocabulary))))
+        (when tuple (push tuple tuples))
+        (setq i (+ i (if pair 2 1)))))
+    (nreverse tuples)))
+
+(defun pdf-text--heading-clusters (pairs body)
+  "PAIRS of (HEIGHT . PAGE) as supported height ranges, tallest first.
+Candidate heights within a tenth of BODY of each other are one
+style; a style must head `pdf-text-synth-support' distinct pages
+before it earns an org level, which is what keeps a cover page's
+display type and a one-off diagram out of the outline."
+  (let ((sorted (sort (copy-sequence pairs) (lambda (a b) (< (car a) (car b)))))
+        (gap (* 0.1 (or body 0.01)))
+        groups current)
+    (dolist (pair sorted)
+      (if (and current (< (- (car pair) (caar current)) gap))
+          (push pair current)
+        (when current (push (nreverse current) groups))
+        (setq current (list pair))))
+    (when current (push (nreverse current) groups))
+    (cl-loop for group in groups
+             when (<= pdf-text-synth-support
+                      (length (cl-remove-duplicates (mapcar #'cdr group))))
+             collect (cons (caar group) (car (car (last group)))))))
+
+(defun pdf-text--cluster-level (height clusters)
+  "Org level of HEIGHT among CLUSTERS, nil when no cluster holds it.
+CLUSTERS run tallest first, so the book's biggest recurring style is
+level 1; levels cap at `pdf-text-synth-levels'."
+  (when-let* ((pos (cl-position-if
+                    (lambda (c) (and (<= (- (car c) 1e-4) height)
+                                     (<= height (+ (cdr c) 1e-4))))
+                    clusters)))
+    (min (1+ pos) pdf-text-synth-levels)))
+
+(defun pdf-text--synth-assignments (pages-blocks profiles vocabulary)
+  "Where each synthesized heading goes, per page of PAGES-BLOCKS.
+A list of (PLACED . DROPS): PLACED in `pdf-text--assign-headings'
+shape - the heading replaces its block - and DROPS the blocks a
+merged pair consumed.  A numbered candidate takes its dot depth; a
+sized one the rank of its height among the whole document's supported
+clusters, which only this document-wide pass can know.  PROFILES and
+VOCABULARY as the render reads them."
+  (let* ((body (plist-get (car profiles) :height))
+         (tuples (cl-loop for blocks in pages-blocks
+                          for profile in profiles
+                          collect (pdf-text--synth-page-tuples blocks profile
+                                                               vocabulary)))
+         (clusters (or pdf-text-extra-heading-levels
+                       (pdf-text--heading-clusters
+                        (cl-loop for page-tuples in tuples
+                                 for page from 1
+                                 nconc (cl-loop for tuple in page-tuples
+                                                unless (plist-get tuple :dotted)
+                                                collect (cons (plist-get tuple :height)
+                                                              page)))
+                        body))))
+    (cl-loop for page-tuples in tuples
+             collect (let (placed drops)
+                       (dolist (tuple page-tuples)
+                         (when-let* ((level (or (plist-get tuple :dotted)
+                                                (pdf-text--cluster-level
+                                                 (plist-get tuple :height)
+                                                 clusters))))
+                           (push (list (car (plist-get tuple :blocks))
+                                       (concat (make-string level ?*) " "
+                                               (plist-get tuple :text))
+                                       t)
+                                 placed)
+                           (setq drops (append drops
+                                               (cdr (plist-get tuple :blocks))))))
+                       (cons (nreverse placed) drops)))))
+
+(defun pdf-text-document-facts (pages)
+  "The document-wide readings a window render cannot derive from PAGES.
+A plist (:profile :heading-levels), what `pdf-text-extra-profile' and
+`pdf-text-extra-heading-levels' seed: the modal body geometry and the
+heading-height clusters, both defined over the whole document."
+  (let* ((page-lines (pdf-text-reading-order pages))
+         (profile (pdf-text--profile page-lines))
+         (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                           page-lines))
+         (page-lines (pdf-text-remove-marginal-lines page-lines profiles))
+         (vocabulary (pdf-text--hyphenated-words page-lines))
+         (tuples (cl-loop for lines in page-lines
+                          for page-profile in profiles
+                          collect (pdf-text--synth-page-tuples
+                                   (pdf-text--blocks lines page-profile)
+                                   page-profile vocabulary))))
+    (list :profile profile
+          :heading-levels (pdf-text--heading-clusters
+                           (cl-loop for page-tuples in tuples
+                                    for page from 1
+                                    nconc (cl-loop for tuple in page-tuples
+                                                   unless (plist-get tuple :dotted)
+                                                   collect (cons (plist-get tuple :height)
+                                                                 page)))
+                           (plist-get profile :height)))))
+
 (defvar pdf-text-synth-heading-max-fraction 0.6
   "Widest fraction of the page's wrap column a synthesized heading fills.")
 
 (defun pdf-text--synthesize-headings (pages)
   "PAGES with short numbered section lines promoted to org headings.
-The fallback for documents carrying no outline metadata: a line like
+The fallback for documents carrying no outline metadata and no glyph
+geometry either - with geometry, `pdf-text--synth-assignments' reads
+the headings out of the page's own setting instead.  A line like
 \"2.2 Arguments\" - a dotted section number, then a capitalized word,
 well short of the page's wrap column, with no page number at the end
 the way TOC entries have - reads as a section heading, its dot count
@@ -2520,7 +2836,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 10
+(defconst pdf-text-render-version 11
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")
@@ -2628,10 +2944,11 @@ error instead of an empty buffer."
           (let* ((outline (pdf-info-outline))
                  (rendered (pdf-text-render-pages
                             raw layouts
-                            (pdf-text-page-headings outline 1 (length raw))))
+                            (pdf-text-page-headings outline 1 (length raw))
+                            (null outline)))
                  (pages (if outline
                             (pdf-text--interleave-outline rendered outline)
-                          (pdf-text--synthesize-headings rendered))))
+                          rendered)))
             (setq buf (get-buffer-create name))
             (with-current-buffer buf
               (let ((inhibit-read-only t))

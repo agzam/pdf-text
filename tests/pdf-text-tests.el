@@ -1023,6 +1023,24 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
                                        "body line three filling the column"
                                        "body line four ends here")))))
 
+  (it "survives a record with no ink geometry among the page's lines"
+    ;; the Manual de la Nueva Gramática lays out tab-only records whose
+    ;; every geometry slot is nil; the narrow test read x1 - x0 before
+    ;; any guard and crashed the whole book's render
+    (let* ((pages (list (list (pdf-text-tests--line "body line one filling the column"
+                                                    :base 0.20)
+                              (pdf-text-line-create :text "\t\t")
+                              (pdf-text-tests--line "body line two filling the column"
+                                                    :base 0.22))))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (mapcar #'pdf-text-line-text
+                      (car (pdf-text-remove-marginal-lines pages profiles)))
+              :to-equal '("body line one filling the column"
+                          "\t\t"
+                          "body line two filling the column"))))
+
   (it "strips a running head sharing the folio's baseline"
     (let* ((pages (mapcar
                    (lambda (n)
@@ -1957,6 +1975,151 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
              '("3 apples fell\nA long full width line sets the page wrap column for this page"))
             :to-equal
             '("3 apples fell\nA long full width line sets the page wrap column for this page"))))
+
+(describe "pdf-text--dotted-number-level"
+  (it "reads the dot count as the org level"
+    (expect (pdf-text--dotted-number-level "2.2 Arguments") :to-equal 2)
+    (expect (pdf-text--dotted-number-level "1.2.2.1 Improper Premise") :to-equal 4))
+
+  (it "tolerates a trailing dot on the number"
+    (expect (pdf-text--dotted-number-level "1.2. Background") :to-equal 2))
+
+  (it "rejects a single number: exercises and footnotes open with one"
+    (expect (pdf-text--dotted-number-level "1. Of course each author") :to-be nil))
+
+  (it "rejects a trailing page number: that is a TOC entry"
+    (expect (pdf-text--dotted-number-level "2.2 Arguments 20") :to-be nil)))
+
+(describe "pdf-text--heading-clusters"
+  (it "keeps styles heading enough distinct pages, tallest first"
+    (expect (pdf-text--heading-clusters
+             (append (cl-loop for page from 1 to 6 collect (cons 0.021 page))
+                     (cl-loop for page from 1 to 8 collect (cons 0.018 page)))
+             0.015)
+            :to-equal '((0.021 . 0.021) (0.018 . 0.018))))
+
+  (it "drops a style on too few pages however many blocks it has"
+    ;; a cover spread sets many display lines on two pages
+    (expect (pdf-text--heading-clusters
+             (append (make-list 4 (cons 0.030 1)) (make-list 4 (cons 0.030 2))
+                     (cl-loop for page from 1 to 5 collect (cons 0.018 page)))
+             0.015)
+            :to-equal '((0.018 . 0.018))))
+
+  (it "reads nearby heights as one style"
+    (expect (pdf-text--heading-clusters
+             (cl-loop for page from 1 to 6
+                      collect (cons (if (cl-oddp page) 0.0210 0.0215) page))
+             0.015)
+            :to-equal '((0.0210 . 0.0215)))))
+
+(describe "pdf-text--cluster-level"
+  (it "ranks a height by its cluster, capped at pdf-text-synth-levels"
+    (let ((clusters '((0.030 . 0.030) (0.021 . 0.022) (0.018 . 0.018)
+                      (0.016 . 0.016) (0.015 . 0.015))))
+      (expect (pdf-text--cluster-level 0.0215 clusters) :to-equal 2)
+      (expect (pdf-text--cluster-level 0.015 clusters)
+              :to-equal pdf-text-synth-levels)
+      (expect (pdf-text--cluster-level 0.014 clusters) :to-be nil))))
+
+(describe "geometry heading synthesis"
+  (cl-flet ((synth (pages) (pdf-text-render-lines
+                            (mapcar #'pdf-text-tests--page pages) nil nil t))
+            (body-page (&rest head-specs)
+              (append head-specs
+                      '(("prose fills the column all the way to the right edge" :base 0.5)
+                        ("and continues to a second full line of body text here")
+                        ("and a third full body line keeps the profile honest")))))
+    (it "promotes a numbered body-size line and leaves single numbers alone"
+      (let ((page (car (synth (list (body-page
+                                     '("2.2 Arguments" :x1 0.40 :base 0.30)
+                                     '("1. Of course this line stays" :x1 0.60 :gap 2)))))))
+        (expect page :to-match "^\\*\\* 2\\.2 Arguments")
+        (expect page :not :to-match "^\\*+ 1\\. Of course")))
+
+    (it "promotes a recurring display style at its cluster's rank"
+      (let ((pages (synth
+                    (cl-loop for n in '("One" "Two" "Three" "Four" "Five")
+                             collect (body-page
+                                      (list (concat "Alpha " n)
+                                            :x1 0.40 :base 0.30 :height 0.021))))))
+        (expect (car pages) :to-match "^\\* Alpha One")
+        (expect (nth 4 pages) :to-match "^\\* Alpha Five")))
+
+    (it "leaves a one-spread display style prose: no supported cluster"
+      (let ((pages (synth
+                    (cons (body-page '("Cover Display Type" :x1 0.5 :base 0.30
+                                       :height 0.030))
+                          (cl-loop for n in '("Two" "Three" "Four")
+                                   collect (body-page))))))
+        (expect (car pages) :to-match "^Cover Display Type")
+        (expect (car pages) :not :to-match "\\*+ Cover")))
+
+    (it "merges a bare display number with the title it belongs to"
+      (let ((pages (synth
+                    (cl-loop for n in '("One" "Two" "Three" "Four" "Five")
+                             collect (body-page
+                                      '("3.1" :x1 0.14 :base 0.30 :height 0.021)
+                                      (list (concat "Concepts " n)
+                                            :x0 0.20 :x1 0.45 :gap 0 :height 0.021))))))
+        (expect (car pages) :to-match "^\\*\\* 3\\.1 Concepts One")
+        ;; the consumed half renders nowhere else
+        (expect (car pages) :not :to-match "^Concepts One")))
+
+    (it "merges a worded eyebrow into the larger title under it"
+      (let ((pages (synth
+                    (cl-loop for n in '("One" "Two" "Three" "Four" "Five")
+                             collect (body-page
+                                      '("Chapter 2" :x1 0.30 :base 0.26 :height 0.022)
+                                      (list (concat "Steps " n)
+                                            :x1 0.40 :gap 3 :height 0.0265))))))
+        (expect (car pages) :to-match "^\\* Chapter 2 Steps One")))
+
+    (it "never promotes a line opening inside the margin band"
+      ;; a running head the marginal rules kept: base in the band, not
+      ;; detached from the body below it
+      (let ((page (car (synth (list (body-page
+                                     '("1.2. FUNCTIONAL PROGRAMMING" :x1 0.5
+                                       :base 0.06 :height 0.021)
+                                     '("body right under the head keeps it attached"
+                                       :base 0.08)))))))
+        (expect page :to-match "FUNCTIONAL PROGRAMMING")
+        (expect page :not :to-match "\\*+ 1\\.2\\. FUNCTIONAL")))
+
+    (it "never promotes display-set code: operator glyphs no title carries"
+      (let ((pages (synth
+                    (cl-loop for n from 1 to 5
+                             collect (body-page
+                                      '("= { applying ∗ }" :x0 0.3 :x1 0.5
+                                        :base 0.30 :height 0.021))))))
+        (expect (car pages) :to-match "applying")
+        (expect (car pages) :not :to-match "\\*+ =")))
+
+    (it "escapes a literal star line while its own headings parse"
+      (let ((page (car (synth (list (body-page
+                                     '("2.2 Arguments" :x1 0.40 :base 0.30)
+                                     '("* bullet stays text" :x1 0.40 :gap 2)))))))
+        (expect page :to-match "^\\*\\* 2\\.2 Arguments")
+        (expect page :to-match "\u200B\\* bullet stays text")))
+
+    (it "falls back to the text-only rule when no page has geometry"
+      (expect (pdf-text-render-lines
+               (list (list (pdf-text-line-create
+                            :text "2.2 Arguments")
+                           (pdf-text-line-create
+                            :text "A long full width prose line sets the wrap column here")))
+               nil nil t)
+              :to-equal
+              '("** 2.2 Arguments\n\nA long full width prose line sets the wrap column here")))
+
+    (it "takes the document's clusters from the seed when one is bound"
+      (let* ((pages (list (body-page '("Solo Display" :x1 0.40 :base 0.30
+                                       :height 0.021))))
+             (bare (car (synth pages)))
+             (seeded (let ((pdf-text-extra-heading-levels '((0.021 . 0.021))))
+                       (car (synth pages)))))
+        (expect bare :not :to-match "\\* Solo Display")
+        (expect seeded :to-match "^\\* Solo Display")))))
 
 (describe "pdf-text--scanned-p"
   (it "flags an all-blank document"

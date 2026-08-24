@@ -66,18 +66,41 @@ into the second."
           (prin1-to-string (pdf-text-line-text line))
           (mapconcat #'pdf-corpus--number (cdr (pdf-corpus-record line)) " ")))
 
+(defun pdf-corpus--print-profile (profile)
+  "PROFILE, a `pdf-text--profile' plist, rounded as a case stores it."
+  (format "(:height %s :leading %s :left %s :right %s :space %s)"
+          (pdf-corpus--number (plist-get profile :height))
+          (pdf-corpus--number (plist-get profile :leading))
+          (pdf-corpus--number (plist-get profile :left))
+          (pdf-corpus--number (plist-get profile :right))
+          (pdf-corpus--number (plist-get profile :space))))
+
+(defun pdf-corpus--print-clusters (clusters)
+  "CLUSTERS of heading heights, rounded as a case stores them."
+  (format "(%s)"
+          (mapconcat (lambda (cluster)
+                       (format "(%s . %s)"
+                               (pdf-corpus--number (car cluster))
+                               (pdf-corpus--number (cdr cluster))))
+                     clusters " ")))
+
 (defun pdf-corpus-print-lines (window outline vocabulary facts pages)
   "The lines file for PAGES, a WINDOW of the book, with its OUTLINE.
 WINDOW is (FIRST . LAST), PAGES an alist of (PAGE . LINES), and
 OUTLINE a list of (DEPTH PAGE TITLE) covering the whole document -
 the book's own title and the depth its chapters sit at decide how any
 one page's headings render.  VOCABULARY carries the compounds the
-book hyphenates elsewhere, and FACTS - `pdf-text--recurring-facts'
-over the whole book - the running-head forms and the folio-merged
-count a window cannot establish on its own."
+book hyphenates elsewhere, and FACTS the document-wide readings a
+window cannot establish on its own: the running-head forms and
+folio-merged count, the modal body profile, and the heading-height
+clusters, as `pdf-corpus-script-facts' collects them."
   (concat ";; Captured by `bb corpus-add'; regenerate rather than edit.\n"
-          (format "(:window %S\n :vocabulary %S\n :recurring-forms %S\n :folio-merged %d\n :outline\n (%s)\n :pages\n ("
-                  window vocabulary (car facts) (cdr facts)
+          (format "(:window %S\n :vocabulary %S\n :recurring-forms %S\n :folio-merged %d\n :profile %s\n :heading-levels %s\n :outline\n (%s)\n :pages\n ("
+                  window vocabulary
+                  (plist-get facts :recurring-forms)
+                  (or (plist-get facts :folio-merged) 0)
+                  (pdf-corpus--print-profile (plist-get facts :profile))
+                  (pdf-corpus--print-clusters (plist-get facts :heading-levels))
                   (mapconcat (lambda (entry) (format "%S" entry)) outline "\n  "))
           (mapconcat
            (lambda (page)
@@ -127,6 +150,8 @@ lines it is allowed to lose."
           :vocabulary (plist-get lines :vocabulary)
           :recurring-forms (plist-get lines :recurring-forms)
           :folio-merged (or (plist-get lines :folio-merged) 0)
+          :profile (plist-get lines :profile)
+          :heading-levels (plist-get lines :heading-levels)
           :outline (plist-get lines :outline)
           :pages (mapcar (lambda (page)
                            (cons (car page) (mapcar #'pdf-corpus-line (cdr page))))
@@ -163,8 +188,9 @@ book: the outline is keyed by those numbers.
 
 Everything the reflow reads beyond the page itself - the outline, the
 hyphenation vocabulary, the recurring-form and folio-merged facts, the
-pages either side - comes out of the case, which is what makes this
-render the one the book gets."
+document profile and its heading-height clusters, the pages either
+side - comes out of the case, which is what makes this render the one
+the book gets."
   (let* ((pages (plist-get case :pages))
          (start (car (plist-get case :window)))
          (outline (plist-get case :outline))
@@ -172,14 +198,16 @@ render the one the book gets."
          (pdf-text-extra-vocabulary (plist-get case :vocabulary))
          (pdf-text-extra-recurring-forms (plist-get case :recurring-forms))
          (pdf-text-extra-folio-merged (or (plist-get case :folio-merged) 0))
+         (pdf-text-extra-profile (plist-get case :profile))
+         (pdf-text-extra-heading-levels (plist-get case :heading-levels))
          (reflowed (pdf-text-render-lines
                     (mapcar #'cdr pages)
                     (pdf-text-page-headings entries start (length pages))
-                    start))
+                    start (null outline)))
          (padded (append (make-list (1- start) "") reflowed))
          (headed (if outline
                      (pdf-text--interleave-outline padded entries)
-                   (pdf-text--synthesize-headings padded)))
+                   padded))
          (number (lambda (texts)
                    (cl-loop for page in pages
                             for text in texts
