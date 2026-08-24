@@ -263,7 +263,7 @@ Coordinates are page-relative.  The geometry slots are nil for a line
 built without a layout, and every rule that reads one falls back to
 character heuristics."
   text
-  kind                                  ; nil for prose, `mono' for a listing
+  kind                                  ; nil prose, `mono', `math' or `row'
   align                                 ; nil, `right' or `center'
   x0 x1                                 ; ink edges, left and right
   top bot                               ; ink extent, highest and lowest
@@ -271,7 +271,8 @@ character heuristics."
   height                                ; glyph height, upper quantile of the ink
   space                                 ; median width of the line's spaces
   cv                                    ; advance variation; ~0 is monospaced
-  first-width)                          ; width of the first word
+  first-width                           ; width of the first word
+  claimed)                              ; owned by a lane region; zones keep out
 
 (defun pdf-text--layout-lines (layout)
   "Charlayout LAYOUT split at newline glyphs into per-line glyph lists.
@@ -312,13 +313,16 @@ classification must leave it alone.")
 
 (defun pdf-text--escape-literals (text)
   "TEXT with a zero-width space breaking every org-parseable literal.
-The reflow writes org sub- and superscripts as ^{...}/_{...} and org
-footnotes as [fn:...], and org must parse only what the reflow
-generated: the same forms extracted from the page itself - a line of
-LaTeX or org source in a listing - stay plain text."
+The reflow writes org sub- and superscripts as ^{...}/_{...}, org
+footnotes as [fn:...], and org table rows as |-opened lines, and org
+must parse only what the reflow generated: the same forms extracted
+from the page itself - a line of LaTeX or org source in a listing, a
+bar-ruled page footer - stay plain text."
   (replace-regexp-in-string
-   "\\[fn:" "[\u200Bfn:"
-   (replace-regexp-in-string "\\([_^]\\){" "\\1\u200B{" text)))
+   "\\`\\([ \t]*\\)|" "\\1\u200B|"
+   (replace-regexp-in-string
+    "\\[fn:" "[\u200Bfn:"
+    (replace-regexp-in-string "\\([_^]\\){" "\\1\u200B{" text))))
 
 (defun pdf-text--glyph-baseline (glyphs)
   "The typeset baseline of GLYPHS and its body height, as (BASE . HEIGHT).
@@ -831,6 +835,12 @@ PROFILE's leading, space and column edges are the measures."
                  (prev (and (< 0 i) (aref vec (1- i))))
                  (jump (and prev
                             (pdf-text-line-base line) (pdf-text-line-base prev)
+                            ;; a lane region owns its records: parallel
+                            ;; flows keep their served order, and the
+                            ;; jumps between lane runs are that order,
+                            ;; not a scattered array
+                            (not (pdf-text-line-claimed line))
+                            (not (pdf-text-line-claimed prev))
                             (< (pdf-text-line-base line)
                                (- (pdf-text-line-base prev)
                                   (* pdf-text-fragment-step leading)))
@@ -891,14 +901,612 @@ PROFILE's leading, space and column edges are the measures."
                     (setq i (1+ i))))))))
         (nreverse out)))))
 
+;;; Multicolumn lanes
+
+(defvar pdf-text-gap-factor)
+(defvar pdf-text-monospace-variation)
+(defvar pdf-text-monospace-min-glyphs)
+
+(defvar pdf-text-lane-gutter 3
+  "Width, in space widths, a gutter must keep clear to separate lanes.
+Word gaps in justified prose stretch to a space or two; the white
+channel between the columns of a table runs wider on every row that
+has one.")
+
+(defvar pdf-text-lane-min-rows 3
+  "Rows of side-by-side cells a lane region must show.
+A running head shares its baseline with a folio, and two aligned rows
+can meet by accident; three are set that way.")
+
+(defvar pdf-text-lane-flows-min-rows 4
+  "Side-by-side rows a region must show before it reorders as flows.
+Rendering rows in place is cheap to be wrong about; reading lanes to
+their ends moves records past their neighbours, and three rows of
+accidental alignment - an exercise header, a fragment of a matching
+list - scramble more than they save.")
+
+(defvar pdf-text-lane-math-density 0.2
+  "Fraction of math glyphs above which a lane region is mathematics.
+The zone repair owns aligned maths - a rewrite-rule table, an
+equation array - and renders it verbatim; a lane of phonetic symbols
+beside prose descriptions stays a table.")
+
+(defvar pdf-text-lane-ragged 4
+  "Right-edge spread, in space widths, that reads as ragged cells.
+Facing columns of justified prose end flush; translation pairs end
+where their words do.  The spread of a lane's right edges is what
+tells the two apart when both arrive column by column.")
+
+(defun pdf-text--lane-tabbed-p (line)
+  "Whether LINE carries tab-joined segments."
+  (string-match-p "\t" (pdf-text-line-text line)))
+
+(defun pdf-text--lane-segments (line)
+  "LINE's text split at its tab runs, trimmed, empties dropped."
+  (split-string (pdf-text-line-text line) "\t+" t "[ \t]+"))
+
+(defun pdf-text--lane-rows (lines leading)
+  "LINES clustered into baseline rows, half a LEADING wide, top to bottom.
+Each row is (BASE . CELLS) with CELLS as (INDEX . LINE) in x order,
+INDEX the position in the LINES stream.  Records with no geometry
+stay out; the caller routes them past the regions untouched."
+  (let ((indexed (cl-loop for line in lines
+                          for i from 0
+                          when (and (pdf-text-line-base line)
+                                    (pdf-text-line-x0 line))
+                          collect (cons i line)))
+        rows)
+    (dolist (entry (sort (copy-sequence indexed)
+                         (lambda (a b) (< (pdf-text-line-base (cdr a))
+                                          (pdf-text-line-base (cdr b))))))
+      (let ((base (pdf-text-line-base (cdr entry))))
+        (if (and rows (< (abs (- base (caar rows)))
+                         (* pdf-text-fragment-step leading)))
+            (push entry (cdar rows))
+          (push (cons base (list entry)) rows))))
+    (mapcar (lambda (row)
+              (cons (car row)
+                    (sort (nreverse (cdr row))
+                          (lambda (a b) (< (pdf-text-line-x0 (cdr a))
+                                           (pdf-text-line-x0 (cdr b)))))))
+            (nreverse rows))))
+
+(defun pdf-text--lane-row-gaps (cells)
+  "The x intervals between consecutive CELLS, as ((START . END)...)."
+  (cl-loop for (a b) on cells while b
+           collect (cons (pdf-text-line-x1 (cdr a))
+                         (pdf-text-line-x0 (cdr b)))))
+
+(defun pdf-text--lane-intersect (gutters gaps min-width)
+  "GUTTERS cut down to what GAPS keep open, MIN-WIDTH survivors only."
+  (let (out)
+    (dolist (g gutters (nreverse out))
+      (dolist (gap gaps)
+        (let ((start (max (car g) (car gap)))
+              (end (min (cdr g) (cdr gap))))
+          (when (< (+ start min-width) end)
+            (push (cons start end) out)))))))
+
+(defun pdf-text--lane-crosses-p (line gutters)
+  "Whether LINE's ink reaches inside one of GUTTERS."
+  (cl-some (lambda (g)
+             (and (< (pdf-text-line-x0 line) (cdr g))
+                  (< (car g) (pdf-text-line-x1 line))))
+           gutters))
+
+(defun pdf-text--lane-inside-p (line profile)
+  "Whether LINE's ink sits inside PROFILE's column, margin slack allowed."
+  (let ((space (or (plist-get profile :space) 0.005))
+        (left (plist-get profile :left))
+        (right (plist-get profile :right)))
+    (and left right
+         (<= (- left (* 2 space)) (pdf-text-line-x0 line))
+         (<= (pdf-text-line-x1 line) (+ right (* 2 space))))))
+
+(defun pdf-text--lane-clean-row-p (row profile min-width)
+  "Whether ROW is side-by-side cells inside PROFILE's column.
+Cells split by tabs disqualify - their ink spans lanes - as does a
+cell outside the column: a margin note shares a baseline with the
+body line beside it, and that pair is the page's geometry, not a
+table's.  MIN-WIDTH is the gutter the cells must leave open."
+  (and (<= 2 (length (cdr row)))
+       (cl-every (lambda (cell)
+                   (and (not (pdf-text--lane-tabbed-p (cdr cell)))
+                        (pdf-text--lane-inside-p (cdr cell) profile)))
+                 (cdr row))
+       (cl-some (lambda (gap) (< (+ (car gap) min-width) (cdr gap)))
+                (pdf-text--lane-row-gaps (cdr row)))))
+
+(defun pdf-text--lane-runs (rows profile)
+  "Maximal runs of ROWS whose cells keep a common gutter open.
+Each region comes back as (:rows ROWS :gutters GUTTERS :clean N):
+the run's rows, the white channels its side-by-side rows agree on,
+and how many rows brought such cells.  A run opens at a clean
+multi-cell row, takes tab-joined rows and single cells nested in a
+lane as it goes, and closes on a row that crosses the gutters, walks
+outside the column, or steps more than a paragraph gap down the
+page.  PROFILE gives the measures."
+  (let* ((space (or (plist-get profile :space) 0.005))
+         (leading (or (plist-get profile :leading) 0.02))
+         (min-width (* pdf-text-lane-gutter space))
+         regions run gutters clean last-base)
+    (cl-flet ((close-run ()
+                (when (and run (<= pdf-text-lane-min-rows clean) gutters)
+                  (push (list :rows (nreverse run) :gutters gutters :clean clean)
+                        regions))
+                (setq run nil gutters nil clean 0 last-base nil)))
+      (dolist (row rows)
+        (let* ((cells (cdr row))
+               (base (car row))
+               (stepped (and last-base
+                             (< (* pdf-text-gap-factor leading)
+                                (- base last-base)))))
+          (when stepped (close-run))
+          (cond
+           ((null run)
+            (when (pdf-text--lane-clean-row-p row profile min-width)
+              (setq run (list row)
+                    gutters (cl-remove-if
+                             (lambda (gap)
+                               (<= (cdr gap) (+ (car gap) min-width)))
+                             (pdf-text--lane-row-gaps cells))
+                    clean 1
+                    last-base base)))
+           ((pdf-text--lane-clean-row-p row profile min-width)
+            (let ((cut (pdf-text--lane-intersect
+                        gutters (pdf-text--lane-row-gaps cells) min-width)))
+              (if cut
+                  (progn (push row run)
+                         (setq gutters cut
+                               clean (1+ clean)
+                               last-base base))
+                (close-run)
+                (when (pdf-text--lane-clean-row-p row profile min-width)
+                  (setq run (list row)
+                        gutters (cl-remove-if
+                                 (lambda (gap)
+                                   (<= (cdr gap) (+ (car gap) min-width)))
+                                 (pdf-text--lane-row-gaps cells))
+                        clean 1
+                        last-base base)))))
+           ((cl-some (lambda (cell) (pdf-text--lane-tabbed-p (cdr cell))) cells)
+            (push row run)
+            (setq last-base base))
+           ((and (null (cdr cells))
+                 (pdf-text--lane-inside-p (cdr (car cells)) profile)
+                 (not (pdf-text--lane-crosses-p (cdr (car cells)) gutters)))
+            (push row run)
+            (setq last-base base))
+           (t (close-run)))))
+      (close-run))
+    (nreverse regions)))
+
+(defun pdf-text--lane-spans (region profile)
+  "The lane x intervals of REGION, between column edge and gutter.
+Ordered left to right, one interval more than REGION has gutters.
+PROFILE's column edges close the two open ends."
+  (let* ((space (or (plist-get profile :space) 0.005))
+         (gutters (sort (copy-sequence (plist-get region :gutters))
+                        (lambda (a b) (< (car a) (car b)))))
+         (left (- (or (plist-get profile :left) 0.0) (* 2 space)))
+         (right (+ (or (plist-get profile :right) 1.0) (* 2 space)))
+         (starts (cons left (mapcar #'cdr gutters)))
+         (ends (append (mapcar #'car gutters) (list right))))
+    (cl-mapcar #'cons starts ends)))
+
+(defun pdf-text--lane-of (line spans &optional by-end)
+  "Index of the lane of SPANS holding LINE, or nil.
+The ink's left edge decides; BY-END reads the right edge instead, for
+a tab-prefixed record whose leading tab glyphs lie about its start."
+  (let ((x (if by-end (pdf-text-line-x1 line) (pdf-text-line-x0 line))))
+    (and x (cl-position-if (lambda (span)
+                             (and (<= (car span) x) (< x (cdr span))))
+                           spans))))
+
+(defun pdf-text--lane-region-cells (region)
+  "Every record of REGION, cells and continuations alike."
+  (cl-loop for row in (plist-get region :rows)
+           append (mapcar #'cdr (cdr row))))
+
+(defun pdf-text--lane-mathish-p (region)
+  "Whether REGION's glyphs read as mathematics rather than a table.
+Char-weighted over every cell: a lane of one-glyph phonetic symbols
+cannot outvote the prose beside it, an equation array with prose-free
+cells cannot hide behind its numbers."
+  (let ((mathy 0) (wordy 0))
+    (dolist (line (pdf-text--lane-region-cells region))
+      (pcase-let ((`(,m . ,w) (pdf-text--math-chars (pdf-text-line-text line))))
+        (cl-incf mathy m)
+        (cl-incf wordy w)))
+    (and (< 0 (+ mathy wordy))
+         (<= pdf-text-lane-math-density (/ (float mathy) (+ mathy wordy))))))
+
+(defun pdf-text--lane-mono-p (region)
+  "Whether REGION's cells are mostly monospaced - a listing, not a table."
+  (let ((cells (pdf-text--lane-region-cells region)))
+    (< (/ (length cells) 2)
+       (cl-count-if (lambda (line)
+                      (let ((cv (pdf-text-line-cv line)))
+                        (and cv (< cv pdf-text-monospace-variation)
+                             (<= pdf-text-monospace-min-glyphs
+                                 (length (string-trim (pdf-text-line-text line)))))))
+                    cells))))
+
+(defun pdf-text--lane-column-served-p (region spans)
+  "Whether poppler served REGION lane by lane rather than row by row.
+Measured as the fraction of consecutive stream records that stay in
+the lane of SPANS the previous one occupied: lane runs push it toward
+one, row-interleaved cells toward zero.  Tab-joined records span
+lanes and stay out of the vote."
+  (let* ((ordered (cl-loop for row in (plist-get region :rows)
+                           append (cl-remove-if
+                                   (lambda (cell)
+                                     (pdf-text--lane-tabbed-p (cdr cell)))
+                                   (cdr row))))
+         (stream (sort ordered (lambda (a b) (< (car a) (car b)))))
+         (same 0) (pairs 0))
+    (cl-loop for (a b) on stream while b
+             for la = (pdf-text--lane-of (cdr a) spans)
+             for lb = (pdf-text--lane-of (cdr b) spans)
+             when (and la lb)
+             do (cl-incf pairs)
+             and do (when (eql la lb) (cl-incf same)))
+    (and (< 0 pairs) (<= 0.5 (/ (float same) pairs)))))
+
+(defun pdf-text--lane-numeric (region spans)
+  "The lane of SPANS that holds REGION's bare numbers, or nil.
+Three cells and more, digits alone in every one: the page-number
+column of a table of contents."
+  (let ((counts (make-vector (length spans) 0))
+        (breakers (make-vector (length spans) nil)))
+    (dolist (row (plist-get region :rows))
+      (dolist (cell (cdr row))
+        (when-let* ((lane (and (not (pdf-text--lane-tabbed-p (cdr cell)))
+                               (pdf-text--lane-of (cdr cell) spans))))
+          (if (string-match-p "\\`[0-9]+\\'"
+                              (string-trim (pdf-text-line-text (cdr cell))))
+              (cl-incf (aref counts lane))
+            (aset breakers lane t)))))
+    (cl-loop for lane from 0 below (length spans)
+             when (and (<= 3 (aref counts lane))
+                       (not (aref breakers lane)))
+             return lane)))
+
+(defun pdf-text--lane-wordless-lanes (region spans)
+  "Lane indices of SPANS whose REGION cells mostly carry no word.
+A lane of bare digits, brackets or operator debris is a truth table,
+an equation column or a listing's punctuation, not entries a reader
+follows."
+  (let ((wordless (make-vector (length spans) 0))
+        (total (make-vector (length spans) 0)))
+    (dolist (row (plist-get region :rows))
+      (dolist (cell (cdr row))
+        (when-let* ((lane (and (not (pdf-text--lane-tabbed-p (cdr cell)))
+                               (pdf-text--lane-of (cdr cell) spans))))
+          (cl-incf (aref total lane))
+          (when (pdf-text--wordless-p (pdf-text-line-text (cdr cell)))
+            (cl-incf (aref wordless lane))))))
+    (cl-loop for lane from 0 below (length spans)
+             when (and (< 0 (aref total lane))
+                       (< (aref total lane) (* 2 (aref wordless lane))))
+             collect lane)))
+
+(defun pdf-text--lane-enumerated-p (region spans)
+  "Whether two and more lanes of REGION run one enumerated list.
+Cells opening on list markers in half a lane's rows, twice over
+SPANS, are a numbered or bulleted list set two-up to save paper: one
+flow wrapped into lanes, not rows that pair."
+  (let ((marked (make-vector (length spans) 0))
+        (total (make-vector (length spans) 0)))
+    (dolist (row (plist-get region :rows))
+      (dolist (cell (cdr row))
+        (when-let* ((lane (and (not (pdf-text--lane-tabbed-p (cdr cell)))
+                               (pdf-text--lane-of (cdr cell) spans))))
+          (cl-incf (aref total lane))
+          (when (pdf-text--list-marker
+                 (string-trim (pdf-text-line-text (cdr cell))) t)
+            (cl-incf (aref marked lane))))))
+    (<= 2 (cl-loop for lane from 0 below (length spans)
+                   count (and (< 0 (aref total lane))
+                              (<= (aref total lane)
+                                  (* 2 (aref marked lane))))))))
+
+(defun pdf-text--lane-ragged-p (region spans profile)
+  "Whether every lane of REGION ends where its words do, not flush.
+SPANS name the lanes; PROFILE's space width scales the spread.
+Justified facing columns agree on their right edges to a space;
+translation pairs scatter theirs."
+  (let ((space (or (plist-get profile :space) 0.005))
+        (edges (make-vector (length spans) nil)))
+    (dolist (row (plist-get region :rows))
+      (when (<= 2 (length (cdr row)))
+        (dolist (cell (cdr row))
+          (when-let* ((lane (and (not (pdf-text--lane-tabbed-p (cdr cell)))
+                                 (pdf-text--lane-of (cdr cell) spans))))
+            (push (pdf-text-line-x1 (cdr cell)) (aref edges lane))))))
+    (cl-loop for lane from 0 below (length spans)
+             for xs = (aref edges lane)
+             always (or (null (cdr xs))
+                        (<= (* pdf-text-lane-ragged space)
+                            (- (apply #'max xs) (apply #'min xs)))))))
+
+(defun pdf-text--lane-classify (region spans profile)
+  "How REGION, its lanes SPANS, renders: `rows', `flows' or nil.
+Cells served row by row are rows - the page was written that way.
+Cells served lane by lane are rows only when a numeric lane pairs
+every entry with its number, or when two lanes ragged by PROFILE's
+measure pair one to one; anything else - parallel item lists, facing
+columns of justified prose - reads each lane to its end, which for
+lane-served records means leaving them exactly as they came.
+
+Nil declines the region.  Lanes that are all wordless are a truth
+table or an equation array in digits the math gate cannot see, and a
+flows region with even one wordless lane is tabular debris - a
+statistics block's bracket column - not lists a reader follows."
+  (let ((wordless (pdf-text--lane-wordless-lanes region spans)))
+    (cond
+     ((eql (length wordless) (length spans)) nil)
+     ((not (pdf-text--lane-column-served-p region spans)) 'rows)
+     ((pdf-text--lane-numeric region spans) 'rows)
+     ((pdf-text--lane-enumerated-p region spans) 'flows)
+     ((and (= 2 (length spans))
+           (let ((rows (cl-remove-if-not
+                        (lambda (row) (<= 2 (length (cdr row))))
+                        (plist-get region :rows))))
+             (<= 0.8 (/ (float (cl-count-if
+                                (lambda (row) (= 2 (length (cdr row))))
+                                rows))
+                        (max 1 (length rows)))))
+           (pdf-text--lane-ragged-p region spans profile))
+      'rows)
+     (wordless nil)
+     (t 'flows))))
+
+(defun pdf-text--lane-continuation-p (row spans refs profile)
+  "Whether ROW continues the cells of the row above rather than starting one.
+A continuation cell leads with the whitespace its page indented it by,
+or sits in from the left edge REFS records for its lane of SPANS.
+Every cell must read so - a row mixing fresh cells with indented ones
+is a new row whose lanes happen to differ.  PROFILE's space width is
+the indent tolerance."
+  (let ((space (or (plist-get profile :space) 0.005)))
+    (cl-every
+     (lambda (cell)
+       (let ((line (cdr cell)))
+         (or (string-match-p "\\`[ \t]" (pdf-text-line-text line))
+             (when-let* ((lane (pdf-text--lane-of line spans))
+                         (ref (aref refs lane)))
+               (< (+ ref space) (pdf-text-line-x0 line))))))
+     (cdr row))))
+
+(defun pdf-text--lane-append-cell (cells lane text)
+  "Join TEXT onto the LANE cell of CELLS, a vector of strings."
+  (let ((prev (aref cells lane)))
+    (aset cells lane
+          (if (or (null prev) (string-empty-p prev))
+              text
+            (pdf-text--join-lines prev text)))))
+
+(defun pdf-text--lane-row-fill (row spans refs cells)
+  "Distribute ROW's records over CELLS, one string per lane of SPANS.
+Tab-joined records contribute their segments to consecutive lanes
+from the lane their ink opens in - or, with one segment, the lane
+their ink ends in, since leading tab glyphs lie about the start.
+REFS learns each lane's left edge from the cells that land there."
+  (dolist (cell (cdr row))
+    (let* ((line (cdr cell))
+           (text (string-trim (pdf-text-line-text line))))
+      (if (pdf-text--lane-tabbed-p line)
+          (let* ((segments (pdf-text--lane-segments line))
+                 (lane (or (if (cdr segments)
+                               (pdf-text--lane-of line spans)
+                             (pdf-text--lane-of line spans 'by-end))
+                           0)))
+            (dolist (segment segments)
+              (pdf-text--lane-append-cell cells (min lane (1- (length spans)))
+                                          segment)
+              (setq lane (1+ lane))))
+        (let ((lane (or (pdf-text--lane-of line spans) 0)))
+          (when (or (null (aref refs lane))
+                    (< (pdf-text-line-x0 line) (aref refs lane)))
+            (aset refs lane (pdf-text-line-x0 line)))
+          (pdf-text--lane-append-cell cells lane text))))))
+
+(defun pdf-text--lane-row-records (region spans refs profile)
+  "REGION's rows assembled into cell vectors, as ((CELLS . RECORDS)...).
+CELLS is one string per lane of SPANS; RECORDS the member lines the
+row and its continuations were drawn from.  REFS accumulates lane
+left edges for the continuation test; PROFILE scales its indent."
+  (let (rows)
+    (dolist (row (plist-get region :rows))
+      (if (and rows
+               (pdf-text--lane-continuation-p row spans refs profile))
+          (progn
+            (pdf-text--lane-row-fill row spans refs (caar rows))
+            (setf (cdar rows)
+                  (append (cdar rows) (mapcar #'cdr (cdr row)))))
+        (let ((cells (make-vector (length spans) nil)))
+          (pdf-text--lane-row-fill row spans refs cells)
+          (push (cons cells (mapcar #'cdr (cdr row))) rows))))
+    (nreverse rows)))
+
+(defun pdf-text--lane-table (region spans profile)
+  "REGION rendered as org table row records, one `pdf-text-line' per row.
+Cells pad to their lane's widest entry, so the rows align as plain
+text exactly as org would align them; a literal bar inside a cell
+becomes a broken bar, the one glyph org cannot mistake for a column.
+SPANS name the lanes and PROFILE the measures."
+  (let* ((refs (make-vector (length spans) nil))
+         (rows (pdf-text--lane-row-records region spans refs profile))
+         (widths (make-vector (length spans) 0)))
+    (dolist (row rows)
+      (dotimes (lane (length spans))
+        (let ((text (aref (car row) lane)))
+          (when text
+            (aset (car row) lane
+                  (setq text (replace-regexp-in-string "|" "\u00A6" text)))
+            (aset widths lane (max (aref widths lane) (string-width text)))))))
+    (mapcar
+     (lambda (row)
+       (let* ((cells (cl-loop for lane from 0 below (length spans)
+                              for text = (or (aref (car row) lane) "")
+                              collect (concat text
+                                              (make-string
+                                               (- (aref widths lane)
+                                                  (string-width text))
+                                               ?\s))))
+              (record (pdf-text--merge-records
+                       (cdr row)
+                       (concat "| " (mapconcat #'identity cells " | ") " |"))))
+         (setf (pdf-text-line-kind record) 'row)
+         (setf (pdf-text-line-cv record) nil)
+         (setf (pdf-text-line-claimed record) t)
+         record))
+     rows)))
+
+(defun pdf-text--lane-adopt (rows spans regions profile min-width)
+  "Stray ROWS that fit the lanes a numeric-lane region establishes.
+A table of contents runs its entries in blocks; a pair cut off from
+the block by prose - the first entry of the page, above the chapter
+line - is still an entry.  The row must be clean side-by-side cells
+that keep clear of SPANS' gutters, one of them bare digits in the
+numeric lane.  REGIONS' member rows stay out.  PROFILE and MIN-WIDTH
+are the run measures.  Returns each adopted row as its own region."
+  (let ((members (make-hash-table :test 'eq))
+        (numeric (cl-loop for region in regions
+                          for rs = (cdr (assq region spans))
+                          when (and rs (eq 'rows (plist-get region :class))
+                                    (pdf-text--lane-numeric region rs))
+                          return (cons region rs))))
+    (dolist (region regions)
+      (dolist (row (plist-get region :rows))
+        (puthash row t members)))
+    (when numeric
+      (let* ((region (car numeric))
+             (rs (cdr numeric))
+             (lane (pdf-text--lane-numeric region rs))
+             (gutters (plist-get region :gutters))
+             adopted)
+        (dolist (row rows)
+          (when (and (not (gethash row members))
+                     (pdf-text--lane-clean-row-p row profile min-width)
+                     (cl-notany (lambda (cell)
+                                  (pdf-text--lane-crosses-p (cdr cell) gutters))
+                                (cdr row))
+                     (cl-some (lambda (cell)
+                                (and (eql lane (pdf-text--lane-of (cdr cell) rs))
+                                     (string-match-p
+                                      "\\`[0-9]+\\'"
+                                      (string-trim
+                                       (pdf-text-line-text (cdr cell))))))
+                              (cdr row)))
+            (push (list :rows (list row) :gutters gutters :clean 1
+                        :class 'rows)
+                  adopted)))
+        (nreverse adopted)))))
+
+(defun pdf-text--mark-lanes (lines profile)
+  "LINES with multicolumn regions read as the page set them.
+Rows of side-by-side cells become org table rows; parallel lane
+flows keep their served order and are claimed against the zone
+repair, whose row-sort is what braided them into pseudo-prose.
+PROFILE gives the column and the measures."
+  (let ((leading (plist-get profile :leading)))
+    (if (not (and leading (plist-get profile :left) (plist-get profile :right)))
+        lines
+      (let* ((min-width (* pdf-text-lane-gutter
+                           (or (plist-get profile :space) 0.005)))
+             (rows (pdf-text--lane-rows lines leading))
+             (regions (cl-remove-if
+                       (lambda (region)
+                         (or (pdf-text--lane-mathish-p region)
+                             (pdf-text--lane-mono-p region)))
+                       (pdf-text--lane-runs rows profile)))
+             (spans (mapcar (lambda (region)
+                              (cons region
+                                    (pdf-text--lane-spans region profile)))
+                            regions)))
+        (dolist (region regions)
+          (plist-put region :class
+                     (pdf-text--lane-classify region (cdr (assq region spans))
+                                              profile)))
+        (setq regions
+              (cl-remove-if (lambda (region)
+                              (pcase (plist-get region :class)
+                                ('flows (< (plist-get region :clean)
+                                           pdf-text-lane-flows-min-rows))
+                                ('rows nil)
+                                (_ t)))
+                            regions))
+        (setq regions
+              (append regions
+                      (pdf-text--lane-adopt rows spans regions profile
+                                            min-width)))
+        (if (null regions)
+            lines
+          (let ((replacement (make-hash-table :test 'eq))
+                (skip (make-hash-table :test 'eq)))
+            (dolist (region regions)
+              (let* ((members (pdf-text--lane-region-cells region))
+                     (rs (or (cdr (assq region spans))
+                             (pdf-text--lane-spans region profile)))
+                     ;; splice where the stream first touches the
+                     ;; region, whichever lane was served first
+                     (first (cl-loop with best = nil with at = nil
+                                     for row in (plist-get region :rows)
+                                     do (dolist (cell (cdr row))
+                                          (when (or (null at)
+                                                    (< (car cell) at))
+                                            (setq at (car cell)
+                                                  best (cdr cell))))
+                                     finally return best)))
+                (pcase (plist-get region :class)
+                  ('rows
+                   (let ((records (pdf-text--lane-table region rs profile)))
+                     (dolist (line members) (puthash line t skip))
+                     (puthash first records replacement)))
+                  ('flows
+                   ;; each lane read to its end, left to right: the
+                   ;; stream may serve the right lane first, and the
+                   ;; reader gets the lanes in page order either way
+                   (let ((ordered
+                          (mapcar #'cdr
+                                  (sort (cl-loop for row in (plist-get region :rows)
+                                                 append (copy-sequence (cdr row)))
+                                        (lambda (a b)
+                                          (let ((la (or (pdf-text--lane-of (cdr a) rs)
+                                                        0))
+                                                (lb (or (pdf-text--lane-of (cdr b) rs)
+                                                        0)))
+                                            (if (eql la lb)
+                                                (< (car a) (car b))
+                                              (< la lb)))))))
+                         ;; ragged lanes are item lists, one entry per
+                         ;; typeset line, and reflowing them would only
+                         ;; braid neighbours back together; flush lanes
+                         ;; are facing prose columns and keep reflowing
+                         (fixed (pdf-text--lane-ragged-p region rs profile)))
+                     (dolist (line members)
+                       (setf (pdf-text-line-claimed line) t)
+                       (when (and fixed (null (pdf-text-line-kind line)))
+                         (setf (pdf-text-line-kind line) 'fixed))
+                       (puthash line t skip))
+                     (puthash first ordered replacement))))))
+            (cl-loop for line in lines
+                     for records = (gethash line replacement)
+                     append (cond (records records)
+                                  ((gethash line skip) nil)
+                                  (t (list line))))))))))
+
 (defun pdf-text-reading-order (pages)
   "PAGES of `pdf-text-line' records, cleaned and in repaired reading order.
 Script fragments rejoin the typeset line poppler split them from, by
-`pdf-text--merge-script-fragments', and the aligned arrays reading
-order scattered come back row by row, by `pdf-text--reassemble-zones'.
-These are the lines the reflow reads, and the lines the corpus
-measures survival against: the repairs merge and reorder records,
-never drop one."
+`pdf-text--merge-script-fragments'; multicolumn regions come back as
+table rows or stay lane-ordered flows, by `pdf-text--mark-lanes'; and
+the aligned arrays reading order scattered come back row by row, by
+`pdf-text--reassemble-zones'.  These are the lines the reflow reads,
+and the lines the corpus measures survival against: the repairs
+merge and reorder records, never drop one."
   (let* ((page-lines (pdf-text-clean-pages pages))
          ;; the seeded document profile reaches the repairs too: the
          ;; merge and zone thresholds are leadings and spaces, and a
@@ -906,7 +1514,9 @@ never drop one."
          (profile (or pdf-text-extra-profile (pdf-text--profile page-lines))))
     (mapcar (lambda (lines)
               (pdf-text--reassemble-zones
-               (pdf-text--merge-script-fragments lines profile)
+               (pdf-text--mark-lanes
+                (pdf-text--merge-script-fragments lines profile)
+                profile)
                profile))
             page-lines)))
 
@@ -936,7 +1546,8 @@ A line too short to judge on its own takes the tag from a neighbour of
 the same size: a closing brace alone on its line belongs to the
 listing above it."
   (dolist (line lines)
-    (when-let* ((cv (pdf-text-line-cv line)))
+    (when-let* ((cv (pdf-text-line-cv line))
+                ((null (pdf-text-line-kind line))))
       (when (and (< cv pdf-text-monospace-variation)
                  (<= pdf-text-monospace-min-glyphs
                      (length (string-trim (pdf-text-line-text line)))))
@@ -1364,6 +1975,9 @@ mid-text), the folio-merged ones only ever go from the band itself."
                               (< (- (pdf-text-line-x1 line) (pdf-text-line-x0 line))
                                  (* 0.6 width)))))
             (when (and base
+                       ;; a lane region proved its rows aligned three
+                       ;; deep; page furniture never does
+                       (not (pdf-text-line-claimed line))
                        (or (< base pdf-text-margin-band)
                            (< (- 1.0 pdf-text-margin-band) base))
                        (or narrow
@@ -1700,7 +2314,7 @@ rejoins its word without a space."
 (cl-defstruct (pdf-text-block (:constructor pdf-text-block-create)
                               (:copier nil))
   "A run of lines that belong together: a paragraph, a list item, a listing."
-  kind                                  ; para, item, mono, fixed or blank
+  kind                                  ; para, item, mono, table, fixed, blank
   reason                                ; why the block before it ended
   lines                                 ; in reverse while it grows
   left body-x marker drop-cap)
@@ -1849,8 +2463,12 @@ geometry - PROFILE's body measures, PAGE-WIDTH - decides the rest."
      ((string-blank-p (pdf-text-line-text line)) 'blank)
      ((eq 'blank kind) 'text)
      ((not (eq (pdf-text-line-kind line)
-               (and (memq kind '(mono math)) kind)))
+               (pcase kind ('table 'row) ((or 'mono 'math) kind) (_ nil))))
       'face)
+     ;; a wrapped table row stands two typeset lines tall, so the step
+     ;; between row records exceeds any gap factor; consecutive rows
+     ;; are one table regardless
+     ((eq 'table kind) nil)
      ((memq kind '(mono math))
       (and (pdf-text--gap-break-p line prev profile) 'gap))
      ((eq 'fixed kind)
@@ -1901,6 +2519,8 @@ PROFILE gives the column margin the block's own is measured from."
                        (< (+ column-left space) left)))
          (marker (pdf-text--list-marker text indented))
          (kind (cond ((string-blank-p text) 'blank)
+                     ((eq 'row (pdf-text-line-kind line)) 'table)
+                     ((eq 'fixed (pdf-text-line-kind line)) 'fixed)
                      ((pdf-text--mono-p line) 'mono)
                      ((eq 'math (pdf-text-line-kind line)) 'math)
                      ((pdf-text--preformatted-p text) 'fixed)
@@ -1954,7 +2574,7 @@ A short line is the end of a paragraph, an entry or an item; the rule
 needs the block's measure - PROFILE's column edge only where the block
 starts at it, PAGE-WIDTH throughout - so it runs once the grouping
 settled it."
-  (if (or (memq (pdf-text-block-kind block) '(mono math fixed blank))
+  (if (or (memq (pdf-text-block-kind block) '(mono math table fixed blank))
           (< (length (pdf-text-block-lines block)) 2))
       (list block)
     (let* ((right (pdf-text--block-margin block profile))
@@ -2110,6 +2730,15 @@ tight list - stay together."
         (last (car (last (pdf-text-block-lines previous))))
         (first (car (pdf-text-block-lines block))))
     (cond
+     ;; two lane-flow records render verbatim back to back; only the
+     ;; page's own air separates the items of a list read lane-wise
+     ((and last first
+           (eq 'fixed (pdf-text-line-kind last))
+           (eq 'fixed (pdf-text-line-kind first))
+           leading
+           (pdf-text-line-base last) (pdf-text-line-base first))
+      (< (* pdf-text-blank-factor leading)
+         (- (pdf-text-line-base first) (pdf-text-line-base last))))
      ((memq (pdf-text-block-reason block) '(indent dedent size face fixed gap)) t)
      ((not (and leading last first
                 (pdf-text-line-base last) (pdf-text-line-base first)))
@@ -2268,9 +2897,10 @@ heading a merged pair makes carries both halves' text already."
                     (pcase kind
                       ((or 'mono 'math)
                        (pdf-text--render-mono block profile listing-left))
-                      ('fixed (mapconcat (lambda (line)
-                                           (string-trim-right (pdf-text-line-text line)))
-                                         (pdf-text-block-lines block) "\n"))
+                      ((or 'table 'fixed)
+                       (mapconcat (lambda (line)
+                                    (string-trim-right (pdf-text-line-text line)))
+                                  (pdf-text-block-lines block) "\n"))
                       ('item (pdf-text--cite-footnotes
                               (pdf-text--render-item block vocabulary indent)
                               notes))
@@ -2836,7 +3466,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 11
+(defconst pdf-text-render-version 12
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

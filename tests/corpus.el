@@ -226,6 +226,14 @@ merge and reorder records, never drop one, which
            for lines in (pdf-text-reading-order (mapcar #'cdr pages))
            collect (cons (car entry) (mapcar #'pdf-text-line-text lines))))
 
+(defun pdf-corpus-case-sources (case)
+  "CASE's per-page source lines, read under its document facts.
+The reading-order repairs measure leadings, spaces and column edges
+against the seeded profile, so sources computed bare would diverge
+from the render exactly where those measures decide a region."
+  (let ((pdf-text-extra-profile (plist-get case :profile)))
+    (pdf-corpus-sources (plist-get case :pages))))
+
 ;;; Invariants
 
 (defvar pdf-corpus-insert-tolerance 200
@@ -398,7 +406,7 @@ it tolerates."
 RENDERED is `pdf-corpus-render' output, computed when not supplied."
   (let* ((page (pdf-corpus-subject case))
          ;; before the render, whose cleanups mutate the records in place
-         (source (alist-get page (pdf-corpus-sources (plist-get case :pages))))
+         (source (alist-get page (pdf-corpus-case-sources case)))
          (rendered (or rendered (pdf-corpus-render case)))
          (meta (plist-get case :meta)))
     (pdf-corpus-violations

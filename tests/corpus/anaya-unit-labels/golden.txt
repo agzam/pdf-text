@@ -37,9 +37,15 @@ Indique si los siguientes sustantivos pueden variar de número o no. Después, c
 
 Ej.: casas → casa: sí varía. nupcias: no varía.
 
-1. Facciones → 7. Pánico →
-2. Sillas → 8. Faldas →
-3. Sed → 9. Oeste →
-4. Ley → 10. Salud →
-5. Caos → 11. Ojeras →
-6. Flores → 12. Convoyes →
+1. Facciones →
+2. Sillas →
+3. Sed →
+4. Ley →
+5. Caos →
+6. Flores →
+7. Pánico →
+8. Faldas →
+9. Oeste →
+10. Salud →
+11. Ojeras →
+12. Convoyes →

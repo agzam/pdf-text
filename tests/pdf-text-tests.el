@@ -538,6 +538,331 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
       (expect (mapcar #'pdf-text-line-text (car (pdf-text-reading-order pages)))
               :to-equal '("plain first line" "plain second line")))))
 
+;;; Multicolumn lanes
+
+(defun pdf-text-tests--lanes (specs)
+  "SPECS as one page run through `pdf-text--mark-lanes'."
+  (let* ((lines (pdf-text-tests--page specs))
+         (profile (pdf-text--profile (list lines))))
+    (pdf-text--mark-lanes lines profile)))
+
+(defconst pdf-text-tests--lane-prose
+  '(("a first line of prose pins the leading and column" :base 0.12)
+    ("a second line of prose pins them too" :base 0.14))
+  "Full-measure lines that give a lane fixture its body profile.")
+
+(describe "pdf-text--mark-lanes"
+  (it "reads row-served lanes as an org table"
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("Name" :x0 0.10 :x1 0.16 :base 0.18)
+                          ("Size" :x0 0.35 :x1 0.41 :gap 0)
+                          ("Note" :x0 0.60 :x1 0.66 :gap 0)
+                          ("alpha" :x0 0.10 :x1 0.20)
+                          ("small" :x0 0.35 :x1 0.45 :gap 0)
+                          ("first kind" :x0 0.60 :x1 0.75 :gap 0)
+                          ("beta" :x0 0.10 :x1 0.18)
+                          ("large" :x0 0.35 :x1 0.46 :gap 0)
+                          ("second" :x0 0.60 :x1 0.70 :gap 0)
+                          ("prose resumes at the full measure after" :base 0.26))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("a first line of prose pins the leading and column"
+                          "a second line of prose pins them too"
+                          "| Name  | Size  | Note       |"
+                          "| alpha | small | first kind |"
+                          "| beta  | large | second     |"
+                          "prose resumes at the full measure after"))
+      (expect (pdf-text-line-kind (nth 2 out)) :to-equal 'row)))
+
+  (it "joins a wrapped cell into its row"
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("alpha" :x0 0.10 :x1 0.20 :base 0.18)
+                          ("small" :x0 0.35 :x1 0.45 :gap 0)
+                          ("first kind" :x0 0.60 :x1 0.75 :gap 0)
+                          ("of note" :x0 0.62 :x1 0.72)
+                          ("beta" :x0 0.10 :x1 0.18)
+                          ("large" :x0 0.35 :x1 0.46 :gap 0)
+                          ("second" :x0 0.60 :x1 0.70 :gap 0)
+                          ("gamma" :x0 0.10 :x1 0.21)
+                          ("mid" :x0 0.35 :x1 0.42 :gap 0)
+                          ("third" :x0 0.60 :x1 0.68 :gap 0))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-contain "| alpha | small | first kind of note |")))
+
+  (it "routes a tab-prefixed continuation by its right edge"
+    ;; leading tab glyphs are excluded from ink, so the record's x0
+    ;; lies left of its lane; the ink's end names the lane
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("alpha" :x0 0.10 :x1 0.20 :base 0.18)
+                          ("small" :x0 0.35 :x1 0.45 :gap 0)
+                          ("first kind" :x0 0.60 :x1 0.75 :gap 0)
+                          ("\t\tof note" :x0 0.40 :x1 0.72)
+                          ("beta" :x0 0.10 :x1 0.18)
+                          ("large" :x0 0.35 :x1 0.46 :gap 0)
+                          ("second" :x0 0.60 :x1 0.70 :gap 0)
+                          ("gamma" :x0 0.10 :x1 0.21)
+                          ("mid" :x0 0.35 :x1 0.42 :gap 0)
+                          ("third" :x0 0.60 :x1 0.68 :gap 0))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-contain "| alpha | small | first kind of note |")))
+
+  (it "splits a tab-joined record into its row's cells"
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("alpha" :x0 0.10 :x1 0.20 :base 0.18)
+                          ("small" :x0 0.35 :x1 0.45 :gap 0)
+                          ("first" :x0 0.60 :x1 0.70 :gap 0)
+                          ("beta\tlarge" :x0 0.10 :x1 0.46)
+                          ("second" :x0 0.60 :x1 0.70 :gap 0)
+                          ("gamma" :x0 0.10 :x1 0.21)
+                          ("mid" :x0 0.35 :x1 0.42 :gap 0)
+                          ("third" :x0 0.60 :x1 0.68 :gap 0)
+                          ("delta" :x0 0.10 :x1 0.20)
+                          ("wide" :x0 0.35 :x1 0.44 :gap 0)
+                          ("fourth" :x0 0.60 :x1 0.70 :gap 0))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-contain "| beta  | large | second |")))
+
+  (it "sets a literal bar inside a cell as a broken bar"
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("al|pha" :x0 0.10 :x1 0.20 :base 0.18)
+                          ("small" :x0 0.35 :x1 0.45 :gap 0)
+                          ("beta" :x0 0.10 :x1 0.18)
+                          ("large" :x0 0.35 :x1 0.46 :gap 0)
+                          ("gamma" :x0 0.10 :x1 0.21)
+                          ("mid" :x0 0.35 :x1 0.42 :gap 0))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-contain "| al¦pha | small |")))
+
+  (it "pairs a numeric lane with its entries served lane by lane"
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("One thing" :x0 0.10 :x1 0.28 :base 0.18)
+                          ("Another entry" :x0 0.10 :x1 0.33)
+                          ("Third" :x0 0.10 :x1 0.22)
+                          ("11" :x0 0.85 :x1 0.88 :base 0.18)
+                          ("12" :x0 0.85 :x1 0.88)
+                          ("13" :x0 0.85 :x1 0.88))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("a first line of prose pins the leading and column"
+                          "a second line of prose pins them too"
+                          "| One thing     | 11 |"
+                          "| Another entry | 12 |"
+                          "| Third         | 13 |"))))
+
+  (it "adopts a stray pair against the block's gutters"
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("Stray" :x0 0.10 :x1 0.24 :base 0.18)
+                          ("9" :x0 0.85 :x1 0.88 :gap 0)
+                          ("a chapter line running the full measure" :base 0.22)
+                          ("One thing" :x0 0.10 :x1 0.28 :base 0.26)
+                          ("Another entry" :x0 0.10 :x1 0.33)
+                          ("Third" :x0 0.10 :x1 0.22)
+                          ("11" :x0 0.85 :x1 0.88 :base 0.26)
+                          ("12" :x0 0.85 :x1 0.88)
+                          ("13" :x0 0.85 :x1 0.88))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-contain "| Stray | 9 |")))
+
+  (it "reads column-served ragged pairs as rows"
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("Me caí por unas escaleras" :x0 0.10 :x1 0.30 :base 0.18)
+                          ("Voy a tomarme unas vacaciones" :x0 0.10 :x1 0.35)
+                          ("unos pantalones" :x0 0.10 :x1 0.28)
+                          ("Llevaba unas botas" :x0 0.10 :x1 0.33)
+                          ("I fell down some stairs" :x0 0.50 :x1 0.70 :base 0.18)
+                          ("I will have a holiday" :x0 0.50 :x1 0.78)
+                          ("a pair of trousers" :x0 0.50 :x1 0.66)
+                          ("She wore blue boots" :x0 0.50 :x1 0.74))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-contain
+              "| Me caí por unas escaleras     | I fell down some stairs |")))
+
+  (it "reads an enumerated two-up list as flows in page order"
+    ;; the stream serves the right lane first; the reader still gets
+    ;; 1 through 8
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("5. epsilon" :x0 0.50 :x1 0.66 :base 0.18)
+                          ("6. zeta" :x0 0.50 :x1 0.62)
+                          ("7. eta" :x0 0.50 :x1 0.60)
+                          ("8. theta" :x0 0.50 :x1 0.64)
+                          ("1. alfa" :x0 0.10 :x1 0.25 :base 0.18)
+                          ("2. beta" :x0 0.10 :x1 0.26)
+                          ("3. gamma" :x0 0.10 :x1 0.28)
+                          ("4. delta" :x0 0.10 :x1 0.27))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("a first line of prose pins the leading and column"
+                          "a second line of prose pins them too"
+                          "1. alfa" "2. beta" "3. gamma" "4. delta"
+                          "5. epsilon" "6. zeta" "7. eta" "8. theta"))
+      (expect (pdf-text-line-kind (nth 2 out)) :to-equal 'fixed)
+      (expect (pdf-text-line-claimed (nth 2 out)) :to-be-truthy)))
+
+  (it "leaves flush facing columns reflowing"
+    (let* ((specs (append pdf-text-tests--lane-prose
+                          '(("first column prose runs on" :x0 0.10 :x1 0.48 :base 0.18)
+                            ("and keeps running to its" :x0 0.10 :x1 0.48)
+                            ("edge every line justified" :x0 0.10 :x1 0.48)
+                            ("flush against the middle" :x0 0.10 :x1 0.48)
+                            ("second column prose runs" :x0 0.52 :x1 0.90 :base 0.18)
+                            ("just as flush against its" :x0 0.52 :x1 0.90)
+                            ("own right edge line after" :x0 0.52 :x1 0.90)
+                            ("line to the page bottom" :x0 0.52 :x1 0.90))))
+           (out (pdf-text-tests--lanes specs)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal (mapcar #'car specs))
+      (expect (pdf-text-line-kind (nth 2 out)) :to-be nil)
+      (expect (pdf-text-line-claimed (nth 2 out)) :to-be-truthy)))
+
+  (it "leaves a margin note beside the body alone"
+    (let* ((specs (append pdf-text-tests--lane-prose
+                          '(("body prose sharing its baseline with a note" :x0 0.10 :x1 0.85 :base 0.18)
+                            ("a note" :x0 0.92 :x1 0.99 :gap 0)
+                            ("more body prose at the full measure here" :x0 0.10 :x1 0.85)
+                            ("beside it" :x0 0.92 :x1 0.99 :gap 0)
+                            ("and a third body line to make three rows" :x0 0.10 :x1 0.85)
+                            ("hangs on" :x0 0.92 :x1 0.99 :gap 0))))
+           (out (pdf-text-tests--lanes specs)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal (mapcar #'car specs))
+      (expect (cl-notany #'pdf-text-line-claimed out) :to-be-truthy)))
+
+  (it "leaves an aligned array to the zone repair"
+    (let* ((specs (append pdf-text-tests--lane-prose
+                          '(("l1" :x0 0.30 :x1 0.34 :base 0.18)
+                            ("→" :x0 0.45 :x1 0.47 :gap 0)
+                            ("x1" :x0 0.55 :x1 0.58 :gap 0)
+                            ("l2" :x0 0.30 :x1 0.34)
+                            ("→" :x0 0.45 :x1 0.47 :gap 0)
+                            ("x2" :x0 0.55 :x1 0.58 :gap 0)
+                            ("l3" :x0 0.30 :x1 0.34)
+                            ("→" :x0 0.45 :x1 0.47 :gap 0)
+                            ("x3" :x0 0.55 :x1 0.58 :gap 0))))
+           (out (pdf-text-tests--lanes specs)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal (mapcar #'car specs))))
+
+  (it "leaves a listing's aligned columns alone"
+    (let* ((specs (append pdf-text-tests--lane-prose
+                          '(("let value = 10;" :x0 0.10 :x1 0.30 :cv 0.0 :base 0.18)
+                            ("// first note" :x0 0.60 :x1 0.75 :cv 0.0 :gap 0)
+                            ("let other = 20;" :x0 0.10 :x1 0.30 :cv 0.0)
+                            ("// second one" :x0 0.60 :x1 0.75 :cv 0.0 :gap 0)
+                            ("let third = 30;" :x0 0.10 :x1 0.30 :cv 0.0)
+                            ("// third note" :x0 0.60 :x1 0.75 :cv 0.0 :gap 0))))
+           (out (pdf-text-tests--lanes specs)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal (mapcar #'car specs))))
+
+  (it "takes three aligned rows and not two"
+    (let* ((specs (append pdf-text-tests--lane-prose
+                          '(("alpha" :x0 0.10 :x1 0.20 :base 0.18)
+                            ("small" :x0 0.35 :x1 0.45 :gap 0)
+                            ("beta" :x0 0.10 :x1 0.18)
+                            ("large" :x0 0.35 :x1 0.46 :gap 0)
+                            ("prose resumes at the full measure here" :base 0.24))))
+           (out (pdf-text-tests--lanes specs)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal (mapcar #'car specs))))
+
+  (it "does not reorder three rows of accidental flows"
+    ;; served lane by lane, three lanes, nothing pairing them: a flows
+    ;; candidate, but three rows are not evidence enough to move records
+    (let* ((specs (append pdf-text-tests--lane-prose
+                          '(("uno label" :x0 0.10 :x1 0.22 :base 0.18)
+                            ("under one" :x0 0.10 :x1 0.21)
+                            ("third one" :x0 0.10 :x1 0.20)
+                            ("dos label" :x0 0.40 :x1 0.52 :base 0.18)
+                            ("under two" :x0 0.40 :x1 0.51)
+                            ("third two" :x0 0.40 :x1 0.51)
+                            ("tres label" :x0 0.70 :x1 0.83 :base 0.18)
+                            ("under three" :x0 0.70 :x1 0.84)
+                            ("third three" :x0 0.70 :x1 0.84))))
+           (out (pdf-text-tests--lanes specs)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal (mapcar #'car specs)))))
+
+(describe "table rows through the pipeline"
+  (it "escapes a literal bar-opened record at birth, on both paths"
+    (expect (pdf-text--escape-literals "| a literal row |")
+            :to-equal "\u200B| a literal row |")
+    (expect (pdf-text--escape-literals "  | indented bar")
+            :to-equal "  \u200B| indented bar")
+    (expect (pdf-text--escape-literals "mid | line") :to-equal "mid | line")
+    (let ((lines (pdf-text--page-lines "| x |\nplain line")))
+      (expect (pdf-text-line-text (car lines)) :to-equal "\u200B| x |")))
+
+  (it "passes a generated row through the org escape"
+    (expect (pdf-text--escape-org-lines "| a | b |") :to-equal "| a | b |"))
+
+  (it "renders a flows list tight, one item per line"
+    (let* ((lines (pdf-text-tests--page
+                   (append pdf-text-tests--lane-prose
+                           '(("1. alfa" :x0 0.10 :x1 0.25 :base 0.18)
+                             ("2. beta" :x0 0.10 :x1 0.26)
+                             ("3. gamma" :x0 0.10 :x1 0.28)
+                             ("4. delta" :x0 0.10 :x1 0.27)
+                             ("5. epsilon" :x0 0.50 :x1 0.66 :base 0.18)
+                             ("6. zeta" :x0 0.50 :x1 0.62)
+                             ("7. eta" :x0 0.50 :x1 0.60)
+                             ("8. theta" :x0 0.50 :x1 0.64)))))
+           (out (car (pdf-text-render-lines (list lines)))))
+      (expect out :to-match "1\\. alfa\n2\\. beta\n3\\. gamma")
+      (expect out :to-match "4\\. delta\n5\\. epsilon")))
+
+  (it "keeps a claimed flows region out of the zone repair"
+    (let* ((lines (pdf-text-tests--page
+                   (append pdf-text-tests--lane-prose
+                           '(("la nao ship" :x0 0.10 :x1 0.24 :base 0.18)
+                             ("la foto photo" :x0 0.10 :x1 0.26)
+                             ("la disco disco" :x0 0.10 :x1 0.27)
+                             ("la mano hand" :x0 0.10 :x1 0.25)
+                             ("el sol sun" :x0 0.40 :x1 0.53 :base 0.18)
+                             ("el mar sea" :x0 0.40 :x1 0.52)
+                             ("el pan bread" :x0 0.40 :x1 0.55)
+                             ("el rey king" :x0 0.40 :x1 0.53)
+                             ("la luz light" :x0 0.70 :x1 0.84 :base 0.18)
+                             ("la paz peace" :x0 0.70 :x1 0.85)
+                             ("la sal salt" :x0 0.70 :x1 0.83)
+                             ("la red net" :x0 0.70 :x1 0.82)))))
+           (out (car (pdf-text-reading-order (list lines)))))
+      ;; the zone repair would have re-sorted these into baseline rows -
+      ;; "la nao ship el sol sun la luz light" - as it did before the
+      ;; lane pass claimed them
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("a first line of prose pins the leading and column"
+                          "a second line of prose pins them too"
+                          "la nao ship" "la foto photo" "la disco disco"
+                          "la mano hand"
+                          "el sol sun" "el mar sea" "el pan bread" "el rey king"
+                          "la luz light" "la paz peace" "la sal salt"
+                          "la red net"))))
+
+  (it "conserves every glyph through a table merge"
+    (let* ((lines (pdf-text-tests--page
+                   (append pdf-text-tests--lane-prose
+                           '(("alpha" :x0 0.10 :x1 0.20 :base 0.18)
+                             ("small" :x0 0.35 :x1 0.45 :gap 0)
+                             ("beta" :x0 0.10 :x1 0.18)
+                             ("large" :x0 0.35 :x1 0.46 :gap 0)
+                             ("gamma" :x0 0.10 :x1 0.21)
+                             ("mid" :x0 0.35 :x1 0.42 :gap 0)))))
+           (glyphs (lambda (records)
+                     (sort (string-to-list
+                            (replace-regexp-in-string
+                             "[^[:alnum:]]" ""
+                             (mapconcat #'pdf-text-line-text records "")))
+                           #'<)))
+           (before (funcall glyphs lines))
+           (after (funcall glyphs (car (pdf-text-reading-order (list lines))))))
+      (expect after :to-equal before))))
+
 ;;; Classification
 
 (describe "pdf-text--mark-monospace"

@@ -2,14 +2,4 @@
 ;; folios, the echo of a title painted twice.  A line of prose
 ;; here is a defect, not a licence.
 UNIDAD 1
-3
-Distinto sexo,
-4
-Sin sexo
-1. Facciones →
-2. Sillas →
-3. Sed →
-4. Ley →
-5. Caos →
-6. Flores →
 –14–

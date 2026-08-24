@@ -203,7 +203,7 @@ The rendering comes from the records as the file holds them, rounded,
 so the suite reproduces this golden exactly."
   (let* ((case (pdf-corpus-read slug))
          (page (pdf-corpus-subject case))
-         (source (alist-get page (pdf-corpus-sources (plist-get case :pages))))
+         (source (alist-get page (pdf-corpus-case-sources case)))
          (rendered (pdf-corpus-render case))
          (reflowed (alist-get page (plist-get rendered :reflowed)))
          (headed (alist-get page (plist-get rendered :headed)))

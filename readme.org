@@ -22,6 +22,8 @@ The companion is reused as long as the file on disk has not changed, so re-openi
 
 Getting there is more than calling ~pdf-info-gettext~. poppler computes paragraphs, columns and blocks internally and then throws them away before serving text: what arrives is a list of lines with no structure at all. So the reflow rebuilds it from the glyph boxes ~pdf-info-charlayout~ returns - where a line ends, how far the next one starts in, how much air sits between their baselines, how big its glyphs are. Out of that come paragraphs, list items, quotations, listings kept verbatim, headings at the line they name, running heads dropped, hyphens resolved against the book's own vocabulary, and super- and subscripts rendered as org's ~^{...}~/~_{...}~ - a footnote marker, an exponent, the limits of a big operator - which the buffer displays as real raised and lowered scripts. A footnote marker whose note sits at the foot of its page in smaller type becomes a real org footnote: ~[fn:18-star]~ at the marker, the definition at the page's end, jumpable both ways.
 
+Multicolumn regions come back as what the page set. Rows of cells aligned across persistent white gutters - a phonetic-symbols reference, a table of contents with its page-number column, translation pairs - render as org tables, cells padded to their lane, wrapped cells joined into their row, so ~org-table~ commands work on what used to interleave into pseudo-prose. Parallel lane flows - a gender list set three-up, a numbered exercise list split two-up - read each lane to its end, one item per line, in page order even when the text layer serves the right lane first. Facing columns of justified prose reflow as the two independent columns they are.
+
 * How
 
 ** Install
@@ -55,11 +57,12 @@ In a GUI frame bind ~<return>~ next to ~RET~ if another minor mode (evil-org, sa
 
 ** Tuning
 
-Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (paragraph break as a multiple of the leading), ~pdf-text-blank-factor~, ~pdf-text-size-tolerance~, ~pdf-text-heading-height~ and ~pdf-text-heading-max-words~ (what reads as a heading), ~pdf-text-synth-support~ and ~pdf-text-synth-levels~ (how many pages a glyph size must head before an outline-less book folds on it, and how deep), ~pdf-text-monospace-variation~ (what reads as a listing), ~pdf-text-margin-band~ and ~pdf-text-recurring-min-count~ (what reads as a running head), ~pdf-text-script-size~, ~pdf-text-script-raise~ and ~pdf-text-script-drop~ (what reads as a super- or subscript), ~pdf-text-min-text-fraction~ (below which a document is a scan and the command refuses it).
+Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (paragraph break as a multiple of the leading), ~pdf-text-blank-factor~, ~pdf-text-size-tolerance~, ~pdf-text-heading-height~ and ~pdf-text-heading-max-words~ (what reads as a heading), ~pdf-text-synth-support~ and ~pdf-text-synth-levels~ (how many pages a glyph size must head before an outline-less book folds on it, and how deep), ~pdf-text-monospace-variation~ (what reads as a listing), ~pdf-text-margin-band~ and ~pdf-text-recurring-min-count~ (what reads as a running head), ~pdf-text-script-size~, ~pdf-text-script-raise~ and ~pdf-text-script-drop~ (what reads as a super- or subscript), ~pdf-text-lane-gutter~, ~pdf-text-lane-min-rows~ and ~pdf-text-lane-flows-min-rows~ (what reads as a multicolumn region), ~pdf-text-min-text-fraction~ (below which a document is a scan and the command refuses it).
 
 * Known limits
 
-- Two-column pages: a table of contents arrives with its page numbers as a separate run of lines and stays that way. Real column detection is the fix.
+- Lane detection wants clean gutters: a table whose header cells span two columns, or whose cells cross the white channel, falls back to the old interleave. A two-up alphabetical list with ragged right edges reads as translation pairs and renders as a table of self-contained cells. Lanes of bare digits or operators - a truth table, an equation array - are left to the display-maths machinery.
+- An index reads lane-correct now, but a letter heading inside the flow can fold empty when its entries land on the far side of the reorder.
 - Code inside prose still breaks the sentence around it, and maths set in a legacy symbol font with scrambled codepoints escapes the display-maths detection. A symbol whose codepoint scrambles into a control character renders as nothing at all - the character would only ever have displayed as line noise.
 - Paragraphs are not joined across a page boundary.
 - Pseudocode set in proportional type reflows as prose - nothing in the geometry says it is a listing.

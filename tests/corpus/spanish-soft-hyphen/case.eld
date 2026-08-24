@@ -11,6 +11,10 @@ ink: soft hyphens strip everywhere but line ends, C0 goes wherever it
 sits, the typographic space family reads as plain spaces.  The head
 (`6 Gender of nouns', folio merged into the line) stands 1.9 leadings
 off the body - under the old two-leading detachment - and is the
-declared drop.  The mid-sentence budget is the page's two-column
-gender tables, the known column residual."
- :budget (:mid-sentence 10))
+declared drop.  The multicolumn pass reads the mid-page gender table
+as lanes - feminine forms, masculine forms, glosses, each line its
+own - and renders the bottom common-gender list as a two-lane table:
+its ragged 1:1 rows read as pairs, though the list is really 2-up
+alphabetical, a recorded residual with self-contained cells.  The
+mid-sentence budget is the lane item lines, the listings class."
+ :budget (:mid-sentence 21))

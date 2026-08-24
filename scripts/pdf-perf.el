@@ -111,7 +111,9 @@ what the reader pays."
                      (let ((pre (pdf-text--profile cleaned)))
                        (mapcar (lambda (lines)
                                  (pdf-text--reassemble-zones
-                                  (pdf-text--merge-script-fragments lines pre)
+                                  (pdf-text--mark-lanes
+                                   (pdf-text--merge-script-fragments lines pre)
+                                   pre)
                                   pre))
                                cleaned))))
     (setq profile (pdf-perf--stage "document profile"

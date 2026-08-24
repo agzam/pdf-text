@@ -2,15 +2,16 @@
 (:book "[Data.Science.for.Business(2013.7)].Foster.Provost"
  :source "Language Agnostic/[Data.Science.for.Business(2013.7)].Foster.Provost.pdf"
  :page 11
- :exercises "Future-work 11 evidence: a two-column table of contents.  Entry
-titles fill the left measure and page numbers stand in a right lane;
-the render merges runs of sub-entries into single lines with the
-numbers inline (Generalization 111 Overfitting 113 ...), the Round 3
-residual this page has carried since the first sweep.  Louder than
-the merge: dropped.txt licenses a real TOC entry - Summary and its
-page number 108 - because the capture writes whatever the render
-loses into the drops file, and only a reader of that file can tell a
-folio from content.  The FW11 column fix must bring that entry back
-and shrink the drops to nothing; until then this case is the
-evidence, not the acceptance."
+ :exercises "A two-column table of contents, the FW11 fix landed.  Entry titles
+fill the left measure and page numbers stand in a narrow right lane,
+served lane by lane; the numeric-lane gate reads them as rows, and
+every entry renders as an org table row paired with its number.  The
+Summary / 108 pair the margin rules used to eat - cut off from the
+entry block by the chapter line, one row on its own - comes back
+through lane adoption against the block's gutters.  The declared
+drops are the running foot (Table of Contents, its bar, roman folio
+v): three records the old render only kept because the TOC zone
+accidentally glued them into a wide line that escaped the narrow
+margin test.  The chapter lines with their dot leaders span the
+gutter and stay prose."
  :budget (:mid-sentence 0))
