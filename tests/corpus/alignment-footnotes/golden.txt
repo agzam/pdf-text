@@ -1,4 +1,4 @@
-* Introduction
+Alignment of Paragraphs in Bilingual Texts
 
 Using Bilingual Dictionaries and Dynamic Programming[fn:1-star]
 
@@ -11,7 +11,7 @@ Alexander Gelbukh and Grigori Sidorov
 
   Abstract. Parallel text alignment is a special type of pattern recognition task aimed to discover the similarity between two sequences of symbols. Given the same text in two different languages, the task is to decide which elements—paragraphs in case of paragraph alignment—in one text are translations of which elements of the other text. One of the applications is training training statistical machine translation algorithms. The task is not trivial unless detailed text understanding can be afforded. In our previous work we have presented a simple technique that relied on bilingual dictionaries but does not perform any syntactic analysis of the texts. In this paper we give a formal definition of the task and present an exact optimization algorithm for finding the best alignment.
 
-1 Introduction
+* 1 Introduction
 
 Given the same text in two different languages, the parallel text alignment task consists in deciding which elements of one text are translations of which one of the other text 9. The task is useful in learning bilingual dictionaries and in training statistical machine translation algorithms. Viewed more generally as a pattern recognition task, the problem consists in identifying correspondences in two sequences of objects, which could be, say, text and speech or video recordings from different cameras 1314. While both the task and our suggested method are quite general, in this paper we concentrate on alignment of paragraphs in bilingual texts.
 

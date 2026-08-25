@@ -12,10 +12,8 @@ Both notes then convert to org footnotes, [fn:] at both ends, and the
 imprint lines at the very foot carry the note face unlabeled.  The
 mid-sentence budget is the affiliation block's address lines; the
 glued budget is CONACyT, an acronym's own lowercase-uppercase seam.
-Tolerated until the heading-placement unit: the outline's
-Introduction heading stacks at the page top above the paper title
-(added + outline), and dropped.txt licenses the title line the
-running-head rule eats - a real defect of the same unit, recorded
-there as the auto-licensing fact."
- :budget (:mid-sentence 2 :glued 1)
- :tolerates (added outline))
+The page also holds the heading unit: the outline's Introduction
+lands on the page's own \"1 Introduction\" line rather than on the
+paper's display title, and the title line itself survives the
+running-head rule that eats it on the nine pages it heads."
+ :budget (:mid-sentence 2 :glued 1))

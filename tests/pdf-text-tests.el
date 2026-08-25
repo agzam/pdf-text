@@ -1691,7 +1691,7 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
                               (,(number-to-string n) :x0 0.85 :x1 0.87 :base 0.06)
                               ,@(when (eql n 1)
                                   '(("Supervised Segmentation" :base 0.20
-                                     :x1 0.32 :height 0.024)))
+                                     :x1 0.32)))
                               ("body line one filling the column" :base 0.30)
                               ("body line two filling the column")
                               ("body line three ends here" :x1 0.40)))))
@@ -1709,10 +1709,65 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
                     (make-list 2 '("body line one filling the column"
                                    "body line two filling the column"
                                    "body line three ends here"))))
-      ;; the title is a recurring form either way: what spares the line
-      ;; is the outline naming it, and nothing else
+      ;; the title is a recurring form either way: at the body size,
+      ;; what spares the line is the outline naming it
       (expect (length (car (pdf-text-remove-marginal-lines pages profiles)))
-              :to-equal 3))))
+              :to-equal 3)))
+
+  (it "spares a paper's own title from the head that echoes it"
+    ;; a paper runs its title as the head of every page after the
+    ;; first, and no outline entry names a paper's title: what says
+    ;; the page-1 line is the paper's own is the display type it is
+    ;; set in, which no running head uses
+    (let* ((pages (cl-loop
+                   for n from 1 to 4
+                   collect (pdf-text-tests--page
+                            (if (eql n 1)
+                                '(("Alignment of Paragraphs in Bilingual Texts"
+                                   :x0 0.20 :x1 0.80 :base 0.11 :height 0.0192)
+                                  ("body line one filling the column" :base 0.30)
+                                  ("body line two filling the column")
+                                  ("body line three ends here" :x1 0.40))
+                              `(("Alignment of Paragraphs in Bilingual Texts"
+                                 :x0 0.45 :x1 0.82 :base 0.06 :height 0.0125)
+                                (,(number-to-string n) :x0 0.10 :x1 0.12 :base 0.06)
+                                ("body line one filling the column" :base 0.30)
+                                ("body line two filling the column")
+                                ("body line three ends here" :x1 0.40))))))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                      (pdf-text-remove-marginal-lines pages profiles))
+              :to-equal
+              (cons '("Alignment of Paragraphs in Bilingual Texts"
+                      "body line one filling the column"
+                      "body line two filling the column"
+                      "body line three ends here")
+                    (make-list 3 '("body line one filling the column"
+                                   "body line two filling the column"
+                                   "body line three ends here"))))))
+
+  (it "drops a wordless folio however large the page sets it"
+    ;; a workbook sets its unit digit and its folio in display type;
+    ;; sparing display type spares titles, and a title has words
+    (let* ((pages (cl-loop
+                   for n from 1 to 3
+                   collect (pdf-text-tests--page
+                            `((,(format "–%d–" n) :x0 0.10 :x1 0.16 :base 0.94
+                               :height 0.024)
+                              ("body line one filling the column" :base 0.30)
+                              ("body line two filling the column")
+                              ("body line three ends here" :x1 0.40)))))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines) (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                      (pdf-text-remove-marginal-lines pages profiles))
+              :to-equal
+              (make-list 3 '("body line one filling the column"
+                             "body line two filling the column"
+                             "body line three ends here"))))))
 
 (describe "pdf-text-remove-marginal-lines document seeds"
   (it "drops a head the document shows recurring that the window cannot"
@@ -2355,9 +2410,49 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
     ;; the line it names reads as prose below it
     (expect (pdf-text--interleave-outline
              '("body before\n\n** Sec\n\nbody after")
-             '(((depth . 2) (title . "Sec") (page . 1))
-               ((depth . 2) (title . "Elsewhere") (page . 1))))
-            :to-equal '("** Elsewhere\nbody before\n\n** Sec\n\nbody after"))))
+             '(((depth . 2) (title . "Sec") (page . 1))))
+            :to-equal '("body before\n\n** Sec\n\nbody after")))
+
+  (it "reads a placed heading behind the section number the page sets"
+    ;; the render keeps the page's own number on the heading it places;
+    ;; the outline entry carries the title bare, and prepending it
+    ;; again would give the page the same section twice
+    (expect (pdf-text--interleave-outline
+             '("* 1 Introduction\n\nbody")
+             '(((depth . 1) (title . "Introduction") (page . 1))))
+            :to-equal '("* 1 Introduction\n\nbody")))
+
+  (it "keeps a leftover below the section the page did place"
+    ;; the outline opens Deep after Sec: stacked above the page's own
+    ;; Sec heading it owns Sec's text, heading and all, and the reader
+    ;; folds the page's sections in the wrong order
+    (expect (pdf-text--interleave-outline
+             '("body before\n\n* Sec\n\nbody after" "next page")
+             '(((depth . 1) (title . "Sec") (page . 1))
+               ((depth . 2) (title . "Deep") (page . 1))
+               ((depth . 1) (title . "Later") (page . 2))))
+            :to-equal '("body before\n\n* Sec\n\nbody after\n** Deep"
+                        "* Later\nnext page")))
+
+  (it "stops a leftover just above the next heading the page carries"
+    ;; the range the outline leaves it: after the section placed above
+    ;; it, before the one placed below - and inside that range as late
+    ;; as it can go, so the placed sections keep their own text
+    (expect (pdf-text--interleave-outline
+             '("* One\nfirst body\n* Three\nthird body")
+             '(((depth . 1) (title . "One") (page . 1))
+               ((depth . 1) (title . "Two") (page . 1))
+               ((depth . 1) (title . "Three") (page . 1))))
+            :to-equal '("* One\nfirst body\n* Two\n* Three\nthird body")))
+
+  (it "keeps leftovers in outline order around the headings placed"
+    (expect (pdf-text--interleave-outline
+             '("* Two\nbody")
+             '(((depth . 1) (title . "One") (page . 1))
+               ((depth . 1) (title . "Two") (page . 1))
+               ((depth . 1) (title . "Three") (page . 1))
+               ((depth . 1) (title . "Four") (page . 1))))
+            :to-equal '("* One\n* Two\nbody\n* Three\n* Four"))))
 
 (describe "pdf-text-page-headings"
   (it "lines the outline's headings up with the pages a render is given"
@@ -2440,6 +2535,43 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
              '(("Some Other Big Line" :x1 0.45 :height 0.024)
                ("Body text follows the line above it here." :x1 0.55)))
             :to-equal "Some Other Big Line\n\nBody text follows the line above it here."))
+
+  (it "matches the title behind the section number the page numbers it with"
+    ;; a paper numbers every section its outline names bare, so nothing
+    ;; matched and Introduction landed on the paper's display title
+    (expect (pdf-text-tests--render
+             '(("Alignment of Paragraphs in Bilingual Texts"
+                :x0 0.20 :x1 0.80 :height 0.0192)
+               ("Alexander Gelbukh and Grigori Sidorov" :x1 0.60 :gap 2)
+               ("1 Introduction" :x1 0.28 :height 0.0164 :gap 2)
+               ("Given the same text in two different languages, the" :x1 0.90)
+               ("task consists in deciding which elements align." :x1 0.55))
+             '("* Introduction"))
+            :to-equal
+            (string-join '("Alignment of Paragraphs in Bilingual Texts"
+                           ""
+                           "Alexander Gelbukh and Grigori Sidorov"
+                           ""
+                           "* 1 Introduction"
+                           "Given the same text in two different languages, the task consists in deciding which elements align.")
+                         "\n")))
+
+  (it "matches a numbered title at every depth the paper sets"
+    (expect (pdf-text-tests--render
+             '(("3 Distance Measure" :x1 0.35 :height 0.0164)
+               ("To assign the weight to a hyperarc we need the" :x1 0.90)
+               ("similarity between two sets of paragraphs." :x1 0.50)
+               ("3.1 Baseline Distance Measure" :x1 0.42 :height 0.0164 :gap 1.6)
+               ("Common sense suggests that the corresponding" :x1 0.90)
+               ("pieces of text sit at the same relative distance." :x1 0.55))
+             '("* Distance Measure" "** Baseline Distance Measure"))
+            :to-equal
+            (string-join '("* 3 Distance Measure"
+                           "To assign the weight to a hyperarc we need the similarity between two sets of paragraphs."
+                           ""
+                           "** 3.1 Baseline Distance Measure"
+                           "Common sense suggests that the corresponding pieces of text sit at the same relative distance.")
+                         "\n")))
 
   (it "gives a title no line spells out the line the page sets as a heading"
     ;; the outline carries the chapter number the page does not, so the

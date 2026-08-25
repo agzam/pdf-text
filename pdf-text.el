@@ -2017,6 +2017,25 @@ extraction, or carry the ligatures its font substitutes."
   (string-trim (replace-regexp-in-string "\\`\\(?:\\*+\\|#\\+TITLE:\\)[ \t]*" ""
                                          head)))
 
+(defconst pdf-text-section-number-re
+  "\\`\\([0-9]+\\(?:\\.[0-9]+\\)*\\)\\.?[ \t]+"
+  "A section number opening a line: \"1 \", \"3.1 \", \"10. \".
+The page numbers its sections where the outline names them bare, at
+every depth a paper or a textbook uses.")
+
+(defun pdf-text--section-number (text)
+  "The section number TEXT opens with, or nil."
+  (and (string-match pdf-text-section-number-re text)
+       (match-string 1 text)))
+
+(defun pdf-text--unnumbered-title (text)
+  "TEXT without the section number it opens with."
+  (replace-regexp-in-string pdf-text-section-number-re "" text))
+
+(defun pdf-text--title-key (text)
+  "TEXT as the key a title is looked up by: normalised, unnumbered."
+  (pdf-text--normalize-title (pdf-text--unnumbered-title text)))
+
 (defun pdf-text--heading-alist (headings)
   "HEADINGS as an alist from the normalised title to the heading line.
 The book's own title renders as a keyword rather than a headline and
@@ -2280,10 +2299,13 @@ A footnote is spared the same way: a line in the bottom band, set
 smaller than the body, opening with a footnote marker and leading
 into words, is the page's own text however often its digit-normalised
 form recurs and whatever baseline the folio beside it holds.  And a
-line the outline names that is set over `pdf-text-heading-height'
-body heights is spared even inside the band: a chapter title opening
-its page at the top is display type, which no book uses for a running
-head, and its digit-normalised form matches the heads that carry it.
+worded line set over `pdf-text-heading-height' body heights is spared
+wherever it sits, named or not: a chapter title opening its page at
+the top, a paper's own title over its abstract - the running heads
+that echo them are set at the body size or under it, so display type
+is never furniture.  Furniture set large stays furniture: a page
+marker at any size, and a folio or a unit digit carrying no word at
+all.
 
 Only the narrow candidates feed the drop-anywhere recurrence - they
 are what a two-up scan embeds mid-text.  A folio-merged head cannot
@@ -2331,18 +2353,26 @@ established, the way `pdf-text-extra-vocabulary' does for hyphens."
                  ;; the title may carry its chapter number ("10 GETTING
                  ;; THE LEAD OUT"), which the outline entry does not
                  (titled (or (member (pdf-text--normalize-title text) titles)
-                             (member (pdf-text--normalize-title
-                                      (string-trim-left text "[0-9]+[ \t.]+"))
-                                     titles)))
+                             (member (pdf-text--title-key text) titles)))
+                 ;; display type is the page's own: a book sets its
+                 ;; running head at the body size or under it, never
+                 ;; over it, so a line set this large is the title the
+                 ;; head echoes - the paper's own, which the outline
+                 ;; never names - and not a copy of it.  A title is
+                 ;; made of words; a workbook's giant unit digit and a
+                 ;; folio dressed in rules are display type too
+                 (display (and tall
+                               (string-match-p "[[:alpha:]]" text)
+                               (not (pdf-text--page-marker-p text))))
                  ;; an in-band named line is the chapter's own opener
-                 ;; when it is set in display type or stands alone in
-                 ;; the book; the recurring copies are the running
-                 ;; heads that echo it (DSB), and those still go
-                 (named (and titled
-                             (or (not in-margin)
-                                 tall
-                                 (not (member (pdf-text--normalize-line text)
-                                              recurring)))))
+                 ;; when it stands alone in the book; the recurring
+                 ;; copies are the running heads that echo it (DSB),
+                 ;; and those still go
+                 (named (or display
+                            (and titled
+                                 (or (not in-margin)
+                                     (not (member (pdf-text--normalize-line text)
+                                                  recurring))))))
                  (footnote (and base height body
                                 (< (- 1.0 pdf-text-margin-band) base)
                                 (< height (* pdf-text-footnote-size body))
@@ -2997,18 +3027,42 @@ title the page carries with its chapter number."
          (<= (length (split-string text)) pdf-text-heading-max-words)
          (not (string-match-p "[.,;:]\\'" (string-trim text))))))
 
+(defun pdf-text--numbered-head (head number)
+  "HEAD with the section NUMBER the page gives it set in front of its title."
+  (if (string-match "\\`\\(\\*+\\|#\\+TITLE:\\)[ \t]*" head)
+      (concat (match-string 1 head) " " number " " (substring head (match-end 0)))
+    head))
+
+(defun pdf-text--title-placement (text pending)
+  "The entry of PENDING that the block text TEXT names, and how to head it.
+A cons (ENTRY . HEAD), nil when TEXT names none of them.  A page
+numbers its sections where the outline names them bare - \"1
+Introduction\" for \"Introduction\", \"3.1 Baseline Distance
+Measure\" for its child - so a title is looked for behind a section
+number too.  The number is the page's own word and papers cite it, so
+the heading keeps it."
+  (if-let* ((entry (assoc (pdf-text--normalize-title text) pending)))
+      (cons entry (cdr entry))
+    (when-let* ((number (pdf-text--section-number text))
+                (entry (assoc (pdf-text--title-key text) pending)))
+      (cons entry (pdf-text--numbered-head (cdr entry) number)))))
+
 (defun pdf-text--assign-headings (blocks profile vocabulary headings)
   "Where each of HEADINGS goes among BLOCKS, as an alist.
 Every entry is (BLOCK HEAD REPLACE).  A title names a line, and the
-block whose words are that title is where its section starts: the
+block whose words are that title - behind the section number the page
+sets in front of it, if any - is where its section starts: the
 heading is that line, so it replaces it.  A title no block spells out
 falls back on the way the page is set - the blocks that read as
 headings take what is left over, both in the order they run down the
 page - and there the heading goes above the block, because the words
-differ and the page's own are not the reflow's to drop.  A title that
-finds no block at all stays for `pdf-text--interleave-outline', which
-has only the page's start left to put it at.  PROFILE says how a page
-sets a heading; VOCABULARY joins a title split across lines."
+differ and the page's own are not the reflow's to drop.  Every named
+line is taken before that fallback runs, so a numbered section line
+keeps its own title from the display type further up the page.  A
+title that finds no block at all stays for
+`pdf-text--interleave-outline', which has only the page's start left
+to put it at.  PROFILE says how a page sets a heading; VOCABULARY
+joins a title split across lines."
   (when-let* ((pending (pdf-text--heading-alist headings)))
     (let ((texts (mapcar (lambda (block)
                            (and (memq (pdf-text-block-kind block) '(para item))
@@ -3018,10 +3072,9 @@ sets a heading; VOCABULARY joins a title split across lines."
       (cl-loop for block in blocks
                for text in texts
                do (when-let* ((text)
-                              (found (assoc (pdf-text--normalize-title text)
-                                            pending)))
+                              (found (pdf-text--title-placement text pending)))
                     (push (list block (cdr found) t) assigned)
-                    (setq pending (delq found pending))))
+                    (setq pending (delq (car found) pending))))
       (cl-loop for block in blocks
                for text in texts
                while pending
@@ -3256,14 +3309,19 @@ geometry at all fall back to the text-only
                    for number from (or first 1)
                    for heads = headings then (cdr heads)
                    for assigned = assignments then (cdr assigned)
+                   ;; the placement is what the escape pass must know:
+                   ;; a heading placed at a numbered section line reads
+                   ;; as the page numbers it, which is neither the
+                   ;; outline's line nor an extracted one to neutralize
+                   for placed = (or (caar assigned)
+                                    (pdf-text--assign-headings
+                                     blocks page-profile vocabulary (car heads)))
                    collect (pdf-text--escape-org-lines
                             (pdf-text--render-blocks blocks page-profile
                                                      vocabulary (car heads)
-                                                     number
-                                                     (caar assigned)
+                                                     number placed
                                                      (cdar assigned))
-                            (append (mapcar #'cadr (caar assigned))
-                                    (car heads))))))
+                            (append (mapcar #'cadr placed) (car heads))))))
     (if (and synthesize (not geometry))
         (pdf-text--synthesize-headings rendered)
       rendered)))
@@ -3326,22 +3384,68 @@ knows which page of the book each page it renders is."
     (cl-loop for page from first below (+ first count)
              collect (gethash page heads))))
 
-(defun pdf-text--interleave-outline (pages outline)
-  "PAGES with every OUTLINE heading its page does not already carry.
+(defun pdf-text--head-key (line)
+  "The title LINE carries as an org heading, normalised, or nil.
+A rendered heading line may carry the section number the page set in
+front of its title where the outline entry carries the title bare, so
+both sides reduce to the same key.  An extracted line that only looks
+like a headline carries a zero-width space before its stars and
+answers nil, which is what the escape pass is for."
+  (and (string-match-p "\\`\\(?:\\*+ \\|#\\+TITLE:\\)" line)
+       (pdf-text--title-key (pdf-text--heading-title line))))
+
+(defun pdf-text--interleave-page (page heads)
+  "PAGE with every one of HEADS it does not already carry.
 The reflow places a heading at the line the outline names, when the
 page has that line; what is left over - a title no line of the page
 reproduces - goes at the page's start, which is the only thing left
-to say about where its section begins.  A nil OUTLINE returns PAGES
-unchanged: PDFs without an outline degrade to the flat view."
+to say about where its section begins.
+
+A leftover the outline opens after a heading the page does carry
+cannot go there: the page's own text above that heading belongs to
+it, and stacking a later section over it hands that text to the
+wrong title, out of the order the reader folds.  Such a leftover goes
+as late as its place in the outline allows - just above the next
+heading the page carries, or at the page's end - so the section that
+was found keeps its text and the one that was not opens after it."
+  (if (null heads)
+      page
+    (let* ((lines (split-string page "\n"))
+           (keys (mapcar #'pdf-text--head-key lines))
+           (placed (mapcar (lambda (head)
+                             (cl-position (pdf-text--head-key head) keys
+                                          :test #'equal))
+                           heads))
+           leftovers)
+      (cl-loop for head in heads
+               for i from 0
+               unless (nth i placed)
+               do (push (cons (cond ((not (cl-some #'identity (seq-take placed i)))
+                                     0)
+                                    ((cl-some #'identity (seq-drop placed (1+ i))))
+                                    (t (length lines)))
+                              head)
+                        leftovers))
+      (if (null leftovers)
+          page
+        (setq leftovers (nreverse leftovers))
+        (string-join
+         (cl-loop for i from 0 to (length lines)
+                  nconc (append (cl-loop for (at . head) in leftovers
+                                         when (eql i at) collect head)
+                                (and (< i (length lines)) (list (nth i lines)))))
+         "\n")))))
+
+(defun pdf-text--interleave-outline (pages outline)
+  "PAGES with every OUTLINE heading its page does not already carry.
+`pdf-text--interleave-page' places the leftovers of one page.  A nil
+OUTLINE returns PAGES unchanged: PDFs without an outline degrade to
+the flat view."
   (let ((heads (pdf-text--outline-heads outline))
         (n 0))
     (mapcar (lambda (page)
               (cl-incf n)
-              (if-let* ((placed (split-string page "\n"))
-                        (missing (cl-remove-if (lambda (head) (member head placed))
-                                               (gethash n heads))))
-                  (concat (string-join missing "\n") "\n" page)
-                page))
+              (pdf-text--interleave-page page (gethash n heads)))
             pages)))
 
 (defvar pdf-text-synth-support 5
@@ -3773,7 +3877,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 14
+(defconst pdf-text-render-version 15
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

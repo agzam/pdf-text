@@ -1,0 +1,35 @@
+* 3 Distance Measure
+
+To assign the weight to a hyperarc as described in Section 0 above, we need to calculate the similarity between two sets of paragraphs (in our algorithm at least one of the two sets consists of only one paragraph). We define it as the similarity between the two texts that are obtained by concatenation of the corresponding paragraphs.
+
+** 3.1 Baseline Distance Measure
+
+Common sense suggests that the corresponding pieces of texts are located at approximately the relative same distance from the beginning of the whole text. We define the baseline distance between two pieces of text, T_{A} in the language A and T_{B} in the language B, as follows:
+
+  Distance(T_{A}, T_{B}) = |start(T_{A}) – start(T_{B})| + |end(T_{A}) – end(T_{B})|,
+
+(1)
+
+where start(T_{X}) is the relative position of the first word of the text T_{X} measured in percentage of the total number of words in the text in the corresponding language, and similarly for end(T_{X}). We could also use the position of the paragraph instead of word as percentage of the total number of paragraphs, but the measure based on word counts has been reported as better than the one based on paragraph counts, which agrees with our own observations.
+
+** 3.2 Proposed Distance Measure
+
+We define the similarity between two texts in different languages as the number of words in both texts that are not mutual translations of each other 12. For this, we first define which words are such translations.
+
+1. Set T_{X}, := the shortest one of T_{A} and T_{B}; T_{Y} := the longest
+2. Set translations := 0
+3. for each word token w in T_{X} 4.
+
+  if any of its translations D_{XY} (w) is found in T_{Y} 5.
+
+increase translations by 1
+
+where D_{XY} (w) is a function returning a set of the dictionary translations of the word w. Then the number of word tokens without translation in both paragraphs, under the hypothesis that these two paragraphs correspond to each other, is:
+
+  Distance(T_{A}, T_{B}) = | T_{A} ​| + | T_{B} ​| – 2 × translations.
+
+(2)
+
+The cost of an alignment hypothesis is the total number of words in both texts that are left without translation under this hypothesis. Note that under different hypotheses this number is different: here we consider two word tokens to be translations of each other if both of the following conditions hold: (a) they are dictionary translations (as word types) and (b) the paragraphs where they occur are supposed to be aligned.
+
+Note that we represent the texts as vectors of word frequencies, ignoring the order of the words. In particular, concatenation of the paragraphs into text pieces is performed simply as summation of the corresponding vectors.

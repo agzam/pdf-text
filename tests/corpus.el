@@ -388,26 +388,28 @@ exempt too: its section continues on the page after this one."
                   (push (car this) out)))
     (nreverse out)))
 
-(defun pdf-corpus--occurrences (needle haystack)
-  "How many times NEEDLE occurs in HAYSTACK."
-  (if (string-empty-p needle)
-      0
-    (let ((n 0) (position 0))
-      (while (setq position (string-search needle haystack position))
-        (setq n (1+ n) position (+ position (length needle))))
-      n)))
-
 (defun pdf-corpus-outline-placements (titles text)
-  "TITLES that TEXT does not carry exactly once, with their count.
+  "TITLES that TEXT does not carry exactly once as a line, with their count.
 A section heading names a line of the page it opens: once the heading
 sits at that line, the title reads once.  Twice means the heading was
 prepended and the line it names is still down in the prose; none means
-the outline points at something the page never says."
-  (let ((stream (pdf-corpus-stream text)))
+the outline points at something the page never says.
+
+A line carries a title when it is that title and nothing else, once
+the org markers and the section number the page sets in front of it
+come off.  Counting the title's letters wherever they occur was the
+first measure and it read a page's own prose as misplacement: a
+child's title contains its parent's, and a page saying \"complex,
+heterogeneous attributes\" says its own heading twice."
+  (let ((lines (mapcar (lambda (line)
+                         (pdf-corpus-stream
+                          (pdf-text--unnumbered-title
+                           (pdf-text--heading-title (string-trim line)))))
+                       (split-string text "\n"))))
     (seq-remove (lambda (found) (eql 1 (cdr found)))
                 (mapcar (lambda (title)
-                          (cons title (pdf-corpus--occurrences
-                                       (pdf-corpus-stream title) stream)))
+                          (cons title (cl-count (pdf-corpus-stream title) lines
+                                                :test #'equal)))
                         titles))))
 
 (cl-defun pdf-corpus-violations (&key source reflowed headed titles drops budget

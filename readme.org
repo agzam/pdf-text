@@ -6,7 +6,7 @@ A reflowed plain-text reading view for PDFs, on top of [[https://github.com/veda
 
 * What
 
-~pdf-view-as-text~ opens the PDF you are viewing as text in a companion buffer, on the page the image view shows and as far into it as the window sits down the image. The document outline becomes foldable org headings, each one owning the text of its own section - including the sections that start mid-page. A book with no outline metadata gets its headings read out of the pages themselves: a dotted section number at body size, or a glyph size the book uses as a heading style on enough pages, with a split number rejoined to its title and a "Chapter 2" eyebrow merged into the title under it.
+~pdf-view-as-text~ opens the PDF you are viewing as text in a companion buffer, on the page the image view shows and as far into it as the window sits down the image. The document outline becomes foldable org headings, each one owning the text of its own section - including the sections that start mid-page, and the ones a paper numbers ("1 Introduction") where its outline names them bare. A book with no outline metadata gets its headings read out of the pages themselves: a dotted section number at body size, or a glyph size the book uses as a heading style on enough pages, with a split number rejoined to its title and a "Chapter 2" eyebrow merged into the title under it.
 
 The buffer is an ~org-mode~ derivative, so folding, sparse trees (~C-c /~), subtree narrowing and export all work on a book. Extracted text is escaped first, so nothing in the PDF parses as org structure.
 
