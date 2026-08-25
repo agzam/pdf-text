@@ -470,8 +470,12 @@ RENDERED is `pdf-corpus-render' output, computed when not supplied."
       ('added (format "added: %s" (string-join detail " / ")))
       ('mid-sentence (format "%d mid-sentence break(s): %s"
                              (length detail)
+                             ;; rendered lines can carry the note text
+                             ;; property, which %S would print
                              (mapconcat (lambda (pair)
-                                          (format "%S -> %S" (car pair) (cdr pair)))
+                                          (format "%S -> %S"
+                                                  (substring-no-properties (car pair))
+                                                  (substring-no-properties (cdr pair))))
                                         (seq-take detail 3) "; ")))
       ('glued (format "%d glued token(s): %s"
                       (length detail)

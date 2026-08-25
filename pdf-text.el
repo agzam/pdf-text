@@ -735,14 +735,21 @@ dissected opens with its own ^{}/_{} markup and only needs the space
 dropped, so org attaches it to what it follows; a short one it could
 not dissect - every glyph one size, nothing in-record to contrast
 against - wraps whole, and the side its baseline is offset to picks
-the marker.  Anything else joins with a space, as a plain split line."
+  the marker.  A raised marker-shaped leading fragment - the symbol or
+number a page sets before its footnote's first word - prefixes the
+line, so the note block opens with its marker; only the footnote
+token shapes qualify, because a raised letter served before its line
+is a math limit the flat join serves better.  Anything else joins
+with a space, as a plain split line."
   (let* ((prev-text (pdf-text-line-text prev))
          (line-text (string-trim (pdf-text-line-text line)))
          (host (pdf-text--wider-line prev line))
          (base (pdf-text-line-base host))
          (height (pdf-text-line-height host))
          (offset (and base (pdf-text-line-base line)
-                      (- (pdf-text-line-base line) base))))
+                      (- (pdf-text-line-base line) base)))
+         (prev-offset (and base (pdf-text-line-base prev)
+                           (- (pdf-text-line-base prev) base))))
     (cond
      ((string-match-p "\\`[_^]{" line-text)
       (concat (string-trim-right prev-text) line-text))
@@ -756,6 +763,13 @@ the marker.  Anything else joins with a space, as a plain split line."
                (< offset (* (- pdf-text-script-raise) height))))
       (concat (string-trim-right prev-text)
               (if (< offset 0) "^{" "_{") line-text "}"))
+     ((and (eq host line) prev-offset height
+           (pdf-text-line-height prev)
+           (< (pdf-text-line-height prev) (* pdf-text-script-size height))
+           (string-match-p "\\`\\(?:[*†‡§¶]\\|[0-9]\\{1,2\\}\\)\\'"
+                           (string-trim prev-text))
+           (< prev-offset (* (- pdf-text-script-raise) height)))
+      (concat "^{" (string-trim prev-text) "}" line-text))
      (t (concat prev-text " " line-text)))))
 
 (defun pdf-text--merge-script-fragments (lines profile)
@@ -2022,6 +2036,21 @@ names no line of the page, so it stays out."
 Footnote blocks are set at 0.7-0.8 of the body size; body text never
 dips under 1, so the gap between the two is real.")
 
+(defvar pdf-text-footnote-size-slack 0.95
+  "The footnote size gate for a block that opens with a marker.
+A paper can set its notes a bare hair over `pdf-text-footnote-size'
+of the modal body height - the alignment paper's notes reach 0.906 of
+their own page's body - and the marker at the page's foot is the
+stronger signal, so it buys the gate its slack.  Body text never dips
+under 1; a block without a marker gets no slack at all.")
+
+(defvar pdf-text-footnote-foot 0.6
+  "How far down the page an unmarked block must sit to read as a note.
+An author note or an imprint line lives at the page's foot; a page
+set in small type from the top - a notes chapter, a copyright page -
+is body text that happens to be small, and dimming it would paint
+the whole page.")
+
 (defconst pdf-text-footnote-symbols
   '((?* . "star") (?† . "dagger") (?‡ . "ddagger") (?§ . "sect") (?¶ . "par"))
   "Footnote marker symbols and the org label names they take.
@@ -2066,6 +2095,18 @@ not a third footnote.  Group 1 holds what precedes the marker, so a
 replacement can keep it."
   (concat "\\(" (and (string-match-p "\\`[0-9]" token) "[^0-9]") "\\)"
           (regexp-quote (concat "^{" token "}"))))
+
+(defun pdf-text--footnote-flat-re (token)
+  "Regexp for TOKEN cited as the flat symbol the text layer wrote, or nil.
+A title can carry its footnote symbol in-record with no size contrast
+for the glyph pass to dissect - the alignment paper's \"Dynamic
+Programming*\" - so a symbol also cites as its word-attached literal
+closing the text.  Group 1 holds what precedes it, like
+`pdf-text--footnote-marker-re'; the open brace is excluded so a
+generated ^{...} never half-matches.  A numeric token has no flat
+form: a trailing digit is a quantity far more often than a citation."
+  (unless (string-match-p "\\`[0-9]" token)
+    (concat "\\([^ \t\n{]\\)" (regexp-quote token) "\\'")))
 
 ;;; Cleanups over line records
 
@@ -2991,18 +3032,25 @@ sets a heading; VOCABULARY joins a title split across lines."
       assigned)))
 
 (defun pdf-text--assign-footnotes (blocks profile vocabulary page)
-  "The footnotes among BLOCKS, as (DEFINITIONS . REFERENCES), or nil.
-DEFINITIONS is an alist of (BLOCK LABEL . TEXT): the trailing blocks
-of the page that define a footnote, with the label PAGE gives them
-and their text cut past the marker.  REFERENCES pairs each marker's
-regexp with its label, for the body blocks that cite it.  A footnote
-takes both halves: a block at the page's foot, set under
-`pdf-text-footnote-size' of PROFILE's body height, opening with a
-marker the body above it cites as a superscript.  A block missing
-either half renders as the ordinary text it may well be.  VOCABULARY
-joins the texts.  Two footnotes sharing one marker on one page would
-share a label, and org would read them as one; books rotate their
-symbols, so the collision stays theoretical."
+  "The footnotes among BLOCKS, as (DEFS REFS NOTES), or nil.
+DEFS is an alist of (BLOCK LABEL . TEXT): the trailing blocks of the
+page that define a footnote, with the label PAGE gives them and their
+text cut past the marker.  REFS pairs each marker's regexps with its
+label, for the body blocks that cite it.  NOTES is the rest of the
+page's foot: trailing smaller-type blocks with no marker or no
+citation - an author note, an imprint line - that render as the plain
+text they are but carry the note face, when they sit past
+`pdf-text-footnote-foot' on a page that has body text above them.  A
+footnote takes both halves: a block at the page's foot, set under
+`pdf-text-footnote-size' of PROFILE's body height - or under
+`pdf-text-footnote-size-slack' when it opens with a marker, the
+stronger signal buying the gate its slack - opening with a marker the
+body above it cites, as a superscript or as the flat symbol the text
+layer wrote.  A block missing either half renders as the ordinary
+text it may well be.  VOCABULARY joins the texts.  Two footnotes
+sharing one marker on one page would share a label, and org would
+read them as one; books rotate their symbols, so the collision stays
+theoretical."
   (when-let* ((body (plist-get profile :height)))
     (let* ((vec (vconcat blocks))
            (i (1- (length vec)))
@@ -3013,7 +3061,12 @@ symbols, so the collision stays theoretical."
                     (or (eq 'blank (pdf-text-block-kind block))
                         (and (memq (pdf-text-block-kind block) '(para item))
                              (when-let* ((height (pdf-text--block-height block)))
-                               (< height (* pdf-text-footnote-size body)))))))
+                               (or (< height (* pdf-text-footnote-size body))
+                                   (and (< height (* pdf-text-footnote-size-slack
+                                                     body))
+                                        (pdf-text--footnote-open
+                                         (pdf-text--join-block block
+                                                               vocabulary)))))))))
         (unless (eq 'blank (pdf-text-block-kind (aref vec i)))
           (push (aref vec i) run))
         (cl-decf i))
@@ -3022,24 +3075,40 @@ symbols, so the collision stays theoretical."
                               for block = (aref vec j)
                               when (memq (pdf-text-block-kind block) '(para item))
                               collect (pdf-text--join-block block vocabulary)))
-              defs refs)
+              defs refs notes)
           (dolist (block run)
-            (when-let* ((text (pdf-text--join-block block vocabulary))
-                        (open (pdf-text--footnote-open text))
-                        (re (pdf-text--footnote-marker-re (car open)))
-                        ((cl-some (lambda (above) (string-match-p re above))
-                                  texts)))
-              (let ((label (pdf-text--footnote-label page (car open))))
-                (push (cons block (cons label (substring text (cdr open)))) defs)
-                (push (cons re label) refs))))
-          (and defs (cons (nreverse defs) (nreverse refs))))))))
+            (let* ((text (pdf-text--join-block block vocabulary))
+                   (open (and text (pdf-text--footnote-open text)))
+                   (res (and open
+                             (delq nil
+                                   (list (pdf-text--footnote-marker-re (car open))
+                                         (pdf-text--footnote-flat-re (car open))))))
+                   (cited (and res
+                               (cl-some (lambda (re)
+                                          (cl-some (lambda (above)
+                                                     (string-match-p re above))
+                                                   texts))
+                                        res))))
+              (cond
+               (cited
+                (let ((label (pdf-text--footnote-label page (car open))))
+                  (push (cons block (cons label (substring text (cdr open))))
+                        defs)
+                  (dolist (re res) (push (cons re label) refs))))
+               ((and texts
+                     (when-let* ((top (pdf-text-line-top
+                                       (car (pdf-text-block-lines block)))))
+                       (<= pdf-text-footnote-foot top)))
+                (push block notes)))))
+          (and (or defs notes)
+               (list (nreverse defs) (nreverse refs) (nreverse notes))))))))
 
 (defun pdf-text--cite-footnotes (text notes)
-  "TEXT with each marker superscript NOTES names replaced by its reference.
+  "TEXT with each marker NOTES names replaced by its reference.
 NOTES is `pdf-text--assign-footnotes' output.  The generated ^{...}
-form becomes [fn:LABEL], attached where the page attached its
-marker."
-  (dolist (ref (cdr notes) text)
+form - or the flat symbol the text layer wrote - becomes [fn:LABEL],
+attached where the page attached its marker."
+  (dolist (ref (cadr notes) text)
     (setq text (replace-regexp-in-string
                 (car ref) (concat "\\1[fn:" (cdr ref) "]") text t))))
 
@@ -3081,30 +3150,39 @@ heading a merged pair makes carries both halves' text already."
           (when (and head (not (cadr placement)))
             (push head out)
             (push "" out))
-          (push (or (and (cadr placement) head)
-                    ;; a footnote definition renders at column zero -
-                    ;; org reads [fn:LABEL] as a definition only there -
-                    ;; with the page's own marker cut, the label now
-                    ;; carrying what it carried
-                    (and note (concat "[fn:" (car note) "] " (cdr note)))
-                    (pcase kind
-                      ((or 'mono 'math)
-                       (pdf-text--render-mono block profile listing-left))
-                      ((or 'table 'fixed)
-                       (mapconcat (lambda (line)
-                                    (string-trim-right (pdf-text-line-text line)))
-                                  (pdf-text-block-lines block) "\n"))
-                      ('item (pdf-text--cite-footnotes
-                              (pdf-text--render-item block vocabulary indent)
-                              notes))
-                      (_ (let ((text (pdf-text--cite-footnotes
-                                      (pdf-text--collapse-doubled
-                                       (pdf-text--join-block block vocabulary))
-                                      notes)))
-                           (if (memq block inset)
-                               (concat "  " text)
-                             text)))))
-                out)
+          (let ((text (or (and (cadr placement) head)
+                          ;; a footnote definition renders at column zero -
+                          ;; org reads [fn:LABEL] as a definition only there -
+                          ;; with the page's own marker cut, the label now
+                          ;; carrying what it carried
+                          (and note (concat "[fn:" (car note) "] " (cdr note)))
+                          (pcase kind
+                            ((or 'mono 'math)
+                             (pdf-text--render-mono block profile listing-left))
+                            ((or 'table 'fixed)
+                             (mapconcat (lambda (line)
+                                          (string-trim-right
+                                           (pdf-text-line-text line)))
+                                        (pdf-text-block-lines block) "\n"))
+                            ('item (pdf-text--cite-footnotes
+                                    (pdf-text--render-item block vocabulary indent)
+                                    notes))
+                            (_ (let ((text (pdf-text--cite-footnotes
+                                            (pdf-text--collapse-doubled
+                                             (pdf-text--join-block block
+                                                                   vocabulary))
+                                            notes)))
+                                 (if (memq block inset)
+                                     (concat "  " text)
+                                   text)))))))
+            ;; the recognition rides a text property so the buffer's
+            ;; font-lock rule can dim it: a face put here would not
+            ;; survive org's refontification, the property does
+            (push (if (and (not (and (cadr placement) head))
+                           (or note (memq block (caddr notes))))
+                      (propertize text 'pdf-text-note t)
+                    text)
+                  out))
           (setq previous block))))
     ;; a soft hyphen still standing marks a break that did happen - a
     ;; kept compound wrap, a paragraph ending mid-word at the page's
@@ -3641,6 +3719,35 @@ finer mapping from the image's geometry would be false precision."
         (setq n (1+ n)))
       n)))
 
+(defgroup pdf-text nil
+  "Reflowed plain-text reading view for PDFs."
+  :group 'convenience
+  :prefix "pdf-text-")
+
+(defface pdf-text-footnote-face
+  '((t :inherit shadow))
+  "Face dimming a footnote definition or an unmarked page-foot note.
+Inherits `shadow' so the dimming tracks the theme either way; it is
+appended behind whatever org paints, so `org-footnote' keeps the
+label."
+  :group 'pdf-text)
+
+(defun pdf-text--match-note (limit)
+  "Font-lock matcher: the next span the render marked as a note.
+The render puts a `pdf-text-note' text property on footnote
+definitions and unmarked page-foot notes; the property survives
+org's refontification, so the rule keyed on it re-applies the face
+each time font-lock runs.  Match data covers the span up to LIMIT."
+  (let ((beg (point)))
+    (unless (get-text-property beg 'pdf-text-note)
+      (setq beg (next-single-property-change beg 'pdf-text-note nil limit)))
+    (when (and beg (< beg limit))
+      (let ((end (or (next-single-property-change beg 'pdf-text-note nil limit)
+                     limit)))
+        (goto-char end)
+        (set-match-data (list beg end))
+        t))))
+
 (define-derived-mode pdf-text-mode org-mode "pdf-text"
   "Reflowed reading view of a PDF.
 Derives from `org-mode' so the document outline, interleaved as
@@ -3651,6 +3758,8 @@ text it always was."
   (setq buffer-read-only t)
   (visual-line-mode 1)
   (goto-address-mode 1)
+  (font-lock-add-keywords
+   nil '((pdf-text--match-note 0 'pdf-text-footnote-face append)) t)
   ;; The reflow writes super- and subscripts as ^{...}/_{...}; org
   ;; renders only that braced form as real scripts, so a literal ^ or _
   ;; extracted from the page stays the plain glyph it was.  All three
@@ -3664,7 +3773,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 13
+(defconst pdf-text-render-version 14
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

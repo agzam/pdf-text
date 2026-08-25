@@ -415,6 +415,48 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
              (merged (pdf-text--merge-script-fragments lines profile)))
         (expect (pdf-text-line-text (car merged)) :to-equal "the value x^{m}")))
 
+    (it "prefixes a raised leading fragment, a footnote marker before its note"
+      ;; the alignment paper raises each note's marker as a record of
+      ;; its own, served before the note's first line
+      (let* ((lines (pdf-text-tests--page
+                     '(("*" :x0 0.098 :x1 0.105 :base 0.7957 :height 0.0083)
+                       ("Work done under partial support" :x0 0.1179 :x1 0.90
+                        :base 0.8027 :height 0.0125))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (length merged) :to-be 1)
+        (expect (pdf-text-line-text (car merged))
+                :to-equal "^{*}Work done under partial support")))
+
+    (it "joins a same-baseline leading fragment flat, a bullet not a script"
+      (let* ((lines (pdf-text-tests--page
+                     '(("•" :x0 0.098 :x1 0.105 :base 0.40 :height 0.0089)
+                       ("item text follows the bullet" :x0 0.1179 :x1 0.60
+                        :base 0.40))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (pdf-text-line-text (car merged))
+                :to-equal "• item text follows the bullet")))
+
+    (it "keeps a wordy leading fragment as the plain text it is"
+      (let* ((lines (pdf-text-tests--page
+                     '(("the" :x0 0.10 :x1 0.13 :base 0.3936 :height 0.0089)
+                       ("value continues along the line" :x0 0.131 :x1 0.60
+                        :base 0.40))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (pdf-text-line-text (car merged))
+                :to-equal "the value continues along the line")))
+
+    (it "keeps a raised alpha fragment flat, a math limit not a marker"
+      ;; logic's display math serves the ∧'s upper limit before its
+      ;; line; gluing it on as ^{m} would read as scripting the line's
+      ;; first word (the corpus caught exactly this)
+      (let* ((lines (pdf-text-tests--page
+                     '(("m" :x0 0.30 :x1 0.32 :base 0.3936 :height 0.0089)
+                       ("theorem continues the sentence" :x0 0.10 :x1 0.60
+                        :base 0.40))))
+             (merged (pdf-text--merge-script-fragments lines profile)))
+        (expect (pdf-text-line-text (car merged))
+                :to-equal "m theorem continues the sentence")))
+
     (it "stacks both limits of an operator, superscript then subscript"
       (let* ((lines (pdf-text-tests--page
                      '(("that is, A |= ∧" :x0 0.10 :x1 0.45 :base 0.40)
@@ -1980,6 +2022,24 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
     (expect "of a second.^{*}"
             :to-match (pdf-text--footnote-marker-re "*"))))
 
+(describe "pdf-text--footnote-flat-re"
+  (it "matches the word-attached symbol closing a title"
+    (expect "Using Bilingual Dictionaries and Dynamic Programming*"
+            :to-match (pdf-text--footnote-flat-re "*")))
+
+  (it "does not half-match a generated superscript"
+    (expect (string-match-p (pdf-text--footnote-flat-re "*")
+                            "a sentence closing on a marker.^{*}")
+            :to-be nil))
+
+  (it "does not read a detached star as a citation"
+    (expect (string-match-p (pdf-text--footnote-flat-re "*")
+                            "a line closing on a dinkus *")
+            :to-be nil))
+
+  (it "gives a numeric token no flat form"
+    (expect (pdf-text--footnote-flat-re "1") :to-be nil)))
+
 (describe "pdf-text footnotes"
   (it "renders a symbol marker and its block as an org footnote"
     (expect (pdf-text-tests--render
@@ -2042,6 +2102,99 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
                       :height 0.010 :x1 0.60)))))
       (expect render :not :to-match (rx "[fn:"))
       (expect render :to-match "\\*A note nothing cites")))
+
+  (it "gives the size gate slack to a marker-opening block at the foot"
+    ;; the alignment paper's notes reach 0.906 of the body height -
+    ;; over the gate, under the slack - and the marker plus the body's
+    ;; citation carry the decision
+    (expect (pdf-text-tests--render
+             '(("body prose citing its own footnote here.^{*} and onward"
+                :height 0.015)
+               ("body line two filling the column right along here")
+               ("body line three ends here" :x1 0.40)
+               ("*A note set a hair over the gate at the page's foot" :gap 3
+                :height 0.0136 :x1 0.60)))
+            :to-match (rx bol "[fn:1-star] A note set a hair over")))
+
+  (it "gives no slack to a block without a marker"
+    (expect (pdf-text-tests--render
+             '(("body prose above the foot going about its business"
+                :height 0.015)
+               ("body line two filling the column right along here")
+               ("body line three ends here" :x1 0.40)
+               ("A closing paragraph set a hair small, no marker" :gap 3
+                :height 0.0136 :x1 0.60)))
+            :not :to-match (rx "[fn:")))
+
+  (it "reads a flat trailing symbol as the citation the text layer wrote"
+    ;; the alignment paper's title carries its star in-record with no
+    ;; size contrast for the glyph pass to dissect: "Dynamic Programming*"
+    (let ((render (pdf-text-tests--render
+                   '(("Using Bilingual Dictionaries and Dynamic Programming*"
+                      :height 0.019 :x1 0.70)
+                     ("body prose under the title fills the column" :gap 2
+                      :height 0.015)
+                     ("body line two filling the column right along here")
+                     ("body line three ends here" :x1 0.40)
+                     ("*Work done under partial support of the government"
+                      :gap 3 :height 0.011 :x1 0.80)))))
+      (expect render :to-match (rx "Dynamic Programming[fn:1-star]"))
+      (expect render :to-match (rx bol "[fn:1-star] Work done under"))))
+
+  (it "marks an unmarked page-foot block as a note without a label"
+    ;; bornstein's author note: no marker anywhere in the body, set
+    ;; small at the foot - the face without an invented [fn:]
+    (let ((render (pdf-text-tests--render
+                   '(("body prose above the note going about its business"
+                      :height 0.015 :base 0.70)
+                     ("body line two filling the column right along here")
+                     ("body line three ends here" :x1 0.40)
+                     ("I would like to thank the reviewers for their help"
+                      :gap 3 :height 0.011 :x1 0.80)))))
+      (expect render :not :to-match (rx "[fn:"))
+      (expect render :to-match "I would like to thank")
+      (expect (get-text-property (string-match "I would like" render)
+                                 'pdf-text-note render)
+              :to-be t)
+      (expect (get-text-property 0 'pdf-text-note render) :to-be nil)))
+
+  (it "carries the note property on a definition line, body clean"
+    (let ((render (pdf-text-tests--render
+                   '(("body line one, closing a sentence on a marker.^{*} then"
+                      :height 0.015)
+                     ("body line two filling the column continues the paragraph")
+                     ("body line three ends here" :x1 0.40)
+                     ("*A word on notation: the note itself, set smaller" :gap 3
+                      :height 0.010)
+                     ("and running one more line" :height 0.010 :x1 0.40)))))
+      (expect (get-text-property (string-match (rx bol "[fn:1-star]") render)
+                                 'pdf-text-note render)
+              :to-be t)
+      (expect (get-text-property 0 'pdf-text-note render) :to-be nil)))
+
+  (it "leaves a small block high on the page without the note face"
+    (let ((render (pdf-text-tests--render
+                   '(("body prose above the block going about its business"
+                      :height 0.015)
+                     ("body line two filling the column right along here")
+                     ("body line three ends here" :x1 0.40)
+                     ("a small caption set high, not a note at the foot"
+                      :gap 3 :height 0.011 :x1 0.80)))))
+      (expect (get-text-property (string-match "a small caption" render)
+                                 'pdf-text-note render)
+              :to-be nil)))
+
+  (it "wants body prose above before dimming an unmarked block"
+    ;; a listing page with a small line at its foot has no prose to be
+    ;; a note to
+    (let ((render (pdf-text-tests--render
+                   '(("(define (f x) (* x x))" :cv 0.02 :x1 0.40)
+                     ("(define (g x) (+ x 1))" :cv 0.02 :x1 0.40)
+                     ("a small line at the foot of a listing page"
+                      :base 0.80 :height 0.011 :x1 0.60)))))
+      (expect (get-text-property (string-match "a small line" render)
+                                 'pdf-text-note render)
+              :to-be nil)))
 
   (it "does not read a body-size block as a footnote"
     (let ((render (pdf-text-tests--render
@@ -2126,7 +2279,31 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
       (org-open-at-point)
       (expect (buffer-substring-no-properties (line-beginning-position)
                                               (line-end-position))
-              :to-match "The note itself"))))
+              :to-match "The note itself")))
+
+  (it "dims a note span through font-lock, refontification included"
+    (with-temp-buffer
+      (let ((inhibit-read-only t))
+        (pdf-text-mode)
+        (insert "plain body prose here\n\n"
+                (propertize "[fn:18-star] The note itself." 'pdf-text-note t)
+                "\n"))
+      (font-lock-ensure)
+      (let ((note (text-property-any (point-min) (point-max)
+                                     'pdf-text-note t)))
+        (expect (memq 'pdf-text-footnote-face
+                      (ensure-list (get-text-property note 'face)))
+                :to-be-truthy)
+        (expect (get-text-property (point-min) 'face) :to-be nil))
+      ;; a refontification strips faces; the rule reapplies ours off
+      ;; the property, which survives
+      (font-lock-flush)
+      (font-lock-ensure)
+      (let ((note (text-property-any (point-min) (point-max)
+                                     'pdf-text-note t)))
+        (expect (memq 'pdf-text-footnote-face
+                      (ensure-list (get-text-property note 'face)))
+                :to-be-truthy)))))
 
 (describe "pdf-text--interleave-outline"
   (it "prepends a heading of the entry's depth at its page start"

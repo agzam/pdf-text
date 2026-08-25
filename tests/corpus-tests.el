@@ -341,6 +341,17 @@ that moved; this reports the line and its number."
                            :titles '("Sections and Notation")))
             :to-equal '(outline))))
 
+(describe "pdf-corpus-describe-violation"
+  (it "prints a note-propertized pair as plain text"
+    ;; rendered note lines carry the pdf-text-note property, and %S
+    ;; would print it as #("..." 0 n (pdf-text-note t)) in every report
+    (expect (pdf-corpus-describe-violation
+             (list 'mid-sentence
+                   (cons (propertize "FMEA (failure modes" 'pdf-text-note t)
+                         (propertize "analysis), 1052" 'pdf-text-note t))))
+            :to-equal
+            "1 mid-sentence break(s): \"FMEA (failure modes\" -> \"analysis), 1052\"")))
+
 ;;; The cases themselves
 
 (describe "pdf-corpus-render"
