@@ -8,4 +8,4 @@ right-hand column, with backward baseline jumps between the runs.  Zone
 reassembly re-sorts the records by baseline row and x, so each rule reads as
 one line; the rows render as display math, not as prose or a quotation.
 Numbered displayed equations (rules 11-13) stand alone between paragraphs."
- :budget (:mid-sentence 0))
+ :budget (:mid-sentence 0 :glued 1))

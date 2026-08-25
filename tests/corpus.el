@@ -325,6 +325,38 @@ A folio that reaches the reader is a running head the geometry missed."
   (seq-filter #'pdf-text--page-marker-p
               (seq-remove #'string-blank-p (split-string text "\n"))))
 
+(defun pdf-corpus--glued-excluded-p (line)
+  "Whether LINE's tokens stay out of the glued count.
+A generated table row or keyword line is markup, not page text, and a
+line indented two spaces or more renders verbatim - a listing, display
+mathematics or a quotation - where camelCase is the code's own.  A
+list item keeps its words: the indent is the render's, the text is
+prose."
+  (and (not (string-match-p "\\`[ \t]*- " line))
+       (string-match-p "\\`\\(?:[ \t]*|\\|[ \t]*#\\+\\|  \\)" line)))
+
+(defun pdf-corpus-glued-tokens (text &optional vocabulary)
+  "Tokens of TEXT that read as words glued together, in order.
+An OCR text layer fabricates its glyph boxes, and where it lies the
+prose shows a lowercase word running straight into a capitalized one
+\(ofResearch) or punctuation with no space after it (1961;Newcomb).
+Verbatim lines stay out of the count - code is camelCase by design -
+and so does a compound VOCABULARY shows the document writing as one
+word.  A Mc-name or an iPhone counts too: the measure is a stable
+proxy for the damage, not a judge of any one token, and the budget a
+case carries is what locks its page's count in."
+  (let ((case-fold-search nil)          ; batch defaults to t, where
+        (known (mapcar #'pdf-corpus-stream vocabulary)) ; [a-z] matches A
+        glued)
+    (dolist (line (split-string text "\n"))
+      (unless (pdf-corpus--glued-excluded-p line)
+        (dolist (token (split-string line))
+          (when (and (or (string-match-p "[a-z][A-Z]" token)
+                         (string-match-p "[a-z0-9][;,][[:alpha:]]" token))
+                     (not (member (pdf-corpus-stream token) known)))
+            (push token glued)))))
+    (nreverse glued)))
+
 (defun pdf-corpus-heading-bodies (text)
   "Each org heading in TEXT as (TITLE LEVEL CHARS), in order.
 CHARS is what the heading owns, which is what the reader gets when the
@@ -378,13 +410,15 @@ the outline points at something the page never says."
                                        (pdf-corpus-stream title) stream)))
                         titles))))
 
-(cl-defun pdf-corpus-violations (&key source reflowed headed titles drops budget)
+(cl-defun pdf-corpus-violations (&key source reflowed headed titles drops budget
+                                      vocabulary)
   "Every invariant the rendering of one page breaks, as (KIND . DETAIL).
 SOURCE is its source lines, REFLOWED its reflow, HEADED the reflow
 with the outline headings interleaved, TITLES the outline entries
 naming a section on the page, DROPS the source lines the case
 licenses the render to lose, and BUDGET how many mid-sentence breaks
-it tolerates."
+and glued tokens it tolerates.  VOCABULARY carries the document's own
+hyphenated compounds, which the glued count excuses."
   (let ((diff (pdf-corpus-diff source reflowed))
         violations)
     (unless (equal (mapcar #'string-trim (plist-get diff :lost))
@@ -395,6 +429,9 @@ it tolerates."
     (let ((breaks (pdf-corpus-mid-sentence-breaks reflowed)))
       (when (< (or (plist-get budget :mid-sentence) 0) (length breaks))
         (push (cons 'mid-sentence breaks) violations)))
+    (let ((glued (pdf-corpus-glued-tokens reflowed vocabulary)))
+      (when (< (or (plist-get budget :glued) 0) (length glued))
+        (push (cons 'glued glued) violations)))
     (when-let* ((markers (pdf-corpus-page-marker-lines reflowed)))
       (push (cons 'page-marker markers) violations))
     (when-let* ((misplaced (pdf-corpus-outline-placements titles (or headed reflowed))))
@@ -422,7 +459,8 @@ RENDERED is `pdf-corpus-render' output, computed when not supplied."
      :headed (alist-get page (plist-get rendered :headed))
      :titles (pdf-corpus-titles (plist-get case :outline) page)
      :drops (plist-get case :drops)
-     :budget (plist-get meta :budget))))
+     :budget (plist-get meta :budget)
+     :vocabulary (plist-get case :vocabulary))))
 
 (defun pdf-corpus-describe-violation (violation)
   "VIOLATION as one line of a report."
@@ -435,6 +473,9 @@ RENDERED is `pdf-corpus-render' output, computed when not supplied."
                              (mapconcat (lambda (pair)
                                           (format "%S -> %S" (car pair) (cdr pair)))
                                         (seq-take detail 3) "; ")))
+      ('glued (format "%d glued token(s): %s"
+                      (length detail)
+                      (string-join (seq-take detail 5) " ")))
       ('page-marker (format "page marker survived: %s" (string-join detail " ")))
       ('outline (format "outline title placed wrong: %s"
                         (mapconcat (lambda (found)

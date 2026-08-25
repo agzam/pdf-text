@@ -83,7 +83,7 @@ Neither the unit specs nor the corpus cases need a PDF or epdfinfo.
 
 ** The corpus
 
-Synthetic geometry proves a rule; it never proves that a book renders. Real books cannot go in the repo and epdfinfo cannot run in CI, so the geometry travels instead of the PDF: a case under =tests/corpus/= carries a window of pages as line records, plus the rendering of one subject page that a human read once. The suite renders each case from its records and holds it to that golden and to a set of invariants - text survival, mid-sentence breaks, outline titles reading exactly once, no heading folding to an empty section.
+Synthetic geometry proves a rule; it never proves that a book renders. Real books cannot go in the repo and epdfinfo cannot run in CI, so the geometry travels instead of the PDF: a case under =tests/corpus/= carries a window of pages as line records, plus the rendering of one subject page that a human read once. The suite renders each case from its records and holds it to that golden and to a set of invariants - text survival, mid-sentence breaks, glued tokens (an OCR text layer runs words together, ~ofResearch~, and welds punctuation to the letter after it; verbatim listings and the document's own compounds stay out of the count), outline titles reading exactly once, no heading folding to an empty section. A case budgets the breaks and glued tokens its page carries today, so a regression bites while an improvement passes.
 
 The tasks that do want a real book:
 

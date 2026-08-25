@@ -8,6 +8,6 @@ Notation\" at line 12 - and each heading has to sit at the line it names, so
 that the first section owns its paragraph instead of folding shut on nothing.
 A boxed sidebar sits inset and smaller than the body from \"A note on the
 starred\"; its title line belongs to the box and is set in with it."
- :budget (:mid-sentence 0))
+ :budget (:mid-sentence 0 :glued 1))
 ;; No :tolerates, and none is coming: this page is the Round 4 defect
 ;; itself.  A licence here would be a licence for the bug under repair.

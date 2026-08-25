@@ -12,4 +12,4 @@ prose with indent-marked paragraphs, an inset block quote joined as
 one passage, and the book's outer-margin term labels (Hidden Markov
 models, Bayesian network) kept as detached lines at the page's end
 rather than braided into the paragraphs they annotate."
- :budget (:mid-sentence 0))
+ :budget (:mid-sentence 0 :glued 3))

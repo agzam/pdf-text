@@ -204,6 +204,41 @@ that moved; this reports the line and its number."
              "the final set of rewrite rules are\n  x ∗ i(x) → e\nwhere e is the identity element of the group")
             :to-be nil)))
 
+(describe "pdf-corpus-glued-tokens"
+  (it "reports a lowercase word run into a capitalized one"
+    ;; bornstein p1: the OCR text layer writes the title's second line
+    ;; with no space and no gap between its glyph boxes
+    (expect (pdf-corpus-glued-tokens "ofResearch, 1968-1987")
+            :to-equal '("ofResearch,")))
+
+  (it "reports punctuation glued to the letter after it"
+    (expect (pdf-corpus-glued-tokens "Festinger, 1951; Homans, 1961;Newcomb, 1963")
+            :to-equal '("1961;Newcomb,")))
+
+  (it "leaves hyphenated compounds, numbers and plain prose alone"
+    (expect (pdf-corpus-glued-tokens
+             "Meta-Analysis of D'Agostino's 1,000 ratings, and more")
+            :to-be nil))
+
+  (it "does not read capitals as lowercase in batch"
+    ;; case-fold-search defaults to t there, where [a-z] matches A
+    (expect (pdf-corpus-glued-tokens "AN ALL-CAPS HEADING; MORE")
+            :to-be nil))
+
+  (it "skips verbatim lines and table rows, where camelCase is the code's own"
+    (expect (pdf-corpus-glued-tokens
+             "  toString(myVar);\n| aCell | anotherCell |")
+            :to-be nil))
+
+  (it "still counts a nested list item, whose indent is the render's"
+    (expect (pdf-corpus-glued-tokens "  - a glued ofResearch item")
+            :to-equal '("ofResearch")))
+
+  (it "excuses a compound the document itself writes as one word"
+    (expect (pdf-corpus-glued-tokens "written in JavaScript here"
+                                     '("Java-Script"))
+            :to-be nil)))
+
 (describe "pdf-corpus-page-marker-lines"
   (it "reports a folio the running-head removal left behind"
     (expect (pdf-corpus-page-marker-lines "body text\n17\nmore body")
@@ -285,6 +320,17 @@ that moved; this reports the line and its number."
                            :source '("display maths follows," "and the sentence resumes")
                            :reflowed "display maths follows,\nand the sentence resumes"))
             :to-equal '(mid-sentence)))
+
+  (it "spends a glued budget before it complains"
+    (expect (pdf-corpus-violations
+             :source '("Overview and Meta-Analysis" "ofResearch, 1968-1987")
+             :reflowed "Overview and Meta-Analysis ofResearch, 1968-1987"
+             :budget '(:glued 1))
+            :to-be nil)
+    (expect (mapcar #'car (pdf-corpus-violations
+                           :source '("Overview and Meta-Analysis" "ofResearch, 1968-1987")
+                           :reflowed "Overview and Meta-Analysis ofResearch, 1968-1987"))
+            :to-equal '(glued)))
 
   (it "judges heading placement on the reader's text, not the reflow"
     (expect (mapcar #'car (pdf-corpus-violations

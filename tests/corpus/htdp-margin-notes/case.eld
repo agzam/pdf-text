@@ -12,4 +12,4 @@ Sample Problem block, and a define-struct data definition.  Known
 wart, no invariant sees it: the BSL comment block after define-struct
 munges its continuation semicolons (`; A UFO is a structure: ;'), the
 reading-order residual in comment columns."
- :budget (:mid-sentence 0))
+ :budget (:mid-sentence 0 :glued 1))
