@@ -404,6 +404,64 @@ that moved; this reports the line and its number."
             :to-equal
             "1 mid-sentence break(s): \"FMEA (failure modes\" -> \"analysis), 1052\"")))
 
+(describe "pdf-corpus-declarations"
+  (it "keeps the keys that name something, licence before captured defect"
+    (expect (pdf-corpus-declarations '(:red (outline) :tolerates (page-marker)))
+            :to-equal '((:tolerates page-marker) (:red outline))))
+
+  (it "drops a key declaring nothing"
+    (expect (pdf-corpus-declarations '(:tolerates nil :red (outline)))
+            :to-equal '((:red outline)))))
+
+(describe "pdf-corpus-charter"
+  (it "says what a case declaring nothing is held to"
+    (expect (pdf-corpus-charter nil) :to-equal "breaks no invariant"))
+
+  (it "names a licensed residual as a licence"
+    (expect (pdf-corpus-charter '(:tolerates (page-marker)))
+            :to-equal "breaks nothing but the page-marker it declares"))
+
+  (it "names a captured defect as red, so a licence cannot pose as one"
+    ;; the two mean different things - an accepted cost against a bug a
+    ;; named unit owes a fix - and the suite's own output has to say which
+    (expect (pdf-corpus-charter '(:red (page-marker)))
+            :to-equal "stays red for the page-marker it was captured for"))
+
+  (it "names both, kinds in a fixed order"
+    (expect (pdf-corpus-charter '(:red (outline)
+                                  :tolerates (page-marker mid-sentence)))
+            :to-equal (concat "breaks the mid-sentence and page-marker it declares"
+                              ", and stays red for the outline"))))
+
+(describe "pdf-corpus-verdict"
+  (it "accepts the declared set whichever key declares it"
+    (expect (pdf-corpus-verdict '((page-marker "17")) '(:tolerates (page-marker)))
+            :to-be 'as-declared)
+    (expect (pdf-corpus-verdict '((page-marker "17")) '(:red (page-marker)))
+            :to-be 'as-declared)
+    (expect (pdf-corpus-verdict '((page-marker "17") (added "extra"))
+                                '(:tolerates (page-marker) :red (added)))
+            :to-be 'as-declared))
+
+  (it "reports a case that breaks more than it declares"
+    (expect (pdf-corpus-verdict '((page-marker "17") (added "extra"))
+                                '(:red (page-marker)))
+            :to-equal '("page marker survived: 17" "added: extra")))
+
+  (it "reports a declaration the case has stopped earning"
+    ;; an exact set, not a floor, in both directions: a licence must not
+    ;; outlive its bug even while a second declaration still stands
+    (expect (pdf-corpus-verdict '((page-marker "17"))
+                                '(:tolerates (page-marker) :red (added)))
+            :to-equal '("page marker survived: 17")))
+
+  (it "says which key to drop once every declared defect is gone"
+    (expect (pdf-corpus-verdict nil '(:red (page-marker)))
+            :to-equal '("declared defects are gone: drop :red from"
+                        "case.eld and run bb corpus-accept"))
+    (expect (car (pdf-corpus-verdict nil '(:tolerates (page-marker) :red (added))))
+            :to-equal "declared defects are gone: drop :tolerates and :red from")))
+
 ;;; The cases themselves
 
 (describe "pdf-corpus-render"
@@ -422,17 +480,10 @@ that moved; this reports the line and its number."
       (expect (alist-get 5 (plist-get rendered :headed))
               :to-equal "* Chapter Two\npage five."))))
 
-(defun pdf-corpus-tests--kinds (violations)
-  "The kinds VIOLATIONS are of, once each, in a fixed order."
-  (sort (seq-uniq (mapcar #'car violations))
-        (lambda (a b) (string< (symbol-name a) (symbol-name b)))))
-
 (dolist (slug (pdf-corpus-slugs))
   (let* ((case (pdf-corpus-read slug))
          (meta (plist-get case :meta))
          (page (pdf-corpus-subject case))
-         (tolerated (pdf-corpus-tests--kinds
-                     (mapcar #'list (plist-get meta :tolerates))))
          (rendered nil)
          (render (lambda ()
                    (or rendered (setq rendered (pdf-corpus-render case)))))
@@ -445,20 +496,11 @@ that moved; this reports the line and its number."
                  (plist-get case :golden) (funcall subject))
                 :to-be nil))
 
-      (it (if tolerated
-              (format "breaks nothing but the %s it declares"
-                      (string-join (mapcar #'symbol-name tolerated) " and "))
-            "breaks no invariant")
-        ;; an exact set, not a floor: the day a declared defect is fixed
-        ;; this fails and says so, instead of a stale licence outliving it
+      (it (pdf-corpus-charter meta)
         ;; the verdict is computed outside the `expect' form on purpose:
         ;; buttercup formats the expression's own source into the failure
         ;; message, and a % in there is read as a format directive
-        (let* ((violations (pdf-corpus-case-violations case (funcall render)))
-               (kinds (pdf-corpus-tests--kinds violations))
-               (verdict (cond
-                         ((equal kinds tolerated) 'as-declared)
-                         (violations (mapcar #'pdf-corpus-describe-violation violations))
-                         (t (list "declared defects are gone: drop :tolerates from"
-                                  "case.eld and run bb corpus-accept")))))
+        (let ((verdict (pdf-corpus-verdict
+                        (pdf-corpus-case-violations case (funcall render))
+                        meta)))
           (expect verdict :to-equal 'as-declared))))))

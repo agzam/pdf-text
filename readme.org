@@ -85,6 +85,8 @@ Neither the unit specs nor the corpus cases need a PDF or epdfinfo.
 
 Synthetic geometry proves a rule; it never proves that a book renders. Real books cannot go in the repo and no extractor runs in CI, so the geometry travels instead of the PDF: a case under =tests/corpus/= carries a window of pages as line records, plus the rendering of one subject page that a human read once. The suite renders each case from its records and holds it to that golden and to a set of invariants - text survival, mid-sentence breaks, glued tokens (an OCR text layer runs words together, ~ofResearch~, and welds punctuation to the letter after it; verbatim listings and the document's own compounds stay out of the count), outline titles reading exactly once, no heading folding to an empty section. A case budgets the breaks and glued tokens its page carries today, so a regression bites while an improvement passes.
 
+A case may also declare the invariants it breaks, and the key says why. ~:tolerates~ licenses a residual the round accepts and leaves standing; ~:red~ names a defect the page was captured to hold until the unit that owns it lands. Both are exact sets, not floors: the day a declared defect goes, the case fails and says which key to drop, so no declaration outlives its bug.
+
 The tasks that do want a real book:
 
 #+begin_src sh

@@ -245,8 +245,9 @@ and folio-merged counts, the body profile and the heading-height
 clusters - and the capture refuses to stand when the window still
 renders the subject page differently from the book.  The case starts
 out passing whatever it renders today; a page captured for a defect
-keeps the defect in its golden, and the invariants it fires - with no
-`:tolerates' naming them - keep the case red until the fix lands."
+keeps the defect in its golden, and `:red' in its case.eld names the
+invariants that defect fires, so the suite holds the page to the bug
+until the unit that owns it lands."
   (pdf-corpus-script-connect)
   (let* ((file (pdf-corpus-script-book book))
          (page (if (stringp page) (string-to-number page) page))

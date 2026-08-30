@@ -21,5 +21,12 @@ What sets them apart is where they sit and the air around them:
 centred in a column that starts at 0.1963, two to four leadings
 clear.  The display title above them is the one thing the size rule
 does catch, at 1.65 body, and it must not become a section heading of
-its own."
- :budget (:mid-sentence 0 :glued 0))
+its own.
+
+The `:red' page-marker is the surviving furniture, seen from the
+render: the running head stays, so the folio \"1\" is left on a line
+of its own.  Round 12 unit 4 owns the fix - the band and the
+detachment measured against the text block - and this case is what it
+is measured against."
+ :budget (:mid-sentence 0 :glued 0)
+ :red (page-marker))

@@ -537,4 +537,57 @@ RENDERED is `pdf-corpus-render' output, computed when not supplied."
                         (mapconcat (lambda (title) (format "%S" title)) detail "; ")))
       (_ (format "%s: %S" kind detail)))))
 
+;;; What a case declares about the invariants it breaks
+
+(defun pdf-corpus-kinds (kinds)
+  "KINDS, once each, in a fixed order."
+  (sort (seq-uniq kinds)
+        (lambda (a b) (string< (symbol-name a) (symbol-name b)))))
+
+(defun pdf-corpus-declarations (meta)
+  "What META declares about the invariants its case breaks, as (KEY . KINDS).
+Two keys, because a case breaks an invariant for two different
+reasons.  `:tolerates' licenses a residual the round accepts and
+leaves standing.  `:red' names a defect the case was captured to
+hold until a named unit closes it: a licence may never cover the bug
+under repair, and a reader of the suite has to tell the two apart."
+  (seq-filter #'cdr (list (cons :tolerates (plist-get meta :tolerates))
+                          (cons :red (plist-get meta :red)))))
+
+(defun pdf-corpus--kind-phrase (kinds)
+  "KINDS named in one phrase, or nil when there are none."
+  (when kinds
+    (string-join (mapcar #'symbol-name (pdf-corpus-kinds kinds)) " and ")))
+
+(defun pdf-corpus-charter (meta)
+  "How the invariant spec of the case META describes reads."
+  (let ((licensed (pdf-corpus--kind-phrase (plist-get meta :tolerates)))
+        (red (pdf-corpus--kind-phrase (plist-get meta :red))))
+    (cond
+     ((and licensed red)
+      (format "breaks the %s it declares, and stays red for the %s"
+              licensed red))
+     (red (format "stays red for the %s it was captured for" red))
+     (licensed (format "breaks nothing but the %s it declares" licensed))
+     (t "breaks no invariant"))))
+
+(defun pdf-corpus-verdict (violations meta)
+  "VIOLATIONS judged against what META declares.
+`as-declared' when the kinds broken are exactly the declared set.
+An exact set and not a floor: the day a declared defect is fixed the
+case says so, so no declaration outlives its bug.  Anything else is
+the report lines a reader needs."
+  (let ((kinds (pdf-corpus-kinds (mapcar #'car violations)))
+        (declared (pdf-corpus-kinds
+                   (apply #'append (mapcar #'cdr (pdf-corpus-declarations meta))))))
+    (cond
+     ((equal kinds declared) 'as-declared)
+     (violations (mapcar #'pdf-corpus-describe-violation violations))
+     (t (list (format "declared defects are gone: drop %s from"
+                      (string-join (mapcar (lambda (declaration)
+                                             (symbol-name (car declaration)))
+                                           (pdf-corpus-declarations meta))
+                                   " and "))
+              "case.eld and run bb corpus-accept")))))
+
 (provide 'pdf-corpus)

@@ -16,5 +16,11 @@ false positive any position-based heading rule has to survive, and
 the reason the furniture goes first.
 
 The mid-sentence budget is the law paragraph broken by its own
-display maths."
- :budget (:mid-sentence 1 :glued 0))
+display maths.
+
+The `:red' page-marker is the same defect the page-1 case carries:
+the running head survives and leaves its folio \"3\" on a line of its
+own.  Round 12 unit 4 owns the fix, and the two cases together are
+what it is measured against."
+ :budget (:mid-sentence 1 :glued 0)
+ :red (page-marker))
