@@ -250,6 +250,134 @@ var first = scriptArgs.length > 1 ? parseInt(scriptArgs[1]) : 1;
 var last = scriptArgs.length > 2 ? parseInt(scriptArgs[2]) : doc.countPages();
 if (last > doc.countPages()) last = doc.countPages();
 
+// A dvips-era Type 3 bitmap font names each glyph by its character -
+// /' /1 /#2F - and ships a ToUnicode CMap covering only the letters,
+// so MuPDF reads the rest as U+FFFD while the font itself spells the
+// answer.  Complete every Type 3 font's CMap from its glyph names
+// before any page loads: existing entries are kept verbatim, a
+// single printable-ASCII name maps to its character - a second
+// dvips scheme writes the byte as literal '#XX' text, which reduces
+// to the same byte - and the TeX ligature bytes 0B-0F map to ff fi
+// fl ffi ffl when the font reads as text: it names a digit, or its
+// control-byte names stay inside 0B-0F.  A math italic font fails
+// both - no digits, Greek names past 0F - and its 0B-0F are Greek
+// letters that must stay unmapped rather than turn into false
+// ligatures.  In a text font of varied widths, the bytes TeX reads
+// as dashes and double quotes take their cmr meaning - 7B/7C are
+// en and em dash, 5C/22 the opening and closing double quote - but
+// in typewriter type those bytes are the braces and bar they look
+// like, and uniform widths are that font's own tell.
+function hx2(v) { return ('00' + v.toString(16).toUpperCase()).slice(-2); }
+function hx4(v) { return ('0000' + v.toString(16).toUpperCase()).slice(-4); }
+function completeType3(doc) {
+	var n;
+	try { n = doc.countObjects(); } catch (e) { return; }
+	var lig = { 11: 'ff', 12: 'fi', 13: 'fl', 14: 'ffi', 15: 'ffl' };
+	var texy = { 123: '\\u2013', 124: '\\u2014', 92: '\\u201C', 34: '\\u201D' };
+	for (var i = 1; i < n; i++) {
+		var r;
+		try { r = doc.newIndirect(i, 0).resolve(); } catch (e) { continue; }
+		if (!r || !r.isDictionary || !r.isDictionary()) continue;
+		var st = r.get('Subtype');
+		if (!st || st.toString() != '/Type3') continue;
+		var enc = r.get('Encoding');
+		if (!enc || enc.isNull()) continue;
+		enc = enc.resolve();
+		if (!enc.isDictionary()) continue;
+		var diffs = enc.get('Differences');
+		if (!diffs || diffs.isNull() || !diffs.isArray()) continue;
+		// Differences: an int sets the next code, a name takes it
+		var names = {}, code = 0, hasDigit = false, controlOutside = false;
+		for (var k = 0; k < diffs.length; k++) {
+			var el = diffs.get(k);
+			if (el.isInteger()) { code = parseInt(el.toString()); continue; }
+			if (!el.isName()) { code++; continue; }
+			var nm = el.toString().substring(1);
+			nm = nm.replace(/#([0-9A-Fa-f][0-9A-Fa-f])/g, function (m, h) {
+				return String.fromCharCode(parseInt(h, 16));
+			});
+			if (nm.length == 3 && nm.charAt(0) == '#') {
+				var hb = parseInt(nm.substring(1), 16);
+				if (!isNaN(hb)) nm = String.fromCharCode(hb);
+			}
+			names[code] = nm;
+			if (nm.length == 1) {
+				var nb = nm.charCodeAt(0);
+				if (nb >= 0x30 && nb <= 0x39) hasDigit = true;
+				if (nb < 0x20 && (nb < 0x0B || nb > 0x0F)) controlOutside = true;
+			}
+			code++;
+		}
+		var textish = hasDigit || !controlOutside;
+		// proportional type proven by its own Widths; no proof, no remap
+		var varied = false, w = r.get('Widths'), seen = -1;
+		if (w && !w.isNull()) {
+			w = w.resolve();
+			if (w.isArray()) {
+				for (var wi = 0; wi < w.length; wi++) {
+					var wv = parseFloat(w.get(wi).toString());
+					if (wv > 0) {
+						if (seen < 0) seen = wv;
+						else if (Math.abs(wv - seen) > 0.01) { varied = true; break; }
+					}
+				}
+			}
+		}
+		var covered = {}, chars = [], ranges = [];
+		var tu = r.get('ToUnicode');
+		if (tu && !tu.isNull()) {
+			var text = '';
+			try { text = tu.readStream().asString(); } catch (e) { text = ''; }
+			var sect = /(beginbfchar|beginbfrange)([^]*?)(endbfchar|endbfrange)/g;
+			var m;
+			while ((m = sect.exec(text)) !== null) {
+				var isrange = m[1] == 'beginbfrange';
+				var pair = /<([0-9A-Fa-f]+)>[ \\t\\r\\n]*<([0-9A-Fa-f]+)>[ \\t\\r\\n]*(<([0-9A-Fa-f]+)>)?/g;
+				var e2;
+				while ((e2 = pair.exec(m[2])) !== null) {
+					var a = parseInt(e2[1], 16);
+					if (isrange && e2[3]) {
+						var b = parseInt(e2[2], 16);
+						for (var c = a; c <= b; c++) covered[c] = true;
+						ranges.push('<' + e2[1] + '> <' + e2[2] + '> <' + e2[4] + '>');
+					} else if (!isrange) {
+						covered[a] = true;
+						chars.push('<' + e2[1] + '> <' + e2[2] + '>');
+					}
+				}
+			}
+		}
+		var added = 0;
+		for (var c3 in names) {
+			c3 = parseInt(c3);
+			if (covered[c3]) continue;
+			var nm2 = names[c3], u = null;
+			if (nm2.length == 1) {
+				var byte = nm2.charCodeAt(0);
+				if (byte >= 0x20 && byte < 0x7F)
+					u = (textish && varied && texy[byte]) ? texy[byte] : nm2;
+				else if (textish && lig[byte]) u = lig[byte];
+			}
+			if (u === null) continue;
+			var tgt = '';
+			for (var t = 0; t < u.length; t++) tgt += hx4(u.charCodeAt(t));
+			chars.push('<' + hx2(c3) + '> <' + tgt + '>');
+			added++;
+		}
+		if (added == 0) continue;
+		var out = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap\\n' +
+			'/CMapName /T3UVX def /CMapType 2 def\\n' +
+			'1 begincodespacerange <00> <ff> endcodespacerange\\n';
+		if (chars.length > 0)
+			out += chars.length + ' beginbfchar\\n' + chars.join('\\n') + '\\nendbfchar\\n';
+		if (ranges.length > 0)
+			out += ranges.length + ' beginbfrange\\n' + ranges.join('\\n') + '\\nendbfrange\\n';
+		out += 'endcmap CMapName currentdict /CMap defineresource pop end end\\n';
+		try { r.put('ToUnicode', doc.addStream(out, null)); } catch (e) {}
+	}
+}
+completeType3(doc);
+
 function esc(s) {
 	if (s.indexOf('\\\\') < 0 && s.indexOf('\"') < 0) return s;
 	var out = '';
@@ -609,6 +737,15 @@ measured - while the kerns and italic corrections a font switch
 leaves inside a word stay under 0.05 em.  A gap past this fraction
 of the em size gets the space the page set.")
 
+(defvar pdf-text--degenerate-ems nil
+  "Whether the document's em sizes are garbage - the Type 3 class.
+A dvips-era Type 3 bitmap-font document leaves its FontMatrix scale
+in the sizes MuPDF reports: ems of 0.0001 against glyph heights a
+hundredfold larger, zeroing every em-multiplied threshold.  Bound by
+`pdf-text--mupdf-parse' over a document whose modal em sits orders
+of magnitude under its modal height; the glyph height then stands in
+for the em wherever a threshold multiplies it.")
+
 (defun pdf-text--run-markup (text runs base height space)
   "TEXT with script runs wrapped as org ^{...}/_{...} markup.
 RUNS are the walker's font runs over TEXT, BASE and HEIGHT the line's
@@ -622,7 +759,8 @@ the em size - get one: the page spaced them, the extractor did not.
 A run that fails its own test - symbols alone without a symbol's
 offset, a brace among the characters - reads as the plain text it
 was, and literal ^{ and _{ pairs from the page are broken so org
-never parses them."
+never parses them.  Under `pdf-text--degenerate-ems' the line's
+glyph height stands in for the em the FontMatrix scale zeroed."
   (let ((out nil)
         (last-ink nil)
         (last-plain-size nil))
@@ -646,7 +784,11 @@ never parses them."
                                                      (car out))
                                      (string-match-p "\\`[[:lower:]]" seg))))
                          (<= (* pdf-text-run-space
-                                (max last-plain-size (or (nth 6 run) 0)))
+                                (let ((em (max last-plain-size
+                                               (or (nth 6 run) 0))))
+                                  (if pdf-text--degenerate-ems
+                                      (max em height)
+                                    em)))
                              (- (nth 2 run) last-ink)))
                 (push " " out))
               (push (pdf-text--escape-literals seg) out)
@@ -727,18 +869,45 @@ text-only fallback records."
          ;; key on
          :lead-font (nth 9 (car ink)) :lead-bold (nth 7 (car ink)))))))
 
+(defun pdf-text--degenerate-ems-p (em height)
+  "Whether EM against HEIGHT reads as the Type 3 class.
+An order of magnitude of headroom on either side: a healthy font's
+em runs level with its quad height, however tall a stray display
+delimiter makes one line, while a Type 3 bitmap font's em is a
+hundredth of it."
+  (and em height (< (* 8 em) height)))
+
+(defun pdf-text--forms-degenerate-ems-p (forms)
+  "Whether the walker FORMS carry Type 3 em sizes, medians speaking."
+  (let (heights ems)
+    (dolist (form forms)
+      (when-let* ((height (nth 5 form)))
+        (push height heights))
+      (dolist (run (nth 10 form))
+        (when-let* ((em (nth 6 run)))
+          (push em ems))))
+    (pdf-text--degenerate-ems-p (pdf-text--quantile ems 0.5)
+                                (pdf-text--quantile heights 0.5))))
+
 (defun pdf-text--mupdf-parse (output first last)
   "OUTPUT of the walker as per-page record lists, pages FIRST to LAST.
 A list in page order; nil where a page emitted no lines - the caller's
-cue to fall back on plain text extraction."
+cue to fall back on plain text extraction.  The forms are read whole
+before any record builds, so `pdf-text--degenerate-ems' can bind over
+the build when the document's em sizes are the Type 3 class."
   (with-temp-buffer
     (insert output)
     (goto-char (point-min))
     (let ((pages (make-vector (1+ (- last first)) nil))
-          form)
+          forms form)
       (while (setq form (condition-case nil (read (current-buffer))
                           (end-of-file nil)))
         (when (and (consp form) (integerp (car form)))
+          (push form forms)))
+      (setq forms (nreverse forms))
+      (let ((pdf-text--degenerate-ems (pdf-text--forms-degenerate-ems-p
+                                       forms)))
+        (dolist (form forms)
           (let ((i (- (car form) first)))
             (when (and (<= 0 i) (< i (length pages)))
               (aset pages i (cons (pdf-text--mupdf-record form)
@@ -809,15 +978,19 @@ or a page with no anchored line at all does not move it."
 (defun pdf-text--profile (pages)
   "Modal body geometry of PAGES, each a list of `pdf-text-line'.
 A plist: :height glyph height, :leading baseline step, :left and
-:right column edges, :space word gap.  Document-wide, because a page
-of listings or a page of table rows has no representative body
-geometry of its own."
-  (let (heights lefts rights widths spaces leadings)
+:right column edges, :space word gap, :em the em size the records
+report - degenerate em against height marks the Type 3 class for the
+repairs, the way `pdf-text--degenerate-ems' marks it for the parse.
+Document-wide, because a page of listings or a page of table rows
+has no representative body geometry of its own."
+  (let (heights lefts rights widths spaces leadings ems)
     (dolist (lines pages)
       (let (prev)
         (dolist (line lines)
           (when (pdf-text-line-x0 line)
             (push (pdf-text-line-height line) heights)
+            (when (pdf-text-line-size line)
+              (push (pdf-text-line-size line) ems))
             (push (pdf-text-line-x0 line) lefts)
             (push (pdf-text-line-x1 line) rights)
             (push (- (pdf-text-line-x1 line) (pdf-text-line-x0 line)) widths)
@@ -855,7 +1028,8 @@ geometry of its own."
             ;; tight against it a paper sets them
             :text-top (car area)
             :text-bottom (cdr area)
-            :space space))))
+            :space space
+            :em (pdf-text--quantile ems 0.5)))))
 
 (defvar pdf-text-extra-profile nil
   "Document profile carried into a render of a window of the document.
@@ -2060,6 +2234,27 @@ line as two records.  Table cells and paired lane items also share a
 baseline, but their gaps run wider and their texts fail the clause
 test, so the bound and the words together keep structure apart.")
 
+(defvar pdf-text-kern-gap 0.15
+  "Height fraction of gap under which same-font neighbours may be one word.
+A Type 3 DVI document serves every kern chunk of a word as its own
+record on the typeset line's baseline - gaps at or under zero, or a
+hair over - where the page's own word gaps start at a third of the
+glyph height.  The line's own height is the measure, not the modal
+space, because gaps scale with the font and the shatter bites
+hardest on display-size titles.  The bound reads on the positive
+side; overlap is bounded at half a height, past which two records
+are a shadow-painted double, not a kern.")
+
+(defvar pdf-text-shatter-gap 1.0
+  "Height fraction of gap a shattered document's word join reaches across.
+Where the em sizes mark the Type 3 class, every word of a typeset
+line is its own record, and the line must reassemble before the
+block, alignment and heading rules read it - with no case demand,
+since a title's words open on capitals.  Word gaps run a third of
+the glyph height to a stretched justification's four fifths; a
+table lane or a margin note stands further off and stays its own
+record.")
+
 (defun pdf-text--join-split-lines (lines profile)
   "LINES with a typeset line the extractor served as two rejoined.
 Two neighbours on one baseline, set in the same face and size, closer
@@ -2067,65 +2262,104 @@ than `pdf-text-split-line-gap' of PROFILE's modal spaces, rejoin when
 their words read as one clause - the first ends unpunctuated and the
 second opens lowercase.  A folio opens on a digit, a table cell on a
 capital, a list marker ends on its dot, and every one of them stays
-its own record."
+its own record.  Same-font neighbours closer than `pdf-text-kern-gap'
+are not two words but one, shattered at a kern, and rejoin with no
+space - outright ink overlap alone confirms it, a positive hair of
+gap needs the clause test's lowercase continuation.  Over a document
+of degenerate ems - the Type 3 class, PROFILE's :em against its
+:height - word-gap neighbours within `pdf-text-shatter-gap' rejoin
+too, with the space the page set, whatever case they open on."
   (let ((space (or (plist-get profile :space) 0.005))
+        (shattered (pdf-text--degenerate-ems-p (plist-get profile :em)
+                                               (plist-get profile :height)))
         (case-fold-search nil)
         out)
     (dolist (line lines)
-      (let ((prev (car out)))
-        (if (and prev
-                 (pdf-text-line-base prev) (pdf-text-line-base line)
-                 (< (abs (- (pdf-text-line-base line)
-                            (pdf-text-line-base prev)))
-                    (* 0.25 (or (pdf-text-line-height prev) 0.01)))
-                 (pdf-text--similar-height-p prev line)
-                 (pdf-text-line-x1 prev) (pdf-text-line-x0 line)
-                 (let ((gap (- (pdf-text-line-x0 line)
-                               (pdf-text-line-x1 prev))))
-                   (and (< 0 gap) (< gap (* pdf-text-split-line-gap space))))
-                 (or
-                  ;; one clause split at a wide kern
-                  (and (pdf-text-line-font prev) (pdf-text-line-font line)
-                       (equal (pdf-text-line-font prev)
-                              (pdf-text-line-font line))
-                       (string-match-p "[[:alnum:]]\\'"
-                                       (string-trim
-                                        (pdf-text-line-text prev)))
-                       (string-match-p "\\`[[:lower:]]"
-                                       (string-trim
-                                        (pdf-text-line-text line))))
-                  ;; a dotted section number served apart from its
-                  ;; title, often in another face; a bare enumerator
-                  ;; carries no dot chain and stays a list marker
-                  (and (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)+\\.?\\'"
-                                       (string-trim (pdf-text-line-text prev)))
-                       (string-match-p "\\`[[:upper:]]"
-                                       (string-trim
-                                        (pdf-text-line-text line))))
-                  ;; a bare "N." beside its title, both in one face set
-                  ;; clearly over the body: a paper's display section
-                  ;; number.  A list enumerator at the body size in the
-                  ;; body face stays a marker for the item machinery
-                  (let ((body (plist-get profile :height)))
-                    (and body
-                         (string-match-p "\\`[0-9]+\\.\\'"
-                                         (string-trim
-                                          (pdf-text-line-text prev)))
-                         (string-match-p "\\`[[:upper:]]"
-                                         (string-trim
-                                          (pdf-text-line-text line)))
-                         (pdf-text-line-font prev) (pdf-text-line-font line)
-                         (equal (pdf-text-line-font prev)
-                                (pdf-text-line-font line))
-                         (eq (pdf-text-line-bold prev)
-                             (pdf-text-line-bold line))
-                         (< (* pdf-text-heading-height body)
-                            (min (or (pdf-text-line-height prev) 0)
-                                 (or (pdf-text-line-height line) 0)))))))
+      (let* ((prev (car out))
+             (joiner
+              (when (and prev
+                         (pdf-text-line-base prev) (pdf-text-line-base line)
+                         (< (abs (- (pdf-text-line-base line)
+                                    (pdf-text-line-base prev)))
+                            (* 0.25 (or (pdf-text-line-height prev) 0.01)))
+                         (pdf-text--similar-height-p prev line)
+                         (pdf-text-line-x1 prev) (pdf-text-line-x0 line))
+                (let ((gap (- (pdf-text-line-x0 line)
+                              (pdf-text-line-x1 prev)))
+                      (height (max (pdf-text-line-height prev)
+                                   (pdf-text-line-height line)))
+                      (same-font (and (pdf-text-line-font prev)
+                                      (pdf-text-line-font line)
+                                      (equal (pdf-text-line-font prev)
+                                             (pdf-text-line-font line)))))
+                  (cond
+                   ;; kern chunks of one word, rejoined without a space
+                   ((and same-font
+                         (<= (* -0.5 height) gap)
+                         (or (<= gap 0)
+                             (and (<= gap (* pdf-text-kern-gap height))
+                                  (string-match-p
+                                   "[[:alnum:]]\\'"
+                                   (string-trim (pdf-text-line-text prev)))
+                                  (string-match-p
+                                   "\\`[[:lower:]]"
+                                   (string-trim (pdf-text-line-text line))))))
+                    "")
+                   ;; a shattered document's typeset line, reassembled
+                   ;; word by word with the spaces the page set
+                   ((and shattered same-font
+                         (< 0 gap) (<= gap (* pdf-text-shatter-gap height))
+                         (string-match-p "[^ \t]"
+                                         (pdf-text-line-text prev))
+                         (string-match-p "[^ \t]"
+                                         (pdf-text-line-text line)))
+                    " ")
+                   ((and (< 0 gap)
+                         (< gap (* pdf-text-split-line-gap space))
+                         (or
+                          ;; one clause split at a wide kern
+                          (and same-font
+                               (string-match-p "[[:alnum:]]\\'"
+                                               (string-trim
+                                                (pdf-text-line-text prev)))
+                               (string-match-p "\\`[[:lower:]]"
+                                               (string-trim
+                                                (pdf-text-line-text line))))
+                          ;; a dotted section number served apart from its
+                          ;; title, often in another face; a bare enumerator
+                          ;; carries no dot chain and stays a list marker
+                          (and (string-match-p
+                                "\\`[0-9]+\\(?:\\.[0-9]+\\)+\\.?\\'"
+                                (string-trim (pdf-text-line-text prev)))
+                               (string-match-p "\\`[[:upper:]]"
+                                               (string-trim
+                                                (pdf-text-line-text line))))
+                          ;; a bare "N." beside its title, both in one face
+                          ;; set clearly over the body: a paper's display
+                          ;; section number.  A list enumerator at the body
+                          ;; size in the body face stays a marker for the
+                          ;; item machinery
+                          (let ((body (plist-get profile :height)))
+                            (and body
+                                 (string-match-p "\\`[0-9]+\\.\\'"
+                                                 (string-trim
+                                                  (pdf-text-line-text prev)))
+                                 (string-match-p "\\`[[:upper:]]"
+                                                 (string-trim
+                                                  (pdf-text-line-text line)))
+                                 same-font
+                                 (eq (pdf-text-line-bold prev)
+                                     (pdf-text-line-bold line))
+                                 (< (* pdf-text-heading-height body)
+                                    (min (or (pdf-text-line-height prev) 0)
+                                         (or (pdf-text-line-height line)
+                                             0)))))))
+                    " "))))))
+        (if joiner
             (setcar out (pdf-text--merge-records
                          (list prev line)
                          (concat (string-trim-right (pdf-text-line-text prev))
-                                 " "
+                                 joiner
                                  (string-trim (pdf-text-line-text line)))))
           (push line out))))
     (nreverse out)))
@@ -2899,15 +3133,26 @@ string doubled around a single space is that artifact, not prose."
       line)))
 
 (defun pdf-text--echo-band-p (line piece)
-  "Whether PIECE sits where a shadow echo of LINE would: on its line.
-The second paint lands a point lower, never a leading down, so a
-piece with a baseline of its own must hold it near LINE's.  Records
-without geometry cannot argue and pass."
+  "Whether PIECE sits where a shadow echo of LINE would: on its ink.
+The second paint lands a point off, never a leading down and never
+beside, so a piece with geometry of its own must hold its baseline
+near LINE's and its ink within LINE's span.  A doubled glyph a
+shattered document serves as two records sits on the baseline but
+beside its twin, and the span test keeps it.  Records without
+geometry cannot argue and pass."
   (let ((base (pdf-text-line-base line))
         (other (pdf-text-line-base piece))
         (height (pdf-text-line-height line)))
-    (or (null base) (null other)
-        (< (abs (- other base)) (* 0.5 (or height 0.02))))))
+    (and (or (null base) (null other)
+             (< (abs (- other base)) (* 0.5 (or height 0.02))))
+         (let ((x0 (pdf-text-line-x0 line))
+               (x1 (pdf-text-line-x1 line))
+               (px0 (pdf-text-line-x0 piece))
+               (px1 (pdf-text-line-x1 piece))
+               (slack (* 0.25 (or height 0.02))))
+           (or (null x0) (null px0)
+               (and (<= (- x0 slack) px0)
+                    (<= px1 (+ x1 slack))))))))
 
 (defun pdf-text--dedup-adjacent (lines)
   "LINES with runs of identical non-blank neighbours collapsed to one.
@@ -4452,7 +4697,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 17
+(defconst pdf-text-render-version 18
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

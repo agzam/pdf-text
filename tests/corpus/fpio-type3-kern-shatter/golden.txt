@@ -1,0 +1,7 @@
+  Functional Programming and Input/Output
+
+  Andrew Donald Gordon King's College
+
+  A dissertation submitted to the University of Cambridge towards the degree of Doctor of Philosophy
+
+August 1992

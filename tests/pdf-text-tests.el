@@ -274,6 +274,132 @@ HEADINGS are the org heading lines the outline puts on that page."
               :to-equal
               '("an element from the input only causes an incremental change")))
 
+    ;; fpio p1: a Type 3 DVI document serves every kern chunk as its
+    ;; own record - "Univ" ends x1 0.5765, "ersit" opens x0 0.5759 -
+    ;; and the chunks are one word, rejoined with no space
+    (it "rejoins kern chunks whose gaps sit at or under zero into one word"
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "Univ" :x0 0.5269 :x1 0.5765
+                                    :base 0.8210 :height 0.0168)
+                             (faced "ersit" :x0 0.5759 :x1 0.6204
+                                    :base 0.8210 :height 0.0168)
+                             (faced "y" :x0 0.6198 :x1 0.6322
+                                    :base 0.8210 :height 0.0168))
+                       profile))
+              :to-equal '("University")))
+
+    (it "rejoins an overlapping swash pair, the overlap running deep"
+      ;; fpio's italic title "F" overlaps "unctional" by 0.0039 -
+      ;; most of a modal space - and the word is still one word
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "F" :x0 0.2322 :x1 0.2614
+                                    :base 0.1241 :height 0.0314)
+                             (faced "unctional" :x0 0.2575 :x1 0.4457
+                                    :base 0.1241 :height 0.0314))
+                       profile))
+              :to-equal '("Functional")))
+
+    (it "rejoins a hair-gap chunk on the lowercase confirming signal"
+      ;; fpio p30: "resp" to "ectively" gaps +0.0005 - a tenth of a
+      ;; modal space, far under any word gap the page sets
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "resp" :x0 0.2204 :x1 0.2524
+                                    :base 0.1290 :height 0.0138)
+                             (faced "ectively" :x0 0.2529 :x1 0.3100
+                                    :base 0.1290 :height 0.0138))
+                       profile))
+              :to-equal '("respectively")))
+
+    (it "rejoins overlapping capitals, the overlap alone confirming"
+      ;; CMU-CS-95-113: "Pittsburgh, P" then "A" opening 0.0016 inside
+      ;; the P's ink - no lowercase to confirm, but ink does not overlap
+      ;; across a word boundary
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "P" :x0 0.5376 :x1 0.5506
+                                    :base 0.5109 :height 0.0152)
+                             (faced "A" :x0 0.5490 :x1 0.5635
+                                    :base 0.5109 :height 0.0152))
+                       profile))
+              :to-equal '("PA")))
+
+    (it "keeps a hair-gap capital opening apart, unconfirmed"
+      ;; a positive gap needs the lowercase signal: a shattered word
+      ;; never continues into a capital, but a tight table cell can
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "cell" :x0 0.10 :x1 0.30 :base 0.30)
+                             (faced "Next" :x0 0.3005 :x1 0.35 :base 0.30))
+                       profile))
+              :to-equal '("cell" "Next")))
+
+    (it "chains kern rejoins into the clause join's word space"
+      ;; fpio p1: "to" | "w" | "ards" | "the" - two kern seams heal
+      ;; wordwise, then the word gap takes the clause join's space
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "to" :x0 0.2637 :x1 0.2845
+                                    :base 0.8435 :height 0.0168)
+                             (faced "w" :x0 0.2839 :x1 0.3008
+                                    :base 0.8435 :height 0.0168)
+                             (faced "ards" :x0 0.3002 :x1 0.3433
+                                    :base 0.8435 :height 0.0168)
+                             (faced "the" :x0 0.3512 :x1 0.3835
+                                    :base 0.8435 :height 0.0168))
+                       profile))
+              :to-equal '("towards the")))
+
+    (it "keeps records of different faces off the kern rejoin"
+      ;; fpio p30's math: symbol chunks abut letter chunks across font
+      ;; changes, and only same-font neighbours can be one word
+      (let ((a (faced "ab" :x0 0.10 :x1 0.13 :base 0.30))
+            (b (faced "cd" :x0 0.1295 :x1 0.16 :base 0.30)))
+        (setf (pdf-text-line-font b) "T9")
+        (expect (length (pdf-text--join-split-lines (list a b) profile))
+                :to-be 2)))
+
+    (it "keeps a wholly overlapped record out of the rejoin"
+      ;; a shadow-painted doubled title overlaps by whole words, not
+      ;; by a kern; past a modal space of overlap nothing is one word
+      (expect (length (pdf-text--join-split-lines
+                       (list (faced "PATTERNS" :x0 0.10 :x1 0.30 :base 0.30)
+                             (faced "PATTERNS" :x0 0.101 :x1 0.301
+                                    :base 0.30))
+                       profile))
+              :to-be 2))
+
+    (it "reassembles a shattered document's line across its word gaps"
+      ;; fpio p1: "Functional" and "Programming" a word gap apart on
+      ;; one baseline, each its own record; under the Type 3 class the
+      ;; typeset line comes back, case notwithstanding
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "Functional" :x0 0.2322 :x1 0.4457
+                                    :base 0.1241 :height 0.0314)
+                             (faced "Programming" :x0 0.4614 :x1 0.7410
+                                    :base 0.1241 :height 0.0314))
+                       (append '(:em 0.0001) profile)))
+              :to-equal '("Functional Programming")))
+
+    (it "keeps word-gap capitals apart where the ems are healthy"
+      (expect (length (pdf-text--join-split-lines
+                       (list (faced "Functional" :x0 0.2322 :x1 0.4457
+                                    :base 0.1241 :height 0.0314)
+                             (faced "Programming" :x0 0.4614 :x1 0.7410
+                                    :base 0.1241 :height 0.0314))
+                       (append '(:em 0.016) profile)))
+              :to-be 2))
+
+    (it "keeps lane-wide neighbours apart in a shattered document too"
+      (expect (length (pdf-text--join-split-lines
+                       (list (faced "cell" :x0 0.10 :x1 0.30 :base 0.30)
+                             (faced "Far" :x0 0.32 :x1 0.40 :base 0.30))
+                       (append '(:em 0.0001) profile)))
+              :to-be 2))
+
     (it "keeps a folio and a capitalized cell out of the join"
       (expect (mapcar #'pdf-text-line-text
                       (pdf-text--join-split-lines
@@ -495,6 +621,33 @@ HEADINGS are the org heading lines the outline puts on that page."
                                                  :font "MinionPro-Regular")))
               :to-equal "Age"))))
 
+(describe "pdf-text--run-markup under degenerate ems"
+  ;; a Type 3 bitmap font's FontMatrix scale reaches MuPDF raw: em
+  ;; sizes 0.0001-0.0003 against glyph heights 0.012-0.03, zeroing
+  ;; every em-multiplied threshold
+  (cl-flet ((markup (text runs)
+              (let ((pdf-text--degenerate-ems t))
+                (pdf-text-line-text
+                 (pdf-text--mupdf-record (pdf-text-tests--form text runs))))))
+
+    (it "stands the glyph height in for a garbage em at the space test"
+      ;; a kern gap of 0.0006 clears 0.2 of em 0.0003 twentyfold; it
+      ;; must not read as a word space
+      (expect (markup "95113"
+                      (list (pdf-text-tests--run 0 2 :x0 0.10 :x1 0.14
+                                                 :size 0.0003 :font "T33")
+                            (pdf-text-tests--run 2 3 :x0 0.1406 :x1 0.18
+                                                 :size 0.0003 :font "T31")))
+              :to-equal "95113"))
+
+    (it "still grants a word gap its space under the stand-in"
+      (expect (markup "VolII"
+                      (list (pdf-text-tests--run 0 3 :x0 0.10 :x1 0.13
+                                                 :size 0.0003 :font "T33")
+                            (pdf-text-tests--run 3 2 :x0 0.135 :x1 0.15
+                                                 :size 0.0003 :font "T31")))
+              :to-equal "Vol II"))))
+
 (describe "pdf-text--mupdf-record literals"
   (it "breaks a literal script pair so org will not parse it"
     (expect (pdf-text-line-text
@@ -537,7 +690,38 @@ HEADINGS are the org heading lines the outline puts on that page."
             :to-equal '(nil nil)))
 
   (it "reads an empty output as empty pages"
-    (expect (pdf-text--mupdf-parse "" 1 2) :to-equal '(nil nil))))
+    (expect (pdf-text--mupdf-parse "" 1 2) :to-equal '(nil nil)))
+
+  ;; the document-wide Type 3 detection: modal em size orders of
+  ;; magnitude under modal glyph height marks the class, and the
+  ;; records build with the height standing in for the garbage em
+  (it "detects a document of degenerate ems and floors the space test"
+    (let ((pages (pdf-text--mupdf-parse
+                  (format "%S\n" (pdf-text-tests--form
+                                  "95113"
+                                  (list (pdf-text-tests--run
+                                         0 2 :x0 0.10 :x1 0.14
+                                         :size 0.0003 :font "T33")
+                                        (pdf-text-tests--run
+                                         2 3 :x0 0.1406 :x1 0.18
+                                         :size 0.0003 :font "T31"))))
+                  1 1)))
+      (expect (pdf-text-line-text (car (nth 0 pages))) :to-equal "95113")))
+
+  (it "keeps exact ems over a healthy document"
+    ;; logic p261's operator gap: the space TeX never wrote is still
+    ;; restored when the ems are real
+    (let ((pages (pdf-text--mupdf-parse
+                  (format "%S\n" (pdf-text-tests--form
+                                  "∗y"
+                                  (list (pdf-text-tests--run
+                                         0 1 :x0 0.10 :x1 0.1098
+                                         :font "CMSY10")
+                                        (pdf-text-tests--run
+                                         1 1 :x0 0.1141 :x1 0.1235
+                                         :font "CMMI12"))))
+                  1 1)))
+      (expect (pdf-text-line-text (car (nth 0 pages))) :to-equal "∗ y"))))
 
 (describe "pdf-text--mupdf-output pool"
   (it "fans a large range over workers and reassembles every page"
@@ -2269,7 +2453,20 @@ HEADINGS are the org heading lines the outline puts on that page."
     (expect (mapcar #'pdf-text-line-text
                     (pdf-text--dedup-adjacent
                      (pdf-text-tests--page '(("refrain") ("") ("refrain")))))
-            :to-equal '("refrain" "" "refrain"))))
+            :to-equal '("refrain" "" "refrain")))
+
+  (it "keeps a doubled glyph served beside its twin"
+    ;; CMU-CS-95-113: "degree" arrives as "de" "gr" "e" "e", the two
+    ;; e-records side by side on one baseline - twins, not an echo,
+    ;; whose ink an echo's span test tells apart
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--dedup-adjacent
+                     (list (pdf-text-tests--line "e" :x0 0.4388 :x1 0.4471
+                                                 :base 0.5870 :height 0.0121)
+                           (pdf-text-tests--line "e" :x0 0.4463 :x1 0.4545
+                                                 :base 0.5870
+                                                 :height 0.0121))))
+            :to-equal '("e" "e"))))
 
 (describe "pdf-text--drop-split-echoes"
   (it "drops a following run that re-spells the previous line"

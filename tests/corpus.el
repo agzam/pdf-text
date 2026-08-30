@@ -110,14 +110,15 @@ renders differently under a rounded value than under the book's own
 \(AIMA p44: the rounded :space widened the fragment gap and a margin
 note merged into its paragraph).  `%S' prints a float exactly and
 `read' returns it exactly."
-  (format "(:height %s :leading %s :left %s :right %s%s :space %s)"
+  (format "(:height %s :leading %s :left %s :right %s%s :space %s%s)"
           (pdf-corpus--exact (plist-get profile :height))
           (pdf-corpus--exact (plist-get profile :leading))
           (pdf-corpus--exact (plist-get profile :left))
           (pdf-corpus--exact (plist-get profile :right))
           ;; the text-area edges appeared with the two-column-paper fix,
           ;; the vertical span with the furniture-by-text-area rules;
-          ;; earlier cases carry neither and render without them
+          ;; earlier cases carry neither and render without them, like
+          ;; the em size that marks the Type 3 class
           (concat
            (if (plist-get profile :text-left)
                (format " :text-left %s :text-right %s"
@@ -129,7 +130,10 @@ note merged into its paragraph).  `%S' prints a float exactly and
                        (pdf-corpus--exact (plist-get profile :text-top))
                        (pdf-corpus--exact (plist-get profile :text-bottom)))
              ""))
-          (pdf-corpus--exact (plist-get profile :space))))
+          (pdf-corpus--exact (plist-get profile :space))
+          (if (plist-get profile :em)
+              (format " :em %s" (pdf-corpus--exact (plist-get profile :em)))
+            "")))
 
 (defun pdf-corpus--print-clusters (clusters)
   "CLUSTERS of heading styles, stored exact like the profile.
