@@ -1869,7 +1869,7 @@ A lone prose line can wrap right after a bare number; three in a row
 is a table of contents, an index column, a list of figures.")
 
 (defun pdf-text--mark-entry-runs (lines)
-  "Tag runs of contents-style entry lines to render one per line.
+  "Tag LINES' runs of contents-style entries to render one per line.
 MuPDF serves a TOC entry with its folio inline - one line, full
 measure - so the short-line rule reads every entry as a wrapped line
 and the entries chain into paragraphs.  `pdf-text-entry-run-min'
@@ -1984,8 +1984,9 @@ Poppler served a page's drop cap after the running head above it;
 MuPDF serves the cap first, so the forced join after a drop cap would
 swallow the head.  A cap whose following line sits above its own top
 arrived early: it moves to just before the first line whose baseline
-falls within the cap's span, and every rule downstream sees the order
-the page reads in.  A cap with no such line in reach stays put."
+falls within the cap's span - PROFILE's leading extends the reach
+below the cap - and every rule downstream sees the order the page
+reads in.  A cap with no such line in reach stays put."
   (let ((leading (or (plist-get profile :leading) 0.02))
         out)
     (while lines
