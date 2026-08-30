@@ -1,7 +1,7 @@
 Psychological Bulletin
 1989, Vol. 106, No. 2, 265-289
 
-Copyright 1989 by the American Psychological Association, hw.
+  Copyright 1989 by the American Psychological Association, hw. 0033-2909/89/S00.75
 
 Exposure and Affect: Overview and Meta-Analysis
 
@@ -23,5 +23,3 @@ to increased liking for a stimulus; in short, familiarity leads to liking.
 Empirical and correlational evidence cited by Zajonc (1968) in support of this hypothesis delineated what became the proto typic methodologies used by other researchers to investigate the exposure-affect relationship. The basic design of most laboratory mere exposure research is derived from Zajonc's (1968) Experiments 1-3, and the general approach used by later researchers to examine the exposure-affect relationship in vivo (i.e., in "naturalistic" studies of exposure and affect) is derived from the correlational evidence cited by Zajonc. Thus, the typical laboratory study of exposure and affect involves presenting varying numbers of exposures of neutral visual stimuli (e.g., line drawings, nonsense words), after which some dependent measure of affect regarding each stimulus is collected. Naturalistic studies, which focus on stimuli present in the natural environment (e.g., names of public figures, common items), obtain subjects' affect ratings of these stimuli using procedures similar to those used in laboratory mere exposure studies but with frequency of exposure estimated via some unobtrusive index such as the Thorndike and Lorge (1944) word frequency count or subjects' self-reports. Both laboratory and naturalistic studies of the exposure effect generally utilize within-subjects designs, with each subject providing ratings of a number of stimuli that differ in amount of previous exposure or familiarity.
 
 Zajonc's (1968) initial correlational evidence indicated that relationships exist between the Thorndike and Lorge (1944) word frequency count and the evaluative meaning of a word, as well as between word frequency and attitudes toward the object described by a word. Presumably, these relationships reflect attitude enhancement resulting from repeated exposure to particular words. Because these data are correlational, though, it is impossible to demonstrate any causal relationship between word frequency and evaluative meaning or attitude change. However, Zajonc also presented a series of experiments testing his mere exposure hypothesis. Stronger evidence for the exposure-affect relationship comes from these studies.
-
-0033-2909/89/S00.75

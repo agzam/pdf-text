@@ -234,7 +234,40 @@ HEADINGS are the org heading lines the outline puts on that page."
                                                    :base 0.34 :height 0.0136))
                        profile))
               :to-equal '("right lane cell" "a spanning row of its own"
-                          "body text line")))))
+                          "body text line"))))
+
+  ;; fastloose p1: a two-column paper's modal column is the left body
+  ;; column, and the title page's right-side author column sits past
+  ;; it - inside the page's own text area, whose far strong edge the
+  ;; right body column establishes.  Only what stands past ALL the
+  ;; columns is a margin note.
+  (it "keeps a right author column inside the two-column text area"
+    (let ((two-col '(:height 0.0100 :leading 0.0126 :left 0.0882
+                     :right 0.4789 :text-left 0.0882 :text-right 0.9101
+                     :space 0.0052)))
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--defer-margin-notes
+                       (list (pdf-text-tests--line
+                              "Nils Anders Danielsson"
+                              :x0 0.1465 :x1 0.3269 :base 0.1628
+                              :height 0.0122)
+                             (pdf-text-tests--line
+                              "Jeremy Gibbons"
+                              :x0 0.6304 :x1 0.7572 :base 0.1628
+                              :height 0.0122)
+                             (pdf-text-tests--line
+                              "Functional programmers often reason about"
+                              :x0 0.0882 :x1 0.4789 :base 0.3035
+                              :height 0.0100)
+                             (pdf-text-tests--line
+                              "The moral of the story runs the right column"
+                              :x0 0.5211 :x1 0.9101 :base 0.3035
+                              :height 0.0100))
+                       two-col))
+              :to-equal '("Nils Anders Danielsson"
+                          "Jeremy Gibbons"
+                          "Functional programmers often reason about"
+                          "The moral of the story runs the right column")))))
 
 (describe "pdf-text--mark-entry-runs"
   (it "tags a contents run to render one entry per line"
@@ -243,7 +276,23 @@ HEADINGS are the org heading lines the outline puts on that page."
                        (pdf-text-tests--line "Overfitting Examined 113"))))
       (expect (mapcar #'pdf-text-line-kind
                       (pdf-text--mark-entry-runs lines))
-              :to-equal '(fixed fixed fixed))))
+              :to-equal '(entry entry entry))))
+
+  (it "renders a contents run as org list items"
+    (let* ((lines (pdf-text-tests--page
+                   '(("Generalization 111")
+                     ("Overfitting 113")
+                     ("Overfitting Examined 113"))))
+           (profile (pdf-text--profile (list lines))))
+      (dolist (l lines) (setf (pdf-text-line-kind l) 'entry))
+      (let ((page (pdf-text--page-profile lines profile)))
+        (expect (pdf-text--render-blocks
+                 (pdf-text--blocks lines page) page
+                 (pdf-text--hyphenated-words (list lines)))
+                :to-equal
+                (concat "- Generalization 111\n"
+                        "- Overfitting 113\n"
+                        "- Overfitting Examined 113")))))
 
   (it "leaves fewer folio-closed neighbours than a run as the prose they are"
     (let ((lines (list (pdf-text-tests--line "the events of 1988")
@@ -252,6 +301,223 @@ HEADINGS are the org heading lines the outline puts on that page."
       (expect (mapcar #'pdf-text-line-kind
                       (pdf-text--mark-entry-runs lines))
               :to-equal '(nil nil nil)))))
+
+(describe "pdf-text--strip-leaders"
+  ;; DSB p11: the chapter entry carries its spaced-dot fill and folio
+  ;; in one record - "5. Overfitting and Its Avoidance. . . [50+] . 111"
+  (it "strips an inline leader fill and keeps the entry-folio pairing"
+    (let ((out (pdf-text--strip-leaders
+                (list (pdf-text-tests--line
+                       "5. Overfitting and Its Avoidance. . . . . . . . . . 111"
+                       :x0 0.1447 :x1 0.8571 :base 0.1370 :height 0.0217)))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("5. Overfitting and Its Avoidance 111"))
+      (expect (pdf-text-line-kind (car out)) :to-be 'entry)))
+
+  ;; fpio p2: the fill is its own record on the entry's baseline, the
+  ;; glyphs cmmi periods dvips named ":" - detection is by repetition,
+  ;; not by the glyph's identity
+  (it "drops a leader-run record and pairs the entry with its folio"
+    (let ((out (pdf-text--strip-leaders
+                (list (pdf-text-tests--line
+                       "1.2 A brief history of functional I/O"
+                       :x0 0.1657 :x1 0.4604 :base 0.4620 :height 0.0138)
+                      (pdf-text-tests--line
+                       ": : : : : : : : : : : : : : : : : : : : : : : :"
+                       :x0 0.4761 :x1 0.8000 :base 0.4620 :height 0.0138)
+                      (pdf-text-tests--line
+                       "2" :x0 0.8249 :x1 0.8337 :base 0.4620
+                       :height 0.0138)))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("1.2 A brief history of functional I/O 2"))
+      (expect (pdf-text-line-kind (car out)) :to-be 'entry)
+      (expect (pdf-text-line-x1 (car out)) :to-equal 0.8337)))
+
+  ;; fpio p2 line 10: the word join welds the fill onto the entry's own
+  ;; record when the gap is narrow, and the folio still stands apart
+  (it "strips a trailing run welded into the entry's record"
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--strip-leaders
+                     (list (pdf-text-tests--line
+                            "1.1 Functional programming : : : : : : : : : :"
+                            :x0 0.1657 :x1 0.8000 :base 0.4390
+                            :height 0.0138)
+                           (pdf-text-tests--line
+                            "1" :x0 0.8249 :x1 0.8337 :base 0.4390
+                            :height 0.0138))))
+            :to-equal '("1.1 Functional programming 1")))
+
+  (it "reads any repeated glyph as a fill, middots included"
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--strip-leaders
+                     (list (pdf-text-tests--line
+                            "Overfitting Examined"
+                            :x0 0.10 :x1 0.40 :base 0.30)
+                           (pdf-text-tests--line
+                            "· · · · · · · · ·"
+                            :x0 0.42 :x1 0.78 :base 0.30)
+                           (pdf-text-tests--line
+                            "113" :x0 0.82 :x1 0.85 :base 0.30))))
+            :to-equal '("Overfitting Examined 113")))
+
+  (it "gathers a fill served one glyph per record"
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--strip-leaders
+                     (list (pdf-text-tests--line
+                            "Learning Curves" :x0 0.10 :x1 0.35 :base 0.30)
+                           (pdf-text-tests--line "." :x0 0.40 :x1 0.41
+                                                 :base 0.30)
+                           (pdf-text-tests--line "." :x0 0.44 :x1 0.45
+                                                 :base 0.30)
+                           (pdf-text-tests--line "." :x0 0.48 :x1 0.49
+                                                 :base 0.30)
+                           (pdf-text-tests--line "." :x0 0.52 :x1 0.53
+                                                 :base 0.30)
+                           (pdf-text-tests--line "." :x0 0.56 :x1 0.57
+                                                 :base 0.30)
+                           (pdf-text-tests--line "130" :x0 0.82 :x1 0.85
+                                                 :base 0.30))))
+            :to-equal '("Learning Curves 130")))
+
+  ;; fpio p2 lines 54-57: a math-font fragment stands between the
+  ;; entry's words and its fill, and it belongs inside the entry
+  (it "keeps a math fragment the page sets inside its entry"
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--strip-leaders
+                     (list (pdf-text-tests--line
+                            "3.3 Operational semantics of"
+                            :x0 0.1657 :x1 0.4006 :base 0.8813
+                            :height 0.0138)
+                           (pdf-text-tests--line
+                            "M" :x0 0.4065 :x1 0.4278 :base 0.8813
+                            :height 0.0138)
+                           (pdf-text-tests--line
+                            ": : : : : : : : : : : : : : : : : : : : : : : : : : :"
+                            :x0 0.4345 :x1 0.8000 :base 0.8813
+                            :height 0.0138)
+                           (pdf-text-tests--line
+                            "30" :x0 0.8159 :x1 0.8335 :base 0.8813
+                            :height 0.0138))))
+            :to-equal '("3.3 Operational semantics of M 30")))
+
+  ;; fpio p2: "Summary vii" and "2 A calculus of recursive types 15"
+  ;; carry no fill of their own, and pair because the page's fills say
+  ;; the page is a contents page
+  (it "pairs leaderless entries with their folios on a contents page"
+    (let ((out (pdf-text--strip-leaders
+                (list (pdf-text-tests--line
+                       "1.5 Synopsis : : : : : : : : : : : : :"
+                       :x0 0.1657 :x1 0.8000 :base 0.30 :height 0.0138)
+                      (pdf-text-tests--line "8" :x0 0.8249 :x1 0.8337
+                                            :base 0.30 :height 0.0138)
+                      (pdf-text-tests--line
+                       "1.6 Results : : : : : : : : : : : : : :"
+                       :x0 0.1657 :x1 0.8000 :base 0.33 :height 0.0138)
+                      (pdf-text-tests--line "10" :x0 0.8159 :x1 0.8335
+                                            :base 0.33 :height 0.0138)
+                      (pdf-text-tests--line
+                       "1.7 How to read it : : : : : : : : : :"
+                       :x0 0.1657 :x1 0.8000 :base 0.36 :height 0.0138)
+                      (pdf-text-tests--line "10" :x0 0.8159 :x1 0.8335
+                                            :base 0.36 :height 0.0138)
+                      (pdf-text-tests--line "Summary" :x0 0.1390 :x1 0.2255
+                                            :base 0.40 :height 0.0138)
+                      (pdf-text-tests--line "vii" :x0 0.8116 :x1 0.8337
+                                            :base 0.40 :height 0.0138)
+                      (pdf-text-tests--line "2" :x0 0.1390 :x1 0.1492
+                                            :base 0.44 :height 0.0138)
+                      (pdf-text-tests--line "A calculus of recursive types"
+                                            :x0 0.1657 :x1 0.4233
+                                            :base 0.44 :height 0.0138)
+                      (pdf-text-tests--line "15" :x0 0.8131 :x1 0.8335
+                                            :base 0.44 :height 0.0138)))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("1.5 Synopsis 8"
+                          "1.6 Results 10"
+                          "1.7 How to read it 10"
+                          "Summary vii"
+                          "2 A calculus of recursive types 15"))
+      (expect (mapcar #'pdf-text-line-kind out)
+              :to-equal '(entry entry entry entry entry))))
+
+  (it "leaves a text-folio baseline apart where no fill says contents"
+    (let ((out (pdf-text--strip-leaders
+                (list (pdf-text-tests--line "1. Birth of a habit"
+                                            :x0 0.10 :x1 0.70 :base 0.30)
+                      (pdf-text-tests--line "3" :x0 0.72 :x1 0.73
+                                            :base 0.30)))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("1. Birth of a habit" "3"))
+      (expect (mapcar #'pdf-text-line-kind out)
+              :to-equal '(nil nil))))
+
+  (it "leaves the margin band's furniture out of the pairing"
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--strip-leaders
+                     (list (pdf-text-tests--line
+                            "2.5 Two examples : : : : : : : : : : :"
+                            :x0 0.1657 :x1 0.8000 :base 0.30 :height 0.0138)
+                           (pdf-text-tests--line "20" :x0 0.8159 :x1 0.8335
+                                                 :base 0.30 :height 0.0138)
+                           (pdf-text-tests--line
+                            "2.6 Strong normalisation : : : : : : :"
+                            :x0 0.1657 :x1 0.8000 :base 0.33 :height 0.0138)
+                           (pdf-text-tests--line "21" :x0 0.8159 :x1 0.8335
+                                                 :base 0.33 :height 0.0138)
+                           (pdf-text-tests--line
+                            "3.1 Syntax : : : : : : : : : : : : : :"
+                            :x0 0.1657 :x1 0.8000 :base 0.36 :height 0.0138)
+                           (pdf-text-tests--line "28" :x0 0.8159 :x1 0.8335
+                                                 :base 0.36 :height 0.0138)
+                           (pdf-text-tests--line "Table of Contents"
+                                                 :x0 0.7088 :x1 0.8110
+                                                 :base 0.9388 :height 0.0163)
+                           (pdf-text-tests--line "v" :x0 0.8505 :x1 0.8571
+                                                 :base 0.9388
+                                                 :height 0.0163))))
+            :to-equal '("2.5 Two examples 20"
+                        "2.6 Strong normalisation 21"
+                        "3.1 Syntax 28"
+                        "Table of Contents" "v")))
+
+  (it "leaves prose ending in repeated punctuation alone"
+    (let ((out (pdf-text--strip-leaders
+                (list (pdf-text-tests--line "He shouted Wow!!!!"
+                                            :x0 0.10 :x1 0.50 :base 0.30)))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("He shouted Wow!!!!"))
+      (expect (pdf-text-line-kind (car out)) :to-be nil))
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--strip-leaders
+                     (list (pdf-text-tests--line "What?!?!?! 42"
+                                                 :x0 0.10 :x1 0.50
+                                                 :base 0.30))))
+            :to-equal '("What?!?!?! 42")))
+
+  (it "leaves an ellipsis short of the fill minimum alone"
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--strip-leaders
+                     (list (pdf-text-tests--line "He waited . . . 1984"
+                                                 :x0 0.10 :x1 0.50
+                                                 :base 0.30))))
+            :to-equal '("He waited . . . 1984")))
+
+  (it "keeps a scene-break run that stands alone on its baseline"
+    (let ((out (pdf-text--strip-leaders
+                (list (pdf-text-tests--line ". . . . . . ."
+                                            :x0 0.40 :x1 0.60
+                                            :base 0.50)))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '(". . . . . . ."))))
+
+  (it "strips an inline fill from a line with no geometry"
+    ;; the gettext fallback serves text-only records; the folio names
+    ;; the entry even there
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--strip-leaders
+                     (pdf-text--page-lines
+                      "1.2 A brief history : : : : : : 2")))
+            :to-equal '("1.2 A brief history 2"))))
 
 (describe "pdf-text--join-split-lines"
   :var ((profile '(:height 0.0136 :leading 0.017 :space 0.0047)))
@@ -3297,7 +3563,19 @@ HEADINGS are the org heading lines the outline puts on that page."
     (expect (pdf-text--synthesize-headings
              '("3 apples fell\nA long full width line sets the page wrap column for this page"))
             :to-equal
-            '("3 apples fell\nA long full width line sets the page wrap column for this page"))))
+            '("3 apples fell\nA long full width line sets the page wrap column for this page")))
+
+  (it "leaves a numbered entry trailing its leader fill alone"
+    ;; a TOC whose folio broke off leaves the entry closing on its
+    ;; fill; the repetition names it an entry as surely as the folio
+    (expect (pdf-text--synthesize-headings
+             '("1.2 A brief history : : : : : : :\nA long full width prose line sets the wrap column for the page"))
+            :to-equal
+            '("1.2 A brief history : : : : : : :\nA long full width prose line sets the wrap column for the page"))
+    (expect (pdf-text--synthesize-headings
+             '("2.2 Arguments. . . . . . . .\nA long full width prose line sets the wrap column for the page"))
+            :to-equal
+            '("2.2 Arguments. . . . . . . .\nA long full width prose line sets the wrap column for the page"))))
 
 (describe "pdf-text--dotted-number-level"
   (it "reads the dot count as the org level"
@@ -3312,6 +3590,40 @@ HEADINGS are the org heading lines the outline puts on that page."
 
   (it "rejects a trailing page number: that is a TOC entry"
     (expect (pdf-text--dotted-number-level "2.2 Arguments 20") :to-be nil)))
+
+(describe "pdf-text--synth-page-tuples"
+  (it "keeps dotted candidates off a contents page"
+    ;; fpio p2: a wrapped entry's first line carries no folio, and the
+    ;; dotted rule would read it as a section head; the page's own
+    ;; entry lines say it is a contents page
+    (let* ((lines (pdf-text-tests--page
+                   '(("2.1 Functional models" :height 0.020 :x1 0.45
+                      :base 0.30)
+                     ("Alpha entry 3" :gap 2)
+                     ("Beta entry 4")
+                     ("Gamma entry 5"))))
+           (profile (pdf-text--profile (list lines))))
+      (dolist (l (cdr lines)) (setf (pdf-text-line-kind l) 'entry))
+      (let ((page (pdf-text--page-profile lines profile)))
+        (expect (cl-some (lambda (tuple) (plist-get tuple :dotted))
+                         (pdf-text--synth-page-tuples
+                          (pdf-text--blocks lines page) page
+                          (pdf-text--hyphenated-words (list lines))))
+                :not :to-be-truthy))))
+
+  (it "keeps reading dotted candidates where no contents run stands"
+    (let* ((lines (pdf-text-tests--page
+                   '(("2.1 Functional models" :height 0.020 :x1 0.45
+                      :base 0.30)
+                     ("A body paragraph line runs the full column width here"
+                      :gap 2))))
+           (profile (pdf-text--profile (list lines)))
+           (page (pdf-text--page-profile lines profile)))
+      (expect (cl-some (lambda (tuple) (plist-get tuple :dotted))
+                       (pdf-text--synth-page-tuples
+                        (pdf-text--blocks lines page) page
+                        (pdf-text--hyphenated-words (list lines))))
+              :to-be-truthy))))
 
 (describe "pdf-text--heading-clusters"
   (it "keeps styles heading enough distinct pages, tallest first"

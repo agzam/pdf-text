@@ -21,6 +21,14 @@ The display title survives the recurring rule that would read it as
 its own later running heads, and its ^{*} marker pairs with the
 funding note at the foot.
 
+The title page's head matter spans both body columns, and the
+right-side author group - Jeremy Gibbons, his affiliation, his
+email - stands past the modal column while the right body column
+vouches for the ground: the margin-note deferral measures against
+the page's own far strong edge, so the group stays in the head
+where the page set it instead of reading as outer-margin labels
+served after the flow.
+
 The budgets are the page's own: the display equation \"curry ◦
 uncurry = id\" breaks its sentence - the standing display-math
 residual - and the compressed citation keys (\"BdM96\", \"BdBH^{+}91\")

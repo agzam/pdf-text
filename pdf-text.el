@@ -2143,30 +2143,39 @@ PROFILE gives the column and the measures."
 (defun pdf-text-reading-order (pages)
   "PAGES of `pdf-text-line' records, cleaned and in repaired reading order.
 Script fragments rejoin the typeset line poppler split them from, by
-`pdf-text--merge-script-fragments'; multicolumn regions come back as
-table rows or stay lane-ordered flows, by `pdf-text--mark-lanes'; and
-the aligned arrays reading order scattered come back row by row, by
+`pdf-text--merge-script-fragments'; contents leader fills strip and
+their entries pair with their folios, by `pdf-text--strip-leaders';
+multicolumn regions come back as table rows or stay lane-ordered
+flows, by `pdf-text--mark-lanes'; and the aligned arrays reading
+order scattered come back row by row, by
 `pdf-text--reassemble-zones'.  These are the lines the reflow reads,
 and the lines the corpus measures survival against: the repairs
-merge and reorder records, never drop one."
+merge and reorder records, and the only records they drop are the
+fills, which carry no letter the survival stream could miss."
   (let* ((page-lines (pdf-text-clean-pages pages))
          ;; the seeded document profile reaches the repairs too: the
          ;; merge and zone thresholds are leadings and spaces, and a
          ;; window measures both differently than its book does
          (profile (or pdf-text-extra-profile (pdf-text--profile page-lines))))
     (mapcar (lambda (lines)
-              (pdf-text--mark-entry-runs
-               (pdf-text--defer-margin-notes
-                (pdf-text--reassemble-zones
-                 (pdf-text--mark-lanes
-                  (pdf-text--merge-script-fragments
-                   (pdf-text--join-split-lines
-                    (pdf-text--float-drop-caps lines profile)
+              ;; the far edge reads the page before any repair moves
+              ;; ink: the lane unfold rewrites a facing column's
+              ;; coordinates, and the deferral downstream still needs
+              ;; to know the column stood there
+              (let ((far (pdf-text--page-far-edge lines profile)))
+                (pdf-text--mark-entry-runs
+                 (pdf-text--defer-margin-notes
+                  (pdf-text--reassemble-zones
+                   (pdf-text--mark-lanes
+                    (pdf-text--strip-leaders
+                     (pdf-text--merge-script-fragments
+                      (pdf-text--join-split-lines
+                       (pdf-text--float-drop-caps lines profile)
+                       profile)
+                      profile))
                     profile)
                    profile)
-                  profile)
-                 profile)
-                profile)))
+                  profile far))))
             page-lines)))
 
 (defvar pdf-text-entry-run-min 3
@@ -2175,19 +2184,19 @@ A lone prose line can wrap right after a bare number; three in a row
 is a table of contents, an index column, a list of figures.")
 
 (defun pdf-text--mark-entry-runs (lines)
-  "Tag LINES' runs of contents-style entries to render one per line.
+  "Tag LINES' runs of contents-style entries to render as list items.
 MuPDF serves a TOC entry with its folio inline - one line, full
 measure - so the short-line rule reads every entry as a wrapped line
 and the entries chain into paragraphs.  `pdf-text-entry-run-min'
 neighbours each closing on a short digit group are a contents run,
-not prose, and each keeps its own line."
+not prose: each keeps its own line, set as an org list item."
   (let ((vec (vconcat lines))
         (entry-re "[^0-9 ] [0-9]\\{1,4\\}\\'")
         (run nil))
     (cl-flet ((flush ()
                 (when (<= pdf-text-entry-run-min (length run))
                   (dolist (i run)
-                    (setf (pdf-text-line-kind (aref vec i)) 'fixed)))
+                    (setf (pdf-text-line-kind (aref vec i)) 'entry)))
                 (setq run nil)))
       (dotimes (i (length vec))
         (let ((line (aref vec i)))
@@ -2200,19 +2209,251 @@ not prose, and each keeps its own line."
       (flush))
     (append vec nil)))
 
-(defun pdf-text--defer-margin-notes (lines profile)
-  "LINES with unclaimed records past the page's column served last.
+(defvar pdf-text-leader-min 4
+  "Repeats of one glyph that make a table-of-contents leader fill.
+Dots, middots, dashes, the colons a dvips math font names its
+periods by byte - whatever the glyph, its repetition between an
+entry's words and the folio is the fill.  Four keeps a spaced
+ellipsis and a tight table row out; real fills run far longer.")
+
+(defconst pdf-text-folio-re
+  "[0-9]\\{1,4\\}\\|[ivxlcdm]\\{1,8\\}\\|[IVXLCDM]\\{1,8\\}"
+  "A folio as a contents entry writes it: a digit group or a numeral.
+Matched with `case-fold-search' nil, so prose words stay out of the
+numeral arm.")
+
+(defun pdf-text--leader-run-re ()
+  "Regex matching one glyph repeated into a leader fill.
+The backreference is what makes detection glyph-agnostic: repetition
+identifies a fill however the font names the glyph."
+  (format "\\([^[:alnum:][:space:]]\\)\\(?: ?\\1\\)\\{%d,\\}"
+          (1- pdf-text-leader-min)))
+
+(defun pdf-text--leader-parts (text)
+  "The pieces of TEXT around a trailing leader fill, nil without one.
+A cons (ENTRY . FOLIO): the words standing before the fill - empty
+for a record that is the fill - and the folio closing the line after
+it, nil when the folio is served as its own record instead."
+  (let ((case-fold-search nil))
+    (when (string-match
+           (format "\\`\\(.*?\\)\\([^[:alnum:][:space:]]\\)\\(?: ?\\2\\)\\{%d,\\}[ \t]*\\(%s\\)?[ \t]*\\'"
+                   (1- pdf-text-leader-min) pdf-text-folio-re)
+           text)
+      (cons (string-trim (match-string 1 text))
+            (match-string 3 text)))))
+
+(defun pdf-text--leader-glyph (text)
+  "The glyph TEXT repeats as a bare run, with its count, or nil.
+A cons (GLYPH . COUNT) when the whole of TEXT is one non-alphanumeric
+glyph once or more, single spaces allowed: the shape of a fill served
+one record per glyph, which only its neighbours can add up to a fill."
+  (let ((trimmed (string-trim text)))
+    (when (string-match-p
+           "\\`\\([^[:alnum:][:space:]]\\)\\(?: ?\\1\\)*\\'" trimmed)
+      (let ((glyph (aref trimmed 0)))
+        (cons glyph (cl-count glyph trimmed))))))
+
+(defun pdf-text--bare-folio-p (text)
+  "Whether TEXT is nothing but a folio."
+  (let ((case-fold-search nil))
+    (string-match-p (format "\\`\\(?:%s\\)\\'" pdf-text-folio-re)
+                    (string-trim text))))
+
+(defun pdf-text--leader-groups (lines)
+  "LINES as consecutive same-baseline groups, each a list of lines.
+A line with no baseline stands alone; the tolerance is the quarter
+height `pdf-text--join-split-lines' reads baselines by."
+  (let (groups current prev)
+    (dolist (line lines)
+      (let ((base (pdf-text-line-base line)))
+        (if (and current prev base
+                 (< (abs (- base prev))
+                    (* 0.25 (or (pdf-text-line-height line) 0.01))))
+            (push line current)
+          (when current (push (nreverse current) groups))
+          (setq current (list line)))
+        (setq prev base)))
+    (when current (push (nreverse current) groups))
+    (nreverse groups)))
+
+(defun pdf-text--leader-entry (survivors)
+  "SURVIVORS of one baseline merged into a single contents entry line.
+Sorted by ink, joined by single spaces, marked with the entry kind
+so it renders as a list item and no heading rule reads it, and
+claimed like a lane row: the fill proved the entry-folio pairing,
+and the margin rules would read the folio it now closes on as a
+running head's - a page whose contents run starts inside the band
+loses its first entry to exactly that."
+  (let* ((sorted (sort (copy-sequence survivors)
+                       (lambda (a b)
+                         (< (or (pdf-text-line-x0 a) 0)
+                            (or (pdf-text-line-x0 b) 0)))))
+         (merged (if (cdr sorted)
+                     (pdf-text--merge-records
+                      sorted
+                      (mapconcat (lambda (l)
+                                   (string-trim (pdf-text-line-text l)))
+                                 sorted " "))
+                   (car sorted))))
+    (when (null (pdf-text-line-kind merged))
+      (setf (pdf-text-line-kind merged) 'entry))
+    (setf (pdf-text-line-claimed merged) t)
+    merged))
+
+(defun pdf-text--leader-fills (group parts)
+  "Record into PARTS which of GROUP's lines are or carry a fill.
+A record long enough on its own comes from `pdf-text--leader-parts';
+records repeating one glyph below the minimum - a fill served one
+glyph per record - add up along the baseline, and count as fills
+only when the same glyph reaches `pdf-text-leader-min' jointly."
+  (let ((count 0) run glyph)
+    (cl-flet ((flush ()
+                (when (and run (<= pdf-text-leader-min count))
+                  (dolist (l run) (puthash l (cons "" nil) parts)))
+                (setq run nil glyph nil count 0)))
+      (dolist (line group)
+        (let ((bare (pdf-text--leader-glyph (pdf-text-line-text line))))
+          (cond
+           ((and bare (or (null glyph) (eq glyph (car bare))))
+            (setq glyph (car bare))
+            (push line run)
+            (setq count (+ count (cdr bare))))
+           (bare (flush)
+                 (setq glyph (car bare) run (list line) count (cdr bare)))
+           (t (flush)))))
+      (flush)))
+  (dolist (line group)
+    (unless (gethash line parts)
+      (when-let* ((found (pdf-text--leader-parts (pdf-text-line-text line))))
+        (puthash line found parts)))))
+
+(defun pdf-text--strip-leaders (lines)
+  "LINES with table-of-contents leader fills stripped, entries paired.
+A fill is one glyph repeated `pdf-text-leader-min' times or more,
+optionally spaced - the dots aligning a contents entry with its
+folio, whatever glyph the font names them by.  Inline, fill and
+folio ride the entry's own record and the strip alone repairs it.
+Served apart, the fill record drops and the baseline's survivors -
+entry words, a math fragment, the folio - merge into one entry line.
+The folio is the warrant: a fill strips only against one inline, a
+bare folio record closing its own baseline, or a page whose folioed
+fills already prove a contents page - a workbook rules its answer
+blanks with the same dots, prose ends on repeated punctuation, and
+a scene-break run stands alone, none of them furniture to eat.  On
+a contents page a fill-less baseline closing on a bare folio pairs
+the same way - MuPDF serves front-matter entries and chapter rows
+apart from their numbers - though never inside the margin band,
+where the running foot shares that shape."
+  (let* ((groups (pdf-text--leader-groups lines))
+         (parts (make-hash-table :test 'eq))
+         (definite (make-hash-table :test 'eq)))
+    ;; first reading: which baselines carry a fill on a folio's
+    ;; warrant - inline in the fill's own record, or a bare folio
+    ;; record standing rightmost on the baseline
+    (dolist (group groups)
+      (pdf-text--leader-fills group parts)
+      (when (cl-some (lambda (l) (gethash l parts)) group)
+        (let ((rightmost (car (sort (copy-sequence group)
+                                    (lambda (a b)
+                                      (> (or (pdf-text-line-x1 a) 0)
+                                         (or (pdf-text-line-x1 b) 0)))))))
+          (when (or (cl-some (lambda (l) (cdr-safe (gethash l parts))) group)
+                    (and (not (gethash rightmost parts))
+                         (pdf-text--bare-folio-p
+                          (pdf-text-line-text rightmost))))
+            (puthash group t definite)))))
+    (let ((contents (<= pdf-text-entry-run-min (hash-table-count definite))))
+      (cl-loop
+       for group in groups
+       append
+       (cond
+        ;; a baseline with a warranted fill: strip it, merge what stands
+        ((or (gethash group definite)
+             (and contents
+                  (cl-some (lambda (l) (gethash l parts)) group)))
+         (let (survivors)
+           (dolist (line group)
+             (pcase (gethash line parts)
+               (`(,entry . ,folio)
+                (let ((text (string-trim
+                             (concat entry (and folio " ") folio))))
+                  (unless (string-empty-p text)
+                    (setf (pdf-text-line-text line) text)
+                    (push line survivors))))
+               (_ (push line survivors))))
+           (if survivors
+               (list (pdf-text--leader-entry (nreverse survivors)))
+             nil)))
+        ;; a fill-less baseline pairing with its folio, on the word of
+        ;; the page's own fills, clear of the margin band
+        ((and contents (cdr group)
+              (not (cl-some (lambda (l) (gethash l parts)) group))
+              (when-let* ((base (pdf-text-line-base (car group))))
+                (< pdf-text-margin-band base (- 1.0 pdf-text-margin-band)))
+              (cl-every (lambda (l) (null (pdf-text-line-kind l))) group)
+              (let ((sorted (sort (copy-sequence group)
+                                  (lambda (a b)
+                                    (< (or (pdf-text-line-x0 a) 0)
+                                       (or (pdf-text-line-x0 b) 0))))))
+                (and (pdf-text--bare-folio-p
+                      (pdf-text-line-text (car (last sorted))))
+                     (cl-some (lambda (l)
+                                (string-match-p
+                                 "[[:alpha:]]" (pdf-text-line-text l)))
+                              sorted))))
+         (list (pdf-text--leader-entry group)))
+        (t group))))))
+
+(defun pdf-text--page-far-edge (lines profile)
+  "The far strong right edge LINES' own body ink establishes, or nil.
+A second body column carries `pdf-text-column-strength' of the modal
+column's ink and earns the edge; a margin-note rail never does on
+any one page, however strong an edge a book of notes accumulates
+document wide - which is why the page answers this and PROFILE's
+document-wide text area cannot.  Only body-height lines vote, the
+way `pdf-text--page-profile' filters them: the head matter above a
+paper's columns must not vouch for its own ground."
+  (let* ((height (plist-get profile :height))
+         (body (cl-remove-if-not
+                (lambda (line)
+                  (and (pdf-text-line-x0 line) (pdf-text-line-x1 line)
+                       (or (null height)
+                           (null (pdf-text-line-height line))
+                           (< (abs (- (pdf-text-line-height line) height))
+                              (* 0.15 height)))))
+                lines)))
+    (and body
+         (cdr (pdf-text--strong-edges
+               (mapcar #'pdf-text-line-x1 body) 0.005
+               (mapcar (lambda (l) (- (pdf-text-line-x1 l)
+                                      (pdf-text-line-x0 l)))
+                       body))))))
+
+(defun pdf-text--defer-margin-notes (lines profile &optional far)
+  "LINES with unclaimed records past the page's columns served last.
 MuPDF serves an outer-margin term label at its vertical position -
 mid-paragraph, severing the sentence around it - where poppler served
 it after the page's flow.  A narrow record standing wholly right of
-the page's own column, and claimed by no lane, is such a label: it
-moves to the page's end, reads after the text it annotates, and the
-paragraph stays whole.  PROFILE hands the page profile its document
-frame; mirrored margins put the column elsewhere on facing pages, so
-the page's own edges are the measure."
+every column, and claimed by no lane, is such a label: it moves to
+the page's end, reads after the text it annotates, and the paragraph
+stays whole.  The boundary is the page's own far strong edge, not
+the modal column and not the document's text area: a two-column
+paper's modal column is one of the two, and its title page's
+right-side author block stands past it while the right body column
+vouches for the ground it stands on - where a margin-note rail never
+carries `pdf-text-column-strength' of a column's ink on any one
+page, however strong an edge a book of notes accumulates document
+wide.  PROFILE hands the page profile its document frame; mirrored
+margins put the column elsewhere on facing pages, so the page's own
+edges are the measure.  FAR is the page's far edge measured before
+the lane pass - the unfold rewrites a facing column's coordinates,
+so the caller measures while the ink still stands where the page
+set it - and is derived from LINES when the caller has none."
   (let* ((page (pdf-text--page-profile lines profile))
          (right (plist-get page :right))
-         (space (or (plist-get profile :space) 0.005)))
+         (space (or (plist-get profile :space) 0.005))
+         (far (or far (pdf-text--page-far-edge lines profile)))
+         (right (and right (max right (or far right)))))
     (if (null right)
         lines
       (let (body notes)
@@ -3463,12 +3704,16 @@ geometry - PROFILE's body measures, PAGE-WIDTH - decides the rest."
      ((string-blank-p (pdf-text-line-text line)) 'blank)
      ((eq 'blank kind) 'text)
      ((not (eq (pdf-text-line-kind line)
-               (pcase kind ('table 'row) ((or 'mono 'math) kind) (_ nil))))
+               (pcase kind ('table 'row) ((or 'mono 'math 'entry) kind) (_ nil))))
       'face)
      ;; a wrapped table row stands two typeset lines tall, so the step
      ;; between row records exceeds any gap factor; consecutive rows
      ;; are one table regardless
      ((eq 'table kind) nil)
+     ;; contents entries run as one list while the page stacks them;
+     ;; the air before a chapter's group starts the next list
+     ((eq 'entry kind)
+      (and (pdf-text--gap-break-p line prev profile) 'gap))
      ((memq kind '(mono math))
       (and (pdf-text--gap-break-p line prev profile) 'gap))
      ((eq 'fixed kind)
@@ -3520,6 +3765,7 @@ PROFILE gives the column margin the block's own is measured from."
          (marker (pdf-text--list-marker text indented))
          (kind (cond ((string-blank-p text) 'blank)
                      ((eq 'row (pdf-text-line-kind line)) 'table)
+                     ((eq 'entry (pdf-text-line-kind line)) 'entry)
                      ((eq 'fixed (pdf-text-line-kind line)) 'fixed)
                      ((pdf-text--mono-p line) 'mono)
                      ((eq 'math (pdf-text-line-kind line)) 'math)
@@ -3972,6 +4218,15 @@ heading a merged pair makes carries both halves' text already."
                                           (string-trim-right
                                            (pdf-text-line-text line)))
                                         (pdf-text-block-lines block) "\n"))
+                            ;; a table of contents is a list, and the
+                            ;; reader gets one: entry per item, the
+                            ;; folio riding at the end of its line
+                            ('entry
+                             (mapconcat (lambda (line)
+                                          (concat "- " (string-trim
+                                                        (pdf-text-line-text
+                                                         line))))
+                                        (pdf-text-block-lines block) "\n"))
                             ('item (pdf-text--cite-footnotes
                                     (pdf-text--render-item block vocabulary indent)
                                     notes))
@@ -4397,12 +4652,34 @@ item, is the page's own text however its face reads."
                                profile
                                bold-ok)))))
 
+(defun pdf-text--contents-page-p (blocks)
+  "Whether BLOCKS carry a contents run: entry lines paired to folios.
+`pdf-text-entry-run-min' entry-kind lines closing on a folio - the
+shape `pdf-text--strip-leaders' and `pdf-text--mark-entry-runs'
+leave behind - name the page a table of contents.  There a dotted
+number opens an entry, not a section: the entries whose own folio
+went astray must not come back as headings."
+  (let ((case-fold-search nil)
+        (folio (format "[^0-9 ] +\\(?:%s\\)\\'" pdf-text-folio-re))
+        (count 0))
+    (dolist (block blocks)
+      (when (eq 'entry (pdf-text-block-kind block))
+        (dolist (line (pdf-text-block-lines block))
+          (when (string-match-p folio
+                                (string-trim (pdf-text-line-text line)))
+            (setq count (1+ count))))))
+    (<= pdf-text-entry-run-min count)))
+
 (defun pdf-text--synth-page-tuples (blocks profile vocabulary)
   "Heading candidates among one page's BLOCKS, pairs merged.
-PROFILE and VOCABULARY as the render reads them."
+PROFILE and VOCABULARY as the render reads them.  On a contents
+page the dotted candidates stay out - they are the page's entries -
+while the sized ones stand: the section a contents page opens with
+is set over the body like any other."
   (let* ((vec (vconcat (cl-remove-if (lambda (b)
                                        (eq 'blank (pdf-text-block-kind b)))
                                      blocks)))
+         (contents (pdf-text--contents-page-p blocks))
          (i 0)
          tuples)
     (while (< i (length vec))
@@ -4412,7 +4689,9 @@ PROFILE and VOCABULARY as the render reads them."
              (tuple (or pair (pdf-text--synth-single
                               (aref vec i) profile vocabulary
                               (and (< 0 i) (aref vec (1- i)))))))
-        (when tuple (push tuple tuples))
+        (when (and tuple
+                   (not (and contents (plist-get tuple :dotted))))
+          (push tuple tuples))
         (setq i (+ i (if pair 2 1)))))
     (nreverse tuples)))
 
@@ -4548,7 +4827,8 @@ geometry either - with geometry, `pdf-text--synth-assignments' reads
 the headings out of the page's own setting instead.  A line like
 \"2.2 Arguments\" - a dotted section number, then a capitalized word,
 well short of the page's wrap column, with no page number at the end
-the way TOC entries have - reads as a section heading, its dot count
+the way TOC entries have and no leader fill trailing it the way
+their orphaned halves do - reads as a section heading, its dot count
 as the org level.  Prose and TOC pages pass through untouched."
   (let ((case-fold-search nil))
     (mapcar
@@ -4564,7 +4844,12 @@ as the org level.  Prose and TOC pages pass through untouched."
                (if (and (string-match "\\`\\([0-9]+\\(?:\\.[0-9]+\\)*\\)\\.? +[[:upper:]]"
                                       trimmed)
                         (<= (length trimmed) limit)
-                        (not (string-match-p "[0-9]\\'" trimmed)))
+                        (not (string-match-p "[0-9]\\'" trimmed))
+                        ;; a leader fill trailing the number and title
+                        ;; is a contents entry whose folio broke off,
+                        ;; not a section head
+                        (not (string-match-p (pdf-text--leader-run-re)
+                                             trimmed)))
                    (concat (make-string (1+ (cl-count ?. (match-string 1 trimmed))) ?*)
                            " " trimmed)
                  line)))
@@ -4697,7 +4982,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 18
+(defconst pdf-text-render-version 20
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

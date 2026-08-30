@@ -115,18 +115,20 @@ what the reader pays."
     (setq repaired (pdf-perf--stage "reading-order repair"
                      (let ((pre (pdf-text--profile cleaned)))
                        (mapcar (lambda (lines)
-                                 (pdf-text--mark-entry-runs
-                                  (pdf-text--defer-margin-notes
-                                   (pdf-text--reassemble-zones
-                                    (pdf-text--mark-lanes
-                                     (pdf-text--merge-script-fragments
-                                      (pdf-text--join-split-lines
-                                       (pdf-text--float-drop-caps lines pre)
+                                 (let ((far (pdf-text--page-far-edge lines pre)))
+                                   (pdf-text--mark-entry-runs
+                                    (pdf-text--defer-margin-notes
+                                     (pdf-text--reassemble-zones
+                                      (pdf-text--mark-lanes
+                                       (pdf-text--strip-leaders
+                                        (pdf-text--merge-script-fragments
+                                         (pdf-text--join-split-lines
+                                          (pdf-text--float-drop-caps lines pre)
+                                          pre)
+                                         pre))
                                        pre)
                                       pre)
-                                     pre)
-                                    pre)
-                                   pre)))
+                                     pre far))))
                                cleaned))))
     ;; over the cleaned pages, not the repaired ones, mirroring
     ;; `pdf-text-render-lines': the repairs move records, and the

@@ -3,7 +3,7 @@
  :vocabulary ("domain-theoretic" "set-theoretic")
  :recurring-forms nil
  :folio-merged 0
- :profile (:height 0.01 :leading 0.012 :left 0.09 :right 0.48 :text-left 0.09 :text-right 0.91 :text-top 0.105 :text-bottom 0.915 :space 0.00503)
+ :profile (:height 0.01 :leading 0.012 :left 0.09 :right 0.48 :text-left 0.09 :text-right 0.91 :text-top 0.105 :text-bottom 0.915 :space 0.00503 :em 0.01132)
  :heading-levels ((0.01223 0.01223 "CMBX10" t))
  :outline
  ()

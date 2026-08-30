@@ -3,7 +3,7 @@
  :vocabulary ("seven-point" "exposure-affect" "meta-analysis" "novelty-familiarity" "fail-safe")
  :recurring-forms ("EXPOSURE AND AFFECT" "#")
  :folio-merged 0
- :profile (:height 0.016 :leading 0.014 :left 0.07 :right 0.485 :text-left 0.07 :text-right 0.93 :text-top 0.1 :text-bottom 0.9 :space 0.005333333333333333)
+ :profile (:height 0.016 :leading 0.014 :left 0.07 :right 0.485 :text-left 0.07 :text-right 0.93 :text-top 0.1 :text-bottom 0.9 :space 0.005333333333333333 :em 0.01235)
  :heading-levels ()
  :outline
  ()

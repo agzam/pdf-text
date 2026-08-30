@@ -9,7 +9,9 @@ Chalmers University of Technology
 
   {nad,rjmh,patrikj}@cs.chalmers.se
 
-Oxford University Computing Laboratory
+Jeremy Gibbons
+
+  Oxford University Computing Laboratory Jeremy.Gibbons@comlab.ox.ac.uk
 
 * Abstract
 
@@ -54,10 +56,6 @@ POPL’06
 January 11–13, 2006, Charleston, South Carolina, USA. Copyright c
 
   ⃝ 2006 ACM 1-59593-027-2/06/0001. . . $5.00.
-
-Jeremy Gibbons
-
-Jeremy.Gibbons@comlab.ox.ac.uk
 
 (fst x, snd x) = x, and
 (2)
