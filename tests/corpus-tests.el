@@ -119,7 +119,8 @@ that moved; this reports the line and its number."
     (let ((blank (pdf-text-line-create :text "")))
       (expect (pdf-corpus--print-record blank)
               :to-equal
-              "  (\"\" nil nil nil nil nil nil nil nil nil nil nil nil nil nil)")))
+              (concat "  (\"\" nil nil nil nil nil nil nil nil"
+                      " nil nil nil nil nil nil nil nil)"))))
 
   (it "round-trips the font fields, and reads an old record without them"
     (let* ((line (pdf-text-line-create
@@ -140,6 +141,26 @@ that moved; this reports the line and its number."
     (expect (pdf-text-line-font
              (pdf-corpus-line '("bare" 0.1 0.9 0.1 0.12 0.12 0.015
                                 0.005 0.3 0.03)))
+            :to-be nil))
+
+  (it "round-trips the lead face, and reads a pre-lead record without one"
+    (let ((read-back (pdf-corpus-line
+                      (with-temp-buffer
+                        (insert (pdf-corpus--print-record
+                                 (pdf-text-line-create
+                                  :text "2 The Applicative class"
+                                  :x0 0.40 :x1 0.59 :base 0.54 :top 0.52
+                                  :bot 0.54 :height 0.0105 :space 0.006
+                                  :cv 0.3 :first-width 0.01
+                                  :font "KEYTKS+CMSS10" :size 0.0118
+                                  :lead-font "ABHJSZ+CMBX10" :lead-bold t)))
+                        (goto-char (point-min))
+                        (read (current-buffer))))))
+      (expect (pdf-text-line-lead-font read-back) :to-equal "ABHJSZ+CMBX10")
+      (expect (pdf-text-line-lead-bold read-back) :to-be t))
+    (expect (pdf-text-line-lead-font
+             (pdf-corpus-line '("bare" 0.1 0.9 0.1 0.12 0.12 0.015
+                                0.005 0.3 0.03 "F" 0.016 nil nil 0)))
             :to-be nil))
 
   (it "builds a fresh record every time, so one render cannot tag the next"

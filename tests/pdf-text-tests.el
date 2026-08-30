@@ -16,7 +16,7 @@
 
 (cl-defun pdf-text-tests--line (text &key (x0 0.10) (x1 0.90) (base 0.10)
                                      (height 0.015) (space 0.005) (cv 0.3)
-                                     first-width
+                                     first-width font bold lead-font lead-bold
                                      &allow-other-keys)
   "A line record for TEXT with page-relative geometry.
 The defaults describe a body line filling a column that runs 0.10 to
@@ -24,6 +24,7 @@ The defaults describe a body line filling a column that runs 0.10 to
   (pdf-text-line-create
    :text text :x0 x0 :x1 x1 :base base :top (- base height) :bot base
    :height height :space space :cv cv
+   :font font :bold bold :lead-font lead-font :lead-bold lead-bold
    :first-width (or first-width
                     ;; a character measures about 0.01 of the page
                     (* 0.01 (length (car (split-string (string-trim text))))))))
@@ -101,6 +102,24 @@ HEADINGS are the org heading lines the outline puts on that page."
                                                         :font "Italic"))))))
       (expect (pdf-text-line-font line) :to-equal "Body")
       (expect (pdf-text-line-italic line) :to-be nil)))
+
+  (it "keeps the opening run's face beside the dominant one"
+    ;; applicative p3, "2 The Applicative class": the sans identifier
+    ;; out-inks the bold around it and takes the dominant slot, but the
+    ;; line opens bold, and that is what heading rules key on
+    (let ((line (pdf-text--mupdf-record
+                 (pdf-text-tests--form
+                  "2 The Applicative class"
+                  (list (pdf-text-tests--run 0 6 :x0 0.4072 :x1 0.4594
+                                             :bold t :font "CMBX10")
+                        (pdf-text-tests--run 6 12 :x0 0.4658 :x1 0.5429
+                                             :font "CMSS10")
+                        (pdf-text-tests--run 18 5 :x0 0.5494 :x1 0.5878
+                                             :bold t :font "CMBX10"))))))
+      (expect (pdf-text-line-font line) :to-equal "CMSS10")
+      (expect (pdf-text-line-bold line) :to-be nil)
+      (expect (pdf-text-line-lead-font line) :to-equal "CMBX10")
+      (expect (pdf-text-line-lead-bold line) :to-be t)))
 
   (it "keeps a line with no ink as text alone, geometry and all"
     (let ((line (pdf-text--mupdf-record
@@ -308,7 +327,37 @@ HEADINGS are the org heading lines the outline puts on that page."
                              (faced "For each word token" :x0 0.25 :x1 0.84
                                     :base 0.30))
                        profile))
-              :to-equal '("1." "For each word token")))))
+              :to-equal '("1." "For each word token")))
+
+    ;; denotational_design p2: "2." and its title served apart on one
+    ;; baseline, one face, 1.23 body heights
+    (it "joins a bare display number to its title set in one face over the body"
+      (let* ((number (faced "2." :x0 0.0882 :x1 0.1017 :base 0.3212
+                            :height 0.017))
+             (title (faced "Denotational semantics and data types"
+                           :x0 0.1196 :x1 0.4130 :base 0.3212 :height 0.017))
+             (joined (progn
+                       (setf (pdf-text-line-lead-font number)
+                             "KCGTFG+NimbusRomNo9L-Medi")
+                       (setf (pdf-text-line-lead-bold number) t)
+                       (pdf-text--join-split-lines (list number title)
+                                                   profile))))
+        (expect (mapcar #'pdf-text-line-text joined)
+                :to-equal '("2. Denotational semantics and data types"))
+        ;; the merged record opens as its number does
+        (expect (pdf-text-line-lead-font (car joined))
+                :to-equal "KCGTFG+NimbusRomNo9L-Medi")
+        (expect (pdf-text-line-lead-bold (car joined)) :to-be t)))
+
+    (it "keeps a bare display number off a title in another face"
+      (let ((number (faced "2." :x0 0.0882 :x1 0.1017 :base 0.3212
+                           :height 0.017))
+            (title (faced "Denotational semantics and data types"
+                          :x0 0.1196 :x1 0.4130 :base 0.3212 :height 0.017)))
+        (setf (pdf-text-line-font title) "CMSS10")
+        (expect (length (pdf-text--join-split-lines (list number title)
+                                                    profile))
+                :to-be 2)))))
 
 (describe "pdf-text--run-baseline"
   (it "reads a one-run line's descent line as its baseline"
@@ -407,7 +456,44 @@ HEADINGS are the org heading lines the outline puts on that page."
                       (list (pdf-text-tests--run 0 5 :x0 0.10 :x1 0.1295)
                             (pdf-text-tests--run 5 1 :x0 0.1345 :x1 0.140
                                                  :oy 0.3424 :qh 0.0089)))
-              :to-equal "in α _{2}"))))
+              :to-equal "in α _{2}"))
+
+    ;; logic p261: TeX writes no space character between an operator
+    ;; glyph and its operand - the 0.29 em gap is the space
+    (it "restores the space a font switch's word gap sets"
+      (expect (markup "∗y"
+                      (list (pdf-text-tests--run 0 1 :x0 0.10 :x1 0.1098
+                                                 :font "CMSY10")
+                            (pdf-text-tests--run 1 1 :x0 0.1141 :x1 0.1235
+                                                 :font "CMMI12")))
+              :to-equal "∗ y"))
+
+    (it "leaves a kern-tight font switch glued"
+      (expect (markup "i(x"
+                      (list (pdf-text-tests--run 0 1 :x0 0.10 :x1 0.1066
+                                                 :font "CMMI12")
+                            (pdf-text-tests--run 1 1 :x0 0.1066 :x1 0.1140
+                                                 :font "CMR12")
+                            (pdf-text-tests--run 2 1 :x0 0.1140 :x1 0.1249
+                                                 :font "CMMI12")))
+              :to-equal "i(x"))
+
+    (it "does not double a space the page already set"
+      (expect (markup "x ∗"
+                      (list (pdf-text-tests--run 0 2 :x0 0.10 :x1 0.1078)
+                            (pdf-text-tests--run 2 1 :x0 0.1121 :x1 0.1219
+                                                 :font "CMSY10")))
+              :to-equal "x ∗"))
+
+    (it "never splits a word whose font change gaps into lowercase"
+      ;; DSB's formula subscripts: "Ag" and "e" arrive as two runs a
+      ;; wide kern apart, and "Ag e" is not a word
+      (expect (markup "Age"
+                      (list (pdf-text-tests--run 0 2 :x0 0.10 :x1 0.1078
+                                                 :font "MinionPro-It")
+                            (pdf-text-tests--run 2 1 :x0 0.1121 :x1 0.1219
+                                                 :font "MinionPro-Regular")))
+              :to-equal "Age"))))
 
 (describe "pdf-text--mupdf-record literals"
   (it "breaks a literal script pair so org will not parse it"
@@ -542,7 +628,25 @@ HEADINGS are the org heading lines the outline puts on that page."
   (it "is all nil for pages that carry no geometry"
     (let ((profile (pdf-text--profile (list (pdf-text--page-lines "a\nb")))))
       (expect (plist-get profile :height) :to-be nil)
-      (expect (plist-get profile :right) :to-be nil))))
+      (expect (plist-get profile :right) :to-be nil)))
+
+  (it "reads the modal body span past the furniture"
+    ;; a narrow centred head over a column of body lines, three pages:
+    ;; the span starts at the first column-anchored line, not the head
+    (let* ((page (pdf-text-tests--page
+                  '(("Running Head" :x0 0.35 :x1 0.62 :base 0.05)
+                    ("body prose filling the column" :base 0.15)
+                    ("body prose filling the column")
+                    ("body prose filling the column")
+                    ("body prose filling the column"))))
+           (profile (pdf-text--profile (list page page page))))
+      (expect (plist-get profile :text-top) :to-be-close-to 0.15 3)
+      (expect (plist-get profile :text-bottom) :to-be-close-to 0.21 3)))
+
+  (it "carries no span without geometry to measure one from"
+    (let ((profile (pdf-text--profile (list (pdf-text--page-lines "a\nb")))))
+      (expect (plist-get profile :text-top) :to-be nil)
+      (expect (plist-get profile :text-bottom) :to-be nil))))
 
 (describe "pdf-text--page-profile"
   (it "takes the column edges from the page, as mirrored margins need"
@@ -1102,6 +1206,23 @@ HEADINGS are the org heading lines the outline puts on that page."
                           "reading drafts of this kindly"))
       (expect (pdf-text-line-claimed note) :to-be nil))))
 
+(describe "pdf-text--lane-clean-row-p"
+  (it "refuses a row outside the body span, which is page furniture"
+    ;; bornstein even pages: folio and head served as a clean two-cell
+    ;; row whose claim then bars both from the margin rules
+    (let* ((spanned '(:height 0.014 :leading 0.014 :left 0.09 :right 0.86
+                      :space 0.005 :text-top 0.10 :text-bottom 0.90))
+           (bare '(:height 0.014 :leading 0.014 :left 0.09 :right 0.86
+                   :space 0.005))
+           (cells (pdf-text-tests--page
+                   '(("94" :x0 0.09 :x1 0.11 :base 0.06)
+                     ("ROBERT F. BORNSTEIN" :x0 0.30 :x1 0.60 :base 0.06))))
+           (row (cons 0.06 (cl-loop for line in cells
+                                    for i from 0
+                                    collect (cons i line)))))
+      (expect (pdf-text--lane-clean-row-p row spanned 0.015) :to-be nil)
+      (expect (pdf-text--lane-clean-row-p row bare 0.015) :to-be-truthy))))
+
 (describe "table rows through the pipeline"
   (it "escapes a literal bar-opened record at birth, on both paths"
     (expect (pdf-text--escape-literals "| a literal row |")
@@ -1227,6 +1348,22 @@ HEADINGS are the org heading lines the outline puts on that page."
       (pdf-text--mark-monospace lines)
       (expect (pdf-text-line-kind (nth 1 lines)) :to-be nil))))
 
+(describe "pdf-text--mark-monospace font names"
+  (it "reads a code font as a listing however short the line"
+    (let ((lines (list (pdf-text-tests--line "}" :x0 0.20 :x1 0.22 :cv nil
+                                             :font "UbuntuMono-Regular"
+                                             :lead-font "UbuntuMono-Regular"))))
+      (pdf-text--mark-monospace lines)
+      (expect (pdf-text-line-kind (car lines)) :to-be 'mono)))
+
+  (it "keeps prose that a wide code identifier dominates"
+    (let ((lines (list (pdf-text-tests--line
+                        "call frobnicate_the_widget to spin it"
+                        :font "UbuntuMono-Regular"
+                        :lead-font "MinionPro-Regular"))))
+      (pdf-text--mark-monospace lines)
+      (expect (pdf-text-line-kind (car lines)) :to-be nil))))
+
 (describe "pdf-text--mark-alignment"
   (it "tags a flush-right run whose left edge moves"
     (let* ((lines (pdf-text-tests--page
@@ -1312,7 +1449,23 @@ HEADINGS are the org heading lines the outline puts on that page."
                     '(("⟨" :x0 0.55 :x1 0.57)
                       ("(11) i(x ∗ y)" :x0 0.58 :x1 0.69 :gap 0.6)))))
         (pdf-text--mark-math lines profile)
-        (expect (mapcar #'pdf-text-line-kind lines) :to-equal '(math math))))))
+        (expect (mapcar #'pdf-text-line-kind lines) :to-equal '(math math))))
+
+    (it "reads a math-font display as maths whatever its letters say"
+      ;; a display whose letters outnumber its operators fails the
+      ;; codepoint density; the face knows
+      (let ((lines (pdf-text-tests--page
+                    '(("eval maps values into meanings"
+                       :x0 0.30 :x1 0.60 :font "TTNUXI+CMMI12")))))
+        (pdf-text--mark-math lines profile)
+        (expect (pdf-text-line-kind (car lines)) :to-equal 'math)))
+
+    (it "keeps a displayed line in the body face prose"
+      (let ((lines (pdf-text-tests--page
+                    '(("a short displayed line of plain words"
+                       :x0 0.30 :x1 0.60 :font "NimbusRomNo9L-Regu")))))
+        (pdf-text--mark-math lines profile)
+        (expect (pdf-text-line-kind (car lines)) :to-be nil)))))
 
 (describe "pdf-text display maths"
   (it "renders a display block verbatim between its paragraphs"
@@ -1745,6 +1898,58 @@ HEADINGS are the org heading lines the outline puts on that page."
                                  (format "let x%d = value;" n)
                                  "}"))
                          '(1 2 3)))))
+
+  (it "strips a paper's head and folio set outside the body span"
+    ;; applicative: head and folio at 1.5 leadings over a body that
+    ;; starts far down a large page - past the band, under the
+    ;; detachment, and both outside the profile's body span
+    (let* ((pages (mapcar
+                   (lambda (n)
+                     (pdf-text-tests--page
+                      `(("Conor McBride and Ross Paterson"
+                         :x0 0.37 :x1 0.63 :base 0.14)
+                        (,(number-to-string n) :x0 0.79 :x1 0.80 :base 0.14)
+                        ("body line one filling the column" :base 0.17)
+                        ("body line two filling the column")
+                        ("body line three filling the column")
+                        ("body line four filling the column"))))
+                   '(2 4 6)))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines)
+                               (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                      (pdf-text-remove-marginal-lines pages profiles))
+              :to-equal (make-list 3 '("body line one filling the column"
+                                       "body line two filling the column"
+                                       "body line three filling the column"
+                                       "body line four filling the column")))))
+
+  (it "strips a wide head sharing its baseline with the folio, past the span"
+    ;; denotational: the head runs as wide as a column - never narrow -
+    ;; and hangs with its corner folio tight over the text block
+    (let* ((pages (mapcar
+                   (lambda (n)
+                     (pdf-text-tests--page
+                      `(("Denotational design with type class morphisms"
+                         :x0 0.52 :x1 0.91 :base 0.06)
+                        (,(number-to-string n) :x0 0.088 :x1 0.095 :base 0.06)
+                        ("body line one fills its column" :x0 0.09 :x1 0.48
+                         :base 0.10)
+                        ("body line two fills its column" :x0 0.09 :x1 0.48)
+                        ("body line three fills its column" :x0 0.09 :x1 0.48)
+                        ("body line four fills its column" :x0 0.09 :x1 0.48))))
+                   '(1 2 3)))
+           (profile (pdf-text--profile pages))
+           (profiles (mapcar (lambda (lines)
+                               (pdf-text--page-profile lines profile))
+                             pages)))
+      (expect (mapcar (lambda (lines) (mapcar #'pdf-text-line-text lines))
+                      (pdf-text-remove-marginal-lines pages profiles))
+              :to-equal (make-list 3 '("body line one fills its column"
+                                       "body line two fills its column"
+                                       "body line three fills its column"
+                                       "body line four fills its column")))))
 
   (it "keeps a footnote block, which is neither narrow nor detached"
     (let* ((pages (mapcar
@@ -2914,34 +3119,60 @@ HEADINGS are the org heading lines the outline puts on that page."
 (describe "pdf-text--heading-clusters"
   (it "keeps styles heading enough distinct pages, tallest first"
     (expect (pdf-text--heading-clusters
-             (append (cl-loop for page from 1 to 6 collect (cons 0.021 page))
-                     (cl-loop for page from 1 to 8 collect (cons 0.018 page)))
+             (append (cl-loop for page from 1 to 6
+                              collect (list 0.021 '("CMBX12" . t) page))
+                     (cl-loop for page from 1 to 8
+                              collect (list 0.018 '("CMBX12" . t) page)))
              0.015)
-            :to-equal '((0.021 . 0.021) (0.018 . 0.018))))
+            :to-equal '((0.021 0.021 "CMBX12" t) (0.018 0.018 "CMBX12" t))))
 
   (it "drops a style on too few pages however many blocks it has"
     ;; a cover spread sets many display lines on two pages
     (expect (pdf-text--heading-clusters
-             (append (make-list 4 (cons 0.030 1)) (make-list 4 (cons 0.030 2))
-                     (cl-loop for page from 1 to 5 collect (cons 0.018 page)))
+             (append (make-list 4 (list 0.030 '("Display") 1))
+                     (make-list 4 (list 0.030 '("Display") 2))
+                     (cl-loop for page from 1 to 5
+                              collect (list 0.018 '("CMBX12" . t) page)))
              0.015)
-            :to-equal '((0.018 . 0.018))))
+            :to-equal '((0.018 0.018 "CMBX12" t))))
 
   (it "reads nearby heights as one style"
     (expect (pdf-text--heading-clusters
              (cl-loop for page from 1 to 6
-                      collect (cons (if (cl-oddp page) 0.0210 0.0215) page))
+                      collect (list (if (cl-oddp page) 0.0210 0.0215)
+                                    '("CMBX12" . t) page))
              0.015)
-            :to-equal '((0.0210 . 0.0215)))))
+            :to-equal '((0.0210 0.0215 "CMBX12" t))))
+
+  (it "splits one height into styles by face, and support judges each"
+    ;; fast-and-loose: author names share the section heads' height,
+    ;; roman on one page against bold across eight
+    (expect (pdf-text--heading-clusters
+             (append (make-list 4 (list 0.0122 '("CMR10") 1))
+                     (cl-loop for page from 1 to 8
+                              collect (list 0.0122 '("CMBX10" . t) page)))
+             0.01)
+            :to-equal '((0.0122 0.0122 "CMBX10" t)))))
 
 (describe "pdf-text--cluster-level"
   (it "ranks a height by its cluster, capped at pdf-text-synth-levels"
-    (let ((clusters '((0.030 . 0.030) (0.021 . 0.022) (0.018 . 0.018)
-                      (0.016 . 0.016) (0.015 . 0.015))))
-      (expect (pdf-text--cluster-level 0.0215 clusters) :to-equal 2)
-      (expect (pdf-text--cluster-level 0.015 clusters)
+    (let ((clusters '((0.030 0.030 "F" t) (0.021 0.022 "F" t)
+                      (0.018 0.018 "F" t) (0.016 0.016 "F" t)
+                      (0.015 0.015 "F" t))))
+      (expect (pdf-text--cluster-level 0.0215 '("F" . t) clusters) :to-equal 2)
+      (expect (pdf-text--cluster-level 0.015 '("F" . t) clusters)
               :to-equal pdf-text-synth-levels)
-      (expect (pdf-text--cluster-level 0.014 clusters) :to-be nil))))
+      (expect (pdf-text--cluster-level 0.014 '("F" . t) clusters) :to-be nil)))
+
+  (it "matches the face where a cluster carries one, any face where not"
+    ;; a bare (MIN . MAX) range is the shape captures stored before
+    ;; faces joined the key, and it must keep matching
+    (let ((clusters '((0.021 0.022 "CMBX10" t) (0.018 . 0.018))))
+      (expect (pdf-text--cluster-level 0.0215 '("CMR10") clusters) :to-be nil)
+      (expect (pdf-text--cluster-level 0.0215 '("CMBX10" . t) clusters)
+              :to-equal 1)
+      (expect (pdf-text--cluster-level 0.018 '("Anything") clusters)
+              :to-equal 2))))
 
 (describe "geometry heading synthesis"
   (cl-flet ((synth (pages) (pdf-text-render-lines
@@ -2966,6 +3197,73 @@ HEADINGS are the org heading lines the outline puts on that page."
                                             :x1 0.40 :base 0.30 :height 0.021))))))
         (expect (car pages) :to-match "^\\* Alpha One")
         (expect (nth 4 pages) :to-match "^\\* Alpha Five")))
+
+    (it "promotes a bold section at the body size by its face"
+      ;; applicative: sections bold at 0.95 body, where size sees
+      ;; nothing; the lead face carries the bold a sans identifier
+      ;; hides from the dominant slot
+      (let ((pages (synth
+                    (cl-loop for n in '("One" "Two" "Three" "Four" "Five")
+                             collect (body-page
+                                      (list (concat "Applicative " n)
+                                            :x0 0.40 :x1 0.60 :base 0.30
+                                            :height 0.0143
+                                            :font "KEYTKS+CMSS10"
+                                            :lead-font "ABHJSZ+CMBX10"
+                                            :lead-bold t))))))
+        (expect (car pages) :to-match "^\\* Applicative One")
+        (expect (nth 4 pages) :to-match "^\\* Applicative Five")))
+
+    (it "keeps a bold line set tight against the text above it prose"
+      ;; a workbook's bold vocabulary label sits one leading under its
+      ;; flow; a real bold head stands a paragraph gap clear
+      (let ((pages (synth
+                    (cl-loop for n in '("One" "Two" "Three" "Four" "Five")
+                             collect
+                             `(("prose fills the column all the way to the right edge" :base 0.5)
+                               ("and continues to a second full line of body text here")
+                               (,(concat "Palabra " n)
+                                :x0 0.10 :x1 0.30 :height 0.0143
+                                :font "NimbusRomNo9L-Medi"
+                                :lead-font "NimbusRomNo9L-Medi"
+                                :lead-bold t)
+                               ("and a third full body line keeps the profile honest"))))))
+        (expect (car pages) :not :to-match "^\\*")))
+
+    (it "gives a bold dotted line its dot depth, not a cluster rank"
+      ;; LNCS sets numbered subsection heads bold a shade under the
+      ;; body; the dot count is their depth
+      (let ((page (car (synth
+                        (list (body-page
+                               '("2.1 Discrete and Continuous Modifications"
+                                 :x0 0.10 :x1 0.55 :base 0.30 :height 0.0143
+                                 :font "NREEDL+NimbusRomNo9L-Medi"
+                                 :lead-font "NREEDL+NimbusRomNo9L-Medi"
+                                 :lead-bold t)))))))
+        (expect page :to-match "^\\*\\* 2\\.1 Discrete")))
+
+    (it "keeps roman lines off a bold heading style at their height"
+      ;; fast-and-loose: author names share the section heads' height,
+      ;; roman against bold, and only the heads recur across pages
+      (let ((pages (synth
+                    (cons (body-page
+                           '("Nils Anders Danielsson" :x0 0.30 :x1 0.55
+                             :base 0.26 :height 0.018 :font "JBZUTU+CMR10"
+                             :lead-font "JBZUTU+CMR10")
+                           '("Abstract" :x0 0.44 :x1 0.56 :base 0.34
+                             :height 0.018 :font "QKNFQX+CMBX10"
+                             :lead-font "QKNFQX+CMBX10" :lead-bold t))
+                          (cl-loop for n in '("Two" "Three" "Four" "Five" "Six")
+                                   collect (body-page
+                                            (list (concat "Section " n)
+                                                  :x0 0.40 :x1 0.60 :base 0.30
+                                                  :height 0.018
+                                                  :font "QKNFQX+CMBX10"
+                                                  :lead-font "QKNFQX+CMBX10"
+                                                  :lead-bold t)))))))
+        (expect (car pages) :not :to-match "^\\*+ Nils")
+        (expect (car pages) :to-match "^\\* Abstract")
+        (expect (nth 3 pages) :to-match "^\\* Section Four")))
 
     (it "leaves a one-spread display style prose: no supported cluster"
       (let ((pages (synth

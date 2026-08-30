@@ -55,7 +55,8 @@ line records diffable."
         (pdf-text-line-first-width line)
         (pdf-text-line-font line) (pdf-text-line-size line)
         (pdf-text-line-bold line) (pdf-text-line-italic line)
-        (pdf-text-line-synth line)))
+        (pdf-text-line-synth line)
+        (pdf-text-line-lead-font line) (pdf-text-line-lead-bold line)))
 
 (defun pdf-corpus-line (record)
   "A fresh `pdf-text-line' for RECORD, as stored in a case file.
@@ -64,23 +65,29 @@ record shared between two renders would carry the first one's verdict
 into the second.  The font fields arrived with the MuPDF input;
 records captured before it carry none and read as nil."
   (cl-destructuring-bind (text x0 x1 top bot base height space cv first-width
-                          &optional font size bold italic synth)
+                          &optional font size bold italic synth
+                          lead-font lead-bold)
       record
     (pdf-text-line-create :text text :x0 x0 :x1 x1 :top top :bot bot
                           :base base :height height :space space :cv cv
                           :first-width first-width
                           :font font :size size :bold bold :italic italic
-                          :synth synth)))
+                          :synth synth
+                          :lead-font lead-font :lead-bold lead-bold)))
 
 (defun pdf-corpus--print-record (line)
   "LINE as one line of a case file.
-Coordinates round to four decimals; the space width is stored exact,
-because the verbatim renders divide by it - a listing's indent is
-x-distance over space width, and the rounded divisor lands a column
-one space off the book's own render."
-  (format "  (%s %s %s %s %s %s %s %s %s)"
+The geometry - edges, extent, baseline, height - and the space width
+store exact: the rules subtract and compare them against thresholds
+derived from exactly stored profile values, and a coordinate rounded
+to four decimals can land a gap on the other side of a gutter or a
+leading measured to the full float (the fast-and-loose refusal: a
+0.00005 rounding split a run-in head from its own line).  The
+advance variation, first-word width and em size keep four decimals -
+their comparisons are ratios with room."
+  (format "  (%s %s %s %s %s %s %s %s %s %s %s)"
           (prin1-to-string (pdf-text-line-text line))
-          (mapconcat #'pdf-corpus--number
+          (mapconcat #'pdf-corpus--exact
                      (seq-take (cdr (pdf-corpus-record line)) 6) " ")
           (pdf-corpus--exact (pdf-text-line-space line))
           (mapconcat #'pdf-corpus--number
@@ -91,38 +98,54 @@ one space off the book's own render."
           (pdf-corpus--number (pdf-text-line-size line))
           (if (pdf-text-line-bold line) "t" "nil")
           (if (pdf-text-line-italic line) "t" "nil")
-          (or (pdf-text-line-synth line) "nil")))
+          (or (pdf-text-line-synth line) "nil")
+          (prin1-to-string (pdf-text-line-lead-font line))
+          (if (pdf-text-line-lead-bold line) "t" "nil")))
 
 (defun pdf-corpus--print-profile (profile)
   "PROFILE, a `pdf-text--profile' plist, stored exact.
-Record coordinates round to four decimals, but a profile value
-multiplies into thresholds - three modal spaces, 1.35 leadings - and
-a page whose measure sits at such a boundary renders differently
-under the rounded value than under the book's own (AIMA p44: the
-rounded :space widened the fragment gap and a margin note merged into
-its paragraph).  `%S' prints a float exactly and `read' returns it
-exactly."
+A profile value multiplies into thresholds - three modal spaces,
+1.35 leadings - and a page whose measure sits at such a boundary
+renders differently under a rounded value than under the book's own
+\(AIMA p44: the rounded :space widened the fragment gap and a margin
+note merged into its paragraph).  `%S' prints a float exactly and
+`read' returns it exactly."
   (format "(:height %s :leading %s :left %s :right %s%s :space %s)"
           (pdf-corpus--exact (plist-get profile :height))
           (pdf-corpus--exact (plist-get profile :leading))
           (pdf-corpus--exact (plist-get profile :left))
           (pdf-corpus--exact (plist-get profile :right))
-          ;; the text-area edges appeared with the two-column-paper fix;
-          ;; earlier cases carry none and render against :left/:right
-          (if (plist-get profile :text-left)
-              (format " :text-left %s :text-right %s"
-                      (pdf-corpus--exact (plist-get profile :text-left))
-                      (pdf-corpus--exact (plist-get profile :text-right)))
-            "")
+          ;; the text-area edges appeared with the two-column-paper fix,
+          ;; the vertical span with the furniture-by-text-area rules;
+          ;; earlier cases carry neither and render without them
+          (concat
+           (if (plist-get profile :text-left)
+               (format " :text-left %s :text-right %s"
+                       (pdf-corpus--exact (plist-get profile :text-left))
+                       (pdf-corpus--exact (plist-get profile :text-right)))
+             "")
+           (if (plist-get profile :text-top)
+               (format " :text-top %s :text-bottom %s"
+                       (pdf-corpus--exact (plist-get profile :text-top))
+                       (pdf-corpus--exact (plist-get profile :text-bottom)))
+             ""))
           (pdf-corpus--exact (plist-get profile :space))))
 
 (defun pdf-corpus--print-clusters (clusters)
-  "CLUSTERS of heading heights, stored exact like the profile."
+  "CLUSTERS of heading styles, stored exact like the profile.
+A cluster is (MIN MAX FONT BOLD) since faces joined the key; a bare
+\(MIN . MAX) range from an earlier capture prints as it was read."
   (format "(%s)"
           (mapconcat (lambda (cluster)
-                       (format "(%s . %s)"
-                               (pdf-corpus--exact (car cluster))
-                               (pdf-corpus--exact (cdr cluster))))
+                       (if (proper-list-p cluster)
+                           (format "(%s %s %S %s)"
+                                   (pdf-corpus--exact (car cluster))
+                                   (pdf-corpus--exact (cadr cluster))
+                                   (caddr cluster)
+                                   (if (cadddr cluster) "t" "nil"))
+                         (format "(%s . %s)"
+                                 (pdf-corpus--exact (car cluster))
+                                 (pdf-corpus--exact (cdr cluster)))))
                      clusters " ")))
 
 (defun pdf-corpus-print-lines (window outline vocabulary facts pages)

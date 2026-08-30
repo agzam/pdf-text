@@ -1,11 +1,9 @@
-Functional pearl
-3
-
 data Exp v = Var v
-​| Val Int
-​| Add (Exp v) (Exp v)
 
-  eval :: Exp v →Env v →Int eval (Var x)
+  ​| Val Int
+  ​| Add (Exp v) (Exp v)
+
+  eval :: Exp v → Env v → Int eval (Var x)
 
   γ = fetch x γ
 
@@ -18,7 +16,7 @@ where Env v is some notion of environment and fetch x projects the value for the
 
 We can eliminate the clutter of the explicitly threaded environment with a little help from some very old friends, designed for this purpose:
 
-  eval :: Exp v →Env v →Int eval (Var x)
+  eval :: Exp v → Env v → Int eval (Var x)
 
   = fetch x eval (Val i)
 
@@ -26,21 +24,21 @@ We can eliminate the clutter of the explicitly threaded environment with a littl
   eval (Add p q) = K (+) ‘S‘ eval p ‘S‘ eval q
 
 where
-K :: a →env →a S :: (env →a →b) →(env →a) →(env →b)
+K :: a → env → a S :: (env → a → b) → (env → a) → (env → b)
 
   K x γ = x S ef es γ = (ef γ) (es γ)
 
 Except for the noise of the K and S combinators[fn:3-2], this definition of eval is in a fairly standard applicative style, even though we are abstracting an environment.
 
-2 The Applicative class
+* 2 The Applicative class
 
 We have seen three examples of this ‘pure function applied to funny arguments’ pattern in apparently quite diverse fields—let us now abstract out what they have in common. In each example, there is a type constructor f that embeds the usual notion of value, but supports its own peculiar way of giving meaning to the usual applicative language—its idiom. We correspondingly introduce the Applicative class:
 
 infixl 4 ⊛
 class Applicative f where
 
-  pure :: a →f a
-  (⊛) :: f (a →b) →f a →f b
+  pure :: a → f a
+  (⊛) :: f (a → b) → f a → f b
 
 This class generalises S and K from threading an environment to threading an effect in general.
 
@@ -48,17 +46,17 @@ We shall require the following laws for applicative functors:
 
 identity
 
-  pure id ⊛u = u
+  pure id ⊛ u = u
 
 composition
 
-  pure (·) ⊛u ⊛v ⊛w = u ⊛(v ⊛w)
+  pure (·) ⊛ u ⊛ v ⊛ w = u ⊛ (v ⊛ w)
 
 homomorphism
-pure f ⊛pure x = pure (f x)
+pure f ⊛ pure x = pure (f x)
 
 interchange
 
-  u ⊛pure x = pure (λf →f x) ⊛u
+  u ⊛ pure x = pure (λf → f x) ⊛ u
 
 [fn:3-2] also known as the return and ap of the environment Monad

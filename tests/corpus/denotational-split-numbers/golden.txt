@@ -1,0 +1,86 @@
+teed to hold, thanks to the morphisms, and so need not be proved specifically. The laws thus come, if not “for free”, then “already paid for”. Often, for a simple and fitting semantic model, someone already has done the hard work of verifying class laws, so the library designer can smile and accept the gift. When the model is unusual or complex enough that the work has not been done, it may be that either the model can be improved, or someone can do the hard work for the model and share it with others. If it is true, as I believe, that good semantic models tend to be reusable, then there is leverage to be gained from TCMs.
+
+Adopting the discipline illustrated in this paper requires additional up-front effort in clarity of thinking, just as static typing does. The reward is that the resulting designs are simple and general, and sometimes have the feel of profound inevitability—as something beautiful we have discovered, rather than something functional we have crafted. A gift from the gods.
+
+* 2 Denotational semantics and data types
+
+Denotational semantics is a compositional style for precisely specifying the meanings of languages, invented by Christopher Strachey and Dana Scott in the 1960s (Scott and Strachey 1971; Stoy 1977). The idea is to specify, for each syntactic category C,
+
+- a mathematical model [[C]] of meanings, and
+
+- a semantic function [[·]]_{C} :: C → [[C]].
+
+Moreover, the various [[·]]_{C} must be compositional, i.e.,must be defined by (mutual) structural recursion. Notationally, “[[·]]_{C} c” is shortened to “[[c]]_{C}”, and when unambiguous, “[[·]]_{C}” will be shortened to “[[·]]”.
+
+Similarly, we can apply denotational semantics to data types within a language to give precise meaning, independent of its implementation. Doing so yields insight into the essence of a type, which may lead to its improvement, or to informed choices about its use. It also supports clear reasoning while implementing or using the type.
+
+As an example, consider a data type of finite maps from keys to values. The type is abstract, available only through an explicit interface that does not reveal its representation. A central question is “What does a map mean?” In other words, “A map is a representation of what mathematical object?” A simple first answer is a partial function from values to keys. Next, we’ll want to be clear about the sense of “partial” here. When a map is queried for a missing key, we might want the map to yield an error (semantically ⊥). More likely, we’ll want an indication that allows for graceful recovery. For this reason, it’s appealing to model a map’s partiality via a success/failure type, for which Haskell’s Maybe type is well suited. Thus a workable model for maps is
+
+  [[Map k v]] = k → Maybe v
+
+For a language, the meaning function is defined recursively over the abstract syntactic constructors. This practice transfers directly to algebraic data types. We are doing something different, however, which is to define the meaning of an interface, without any reference to representation.
+
+Return now to the interface from Section 1:
+
+  abstract type Map :: ∗→∗→∗
+
+empty :: (...)
+
+  ⇒ Map k v
+
+insert :: (...)
+
+                      ⇒ k → v → Map k v → Map k v
+  lookup :: (Eq k...) ⇒ Map k v → k → Maybe v
+
+The omitted additional type constraints contribute only to the implementation and not the semantics. (With Ord k for insert and lookup, the implementation can use a balanced tree representation (Adams 1993).)
+
+A semantics for Map then consists of a model, as given above, and an interpretation for each member of the interface.
+
+  [[·]] :: Map k v → (k → Maybe v)
+
+[[empty]]
+
+  = λk → Nothing
+
+  [[insert k^{′} v m]] = λk → if k ≡ k^{′} then Just v else [[m]] k [[lookup m k]]
+
+  = [[m]] k
+
+Many more functions on maps can be defined semantically within this model, such as a left-biased “union”:
+
+  unionL :: (...) ⇒ Map k v → Map k v → Map k v
+  [[ma ‘unionL‘ mb]] = λk → [[ma]] k ‘mbLeft‘ [[mb]] k
+
+  mbLeft :: Maybe v → Maybe v → Maybe v mbLeft (Just v)
+
+  = Just v mbLeft Nothing mb^{′} = mb^{′}
+
+Other functions can be defined in terms of simpler functions. For instance, a map defined for only a single key is semantically equivalent to one made via empty and insert.
+
+  singleton :: (...) ⇒ k → v → Map k v
+
+singleton k v ≡ insert k v empty
+
+Given this relationship, an explicit semantics for singleton would be redundant.
+
+What is the meaning of equality (i.e., (≡)) here? The answer used throughout this paper is that equality is semantic, i.e.,
+
+  a ≡ b ⇐⇒ [[a]] ≡ [[b]]
+
+We can use lookup to find out whether a key has a corresponding value, i.e., whether the key is in the map’s domain. Suppose we want to know what the domain is without having to query? Maybe we want to know the size of the map’s domain (number of defined keys).
+
+size :: Map k v → Integer
+
+  [[size m]] = ​|{k ​| [[m]] k̸ ≡ Nothing}|
+
+This semantics does not give much hint of how to implement size.
+
+* 3 Simplicity
+
+Most of the time, we programmers reason casually and informally about our programs, and such reasoning is useful. Sometimes we want to make sure that our casual reasoning is valid, so precision tools are useful. For instance, an important aspect of software design is simplicity of use. Specifying semantics precisely gives us a precise way to measure and compare simplicity of designs.[fn:2-1] Moreover, and of great practical importance, simpler designs are easier to reason about, giving us the opportunity to reason further and more deeply. Benefits to software include wider applicability, easier use, and better implementation performance.
+
+The model we used for maps is fairly simple, k → Maybe v. Can we simplify it further? It only has two parts, (→) and Maybe. The function part is essential to what a map is, while the Maybe part is an encoding of partiality.
+
+[fn:2-1] In my experience, simplicity often brings generality along with it. When I design an interface, I usually have in mind some things I want to do with it and how I want it to behave for those things. A complex design is able to address each of those uses and desired behaviors specifically. A simple design, however, requires achieving these specific goals without correspondingly specific design features. Instead, the design must make do with less specifics, by exploiting more general principles. As a result, unforeseen uses are more likely to be covered as well.
+  “Perfection is achieved not when there is nothing left to add, but when there is nothing left to take away” (Antoine de Saint-Exup´ery). In mystical terms, simplicity tugs the human designer out of the way and into the flow of the master Designer (Mathematics, God, The Tao, the elegant universe, etc).

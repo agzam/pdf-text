@@ -128,8 +128,11 @@ what the reader pays."
                                     pre)
                                    pre)))
                                cleaned))))
+    ;; over the cleaned pages, not the repaired ones, mirroring
+    ;; `pdf-text-render-lines': the repairs move records, and the
+    ;; profile must read the geometry the page set
     (setq profile (pdf-perf--stage "document profile"
-                    (pdf-text--profile repaired)))
+                    (pdf-text--profile cleaned)))
     (setq profiles (pdf-perf--stage "page profiles"
                      (mapcar (lambda (l) (pdf-text--page-profile l profile))
                              repaired)))

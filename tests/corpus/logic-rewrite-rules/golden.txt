@@ -1,31 +1,31 @@
 and generates the eleventh rule:
 
-  11 i(x ∗y) ∗x → i(y)
+  11 i(x ∗ y) ∗ x → i(y)
 
-A critical pair comes from rule 11 and rule 4, and the mgu of l_{11}/1.1 and l_{4} is σ = [x_{11} ↼i(x), y_{11} ↼x ∗y]:
+A critical pair comes from rule 11 and rule 4, and the mgu of l_{11}/1.1 and l_{4} is σ = [x_{11} ↼i(x), y_{11} ↼x ∗ y]:
 
-  i(i(x) ∗(x ∗y)) ∗i(x) ⇒ ⟨(11) i(x ∗y) (4) i(y) ∗i(x)
+  i(i(x) ∗ (x ∗ y)) ∗ i(x) ⇒ ⟨ (11) i(x ∗ y) (4) i(y) ∗ i(x)
 
 and generates the twelfth rule:
 
-  12 i(x ∗y) → i(y) ∗i(x)
+  12 i(x ∗ y) → i(y) ∗ i(x)
 
 The final critical pair comes from rule 4 and rule 5, and generates the thirteenth rule:
 
-  13 x ∗(i(x) ∗y) → y
+  13 x ∗ (i(x) ∗ y) → y
 
 Since rules 5, 10, and 11 can be rewritten to the identity i.e., t = t, by rules 5 and 12, the final set of rewrite rules are
 
-                          e ∗x → x
-                    i(x) ∗x → e
-               (x ∗y) ∗z → x ∗(y ∗z)
-          i(x) ∗(x ∗y) → y
-                          x ∗e → x
+                          e ∗ x → x
+                    i(x) ∗ x → e
+               (x ∗ y) ∗ z → x ∗ (y ∗ z)
+          i(x) ∗ (x ∗ y) → y
+                          x ∗ e → x
                            i(e) → e
-                    x ∗i(x) → e
+                    x ∗ i(x) → e
                       i(i(x)) → x
-                    i(x ∗y) → i(y) ∗i(x)
-  13 x ∗(i(x) ∗y) → y
+                    i(x ∗ y) → i(y) ∗ i(x)
+  13 x ∗ (i(x) ∗ y) → y
 
 All the critical pairs from this set of 10 rules can be reduced to the identity. These 10 rules are sufficient to solve the word problem for a free group with no other properties. The word problem is to find a decision procedure to decide whether any two terms are equal, according to the axioms of group theory. The above rewrite system can serve as a decision procedure by checking if the two terms have the same canonical form.
 

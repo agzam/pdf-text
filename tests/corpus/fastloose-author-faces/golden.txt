@@ -1,0 +1,63 @@
+Fast and Loose Reasoning is Morally Correct^{∗}
+
+Nils Anders Danielsson
+John Hughes
+
+Patrik Jansson
+
+Chalmers University of Technology
+
+  {nad,rjmh,patrikj}@cs.chalmers.se
+
+Oxford University Computing Laboratory
+
+* Abstract
+
+Functional programmers often reason about programs as if they were written in a total language, expecting the results to carry over to non-total (partial) languages. We justify such reasoning.
+
+Two languages are defined, one total and one partial, with identical syntax. The semantics of the partial language includes partial and infinite values, and all types are lifted, including the function spaces. A partial equivalence relation (PER) is then defined, the domain of which is the total subset of the partial language. For types not containing function spaces the PER relates equal values, and functions are related if they map related values to related values.
+
+It is proved that if two closed terms have the same semantics in the total language, then they have related semantics in the partial language. It is also shown that the PER gives rise to a bicartesian closed category which can be used to reason about values in the domain of the relation.
+
+Categories and Subject Descriptors F.3.1 [Logics and Meanings of Programs]: Specifying and Verifying and Reasoning about Programs; D.3.2 [Programming Languages]: Language Classifications—Applicative (functional) languages
+
+General Terms Languages, theory, verification
+
+Keywords Equational reasoning, partial and total languages, non-strict and strict languages, partial and infinite values, lifted types, inductive and coinductive types
+
+* 1. Introduction
+
+It is often claimed that functional programs are much easier to reason about than their imperative counterparts. Functional languages satisfy many pleasing equational laws, such as
+
+curry ◦ uncurry = id,
+(1)
+
+  fst (x, y) = x,
+
+(3)
+
+and many others inspired by category theory. Such laws can be used to perform very pleasant proofs of program equality, and are indeed the foundation of an entire school of program transformation and derivation, the Squiggolers [BdM96, Jeu90, BdBH^{+}91, MFP91]. There is just one problem. In current real programming languages such as Haskell [PJ03] and ML [MTHM97], they are not generally valid.
+
+The reason these laws fail is the presence of the undefined value ⊥, and the fact that, in Haskell, ⊥, λx.⊥ and (⊥, ⊥) are all different (violating the first two laws above), while in ML, ⊥, (x, ⊥) and (⊥, y) are always the same (violating the third).
+
+The fact that these laws are invalid does not prevent functional programmers from using them when developing programs, whether formally or informally. Squiggolers happily derive programs from specifications using them, and then transcribe the programs into Haskell in order to run them, confident that the programs will correctly implement the specification. Countless functional programmers happily curry or uncurry functions, confident that at worst they are changing definedness a little in obscure cases. Yet is this confidence justified? Reckless use of invalid laws can lead to patently absurd conclusions: for example, in ML, since (x, ⊥) = (y, ⊥) for any x and y, we can use the third law above to conclude that x = y, for any x and y. How do we know that, when transforming programs using laws of this sort, we do not, for example, transform a correctly terminating program into an infinitely looping one?
+
+This is the question we address in this paper. We call the unjustified reasoning with laws of this sort “fast and loose”, and we show, under some mild and unsurprising conditions, that its conclusions are “morally correct”. In particular, it is impossible to transform a terminating program into a looping one. Our results justify the hand reasoning that functional programmers already perform, and can be applied in proof checkers and automated provers to justify ignoring ⊥-cases much of the time.
+
+In the next section we give an example showing how it can be burdensome to keep track of all preconditions when one is only interested in finite and total values, but is reasoning about a program written in a partial language. Section 3 is devoted to defining the language that we focus on, its syntax and two different semantics: one set-theoretic and one domain-theoretic. Section 4 briefly discusses partial equivalence relations (PERs), and Section 5 introduces a PER on the domain-theoretic semantics. This PER is used to model totality. In Section 6 a partial surjective homomorphism from the set-theoretic semantics to the quotient of the
+
+∗ This work is partially funded by the Swedish Foundation for Strategic Research as part of the research programme “Cover — Combining Verification Methods in Software Development,” and by the Royal Swedish Academy of Sciences’ funds.
+
+Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page. To copy otherwise, to republish, to post on servers or to redistribute to lists, requires prior specific permission and/or a fee.
+POPL’06
+
+January 11–13, 2006, Charleston, South Carolina, USA. Copyright c
+
+  ⃝ 2006 ACM 1-59593-027-2/06/0001. . . $5.00.
+
+Jeremy Gibbons
+
+Jeremy.Gibbons@comlab.ox.ac.uk
+
+(fst x, snd x) = x, and
+(2)
