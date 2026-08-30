@@ -4216,6 +4216,47 @@ thresholds afterwards."
 Reuse keeps whatever the reader last set, so switching the sync off
 holds for that book until its next re-render.")
 
+(defvar pdf-text-kill-together 'both
+  "Which half of the pair a kill takes with it.
+The companion and the PDF it mirrors are one document to the reader,
+so by default closing either closes the other and neither half is
+left orphaned.  The values:
+
+  `both'      killing either buffer kills the other
+  `from-pdf'  the PDF's kill takes the companion, not the reverse
+  `from-text' the companion's kill takes the PDF, not the reverse
+  nil         each buffer is killed on its own
+
+Read at the moment of the kill, so a change reaches the pairs that
+already exist.")
+
+(defvar pdf-text--killing nil
+  "Non-nil while one half's kill is taking the other; breaks the loop.")
+
+(defun pdf-text--kill-partner ()
+  "Kill the other half of the pair, as far as `pdf-text-kill-together' allows.
+Runs from `kill-buffer-hook' on both sides, so the partner this kills
+runs the same hook on the way out - which is what the guard stops."
+  (unless pdf-text--killing
+    (let* ((text (derived-mode-p 'pdf-text-mode))
+           (partner (if text pdf-text--pdf-buffer pdf-text--companion)))
+      (when (and (buffer-live-p partner)
+                 (memq pdf-text-kill-together
+                       (if text '(both from-text) '(both from-pdf))))
+        (let ((pdf-text--killing t))
+          (kill-buffer partner))))))
+
+(defun pdf-text--pair (companion pdf)
+  "Point COMPANION and PDF at each other, and arm the paired kill.
+Both hooks go on whatever `pdf-text-kill-together' says, since the
+option is read when one of them fires."
+  (with-current-buffer companion
+    (setq pdf-text--pdf-buffer pdf)
+    (add-hook 'kill-buffer-hook #'pdf-text--kill-partner nil t))
+  (with-current-buffer pdf
+    (setq pdf-text--companion companion)
+    (add-hook 'kill-buffer-hook #'pdf-text--kill-partner nil t)))
+
 ;;;###autoload
 (defun pdf-view-as-text ()
   "Read the current PDF as reflowed text in a companion buffer.
@@ -4225,7 +4266,8 @@ The companion is reused as long as the PDF file on disk is unchanged;
 a stale or missing one is re-extracted through epdfinfo.  The PDF
 outline becomes org headings; without one, numbered section lines
 found in the text stand in.  A fresh companion starts
-`pdf-text-sync-mode' when `pdf-text-sync-default' is non-nil.  A
+`pdf-text-sync-mode' when `pdf-text-sync-default' is non-nil, and the
+two buffers are killed together as `pdf-text-kill-together' says.  A
 document whose pages carry almost no text - a scan - signals an
 error instead of an empty buffer."
   (interactive)
@@ -4285,13 +4327,12 @@ error instead of an empty buffer."
                 (when pdf-text--has-outline (org-cycle-overview)))))
           (message "pdf-text: extracting text from %s...done (%.1fs)"
                    (buffer-name) (- (float-time) start)))))
+    (pdf-text--pair buf pdf-buf)
     (with-current-buffer buf
-      (setq pdf-text--pdf-buffer pdf-buf)
       ;; re-enabling on reuse re-arms the pdf-side hook after the PDF
       ;; buffer was killed and reopened; an explicit off stays off
       (when (or (and fresh pdf-text-sync-default) pdf-text-sync-mode)
         (pdf-text-sync-mode 1)))
-    (setq pdf-text--companion buf)
     (pop-to-buffer buf)
     (goto-char (pdf-text--page-position page fraction))
     (pdf-text--reveal-page page)

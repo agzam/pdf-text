@@ -3302,6 +3302,155 @@ HEADINGS are the org heading lines the outline puts on that page."
             (expect pdf-text-sync-mode :to-be nil))
         (kill-buffer companion)))))
 
+(defun pdf-text-tests--pair ()
+  "A paired companion and PDF buffer, as (COMPANION . PDF)."
+  (let ((pdf (generate-new-buffer " *kill-pdf*"))
+        (companion (generate-new-buffer " *kill-text*")))
+    (with-current-buffer companion (pdf-text-mode))
+    (pdf-text--pair companion pdf)
+    (cons companion pdf)))
+
+(defun pdf-text-tests--drop-pair (pair)
+  "Kill whichever half of PAIR is still alive, the pairing switched off."
+  (let ((pdf-text-kill-together nil))
+    (dolist (buf (list (car pair) (cdr pair)))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(describe "pdf-text--pair"
+  (it "points both halves at each other and arms the kill hook on each"
+    (let ((pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn
+            (expect (buffer-local-value 'pdf-text--pdf-buffer (car pair))
+                    :to-be (cdr pair))
+            (expect (buffer-local-value 'pdf-text--companion (cdr pair))
+                    :to-be (car pair))
+            (dolist (buf (list (car pair) (cdr pair)))
+              (expect (memq #'pdf-text--kill-partner
+                            (buffer-local-value 'kill-buffer-hook buf))
+                      :to-be-truthy)))
+        (pdf-text-tests--drop-pair pair))))
+
+  (it "leaves one hook a side however often it re-pairs"
+    ;; `pdf-view-as-text' pairs on the reuse path too, so a reader who
+    ;; opens the same book ten times must not stack ten hooks
+    (let ((pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn
+            (pdf-text--pair (car pair) (cdr pair))
+            (pdf-text--pair (car pair) (cdr pair))
+            (dolist (buf (list (car pair) (cdr pair)))
+              (expect (cl-count #'pdf-text--kill-partner
+                                (buffer-local-value 'kill-buffer-hook buf))
+                      :to-equal 1)))
+        (pdf-text-tests--drop-pair pair))))
+
+  (it "follows the companion to a reopened PDF buffer"
+    ;; the reader closes the PDF and opens it again; the next
+    ;; `pdf-view-as-text' re-pairs, and the kill has to take the live
+    ;; half rather than reach for the buffer that is already gone
+    (let* ((pair (pdf-text-tests--pair))
+           (companion (car pair))
+           (reopened (generate-new-buffer " *kill-pdf2*")))
+      (unwind-protect
+          (progn
+            (let ((pdf-text-kill-together nil)) (kill-buffer (cdr pair)))
+            (pdf-text--pair companion reopened)
+            (kill-buffer companion)
+            (expect (buffer-live-p reopened) :to-be nil))
+        (pdf-text-tests--drop-pair pair)
+        (let ((pdf-text-kill-together nil))
+          (when (buffer-live-p reopened) (kill-buffer reopened)))))))
+
+(describe "pdf-text-kill-together"
+  (it "takes the other half with it, whichever half goes"
+    ;; and the kill returns at all: each half's hook fires on the way
+    ;; out, so without the guard the partner's hook comes back for the
+    ;; buffer already dying and the recursion never bottoms out
+    (let ((pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn (kill-buffer (car pair))
+                 (expect (buffer-live-p (cdr pair)) :to-be nil)
+                 (expect pdf-text--killing :to-be nil))
+        (pdf-text-tests--drop-pair pair)))
+    (let ((pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn (kill-buffer (cdr pair))
+                 (expect (buffer-live-p (car pair)) :to-be nil)
+                 (expect pdf-text--killing :to-be nil))
+        (pdf-text-tests--drop-pair pair))))
+
+  (it "carries the kill one way only under `from-pdf'"
+    (let ((pdf-text-kill-together 'from-pdf)
+          (pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn (kill-buffer (car pair))
+                 (expect (buffer-live-p (cdr pair)) :to-be t))
+        (pdf-text-tests--drop-pair pair)))
+    (let ((pdf-text-kill-together 'from-pdf)
+          (pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn (kill-buffer (cdr pair))
+                 (expect (buffer-live-p (car pair)) :to-be nil))
+        (pdf-text-tests--drop-pair pair))))
+
+  (it "carries the kill the other way only under `from-text'"
+    (let ((pdf-text-kill-together 'from-text)
+          (pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn (kill-buffer (cdr pair))
+                 (expect (buffer-live-p (car pair)) :to-be t))
+        (pdf-text-tests--drop-pair pair)))
+    (let ((pdf-text-kill-together 'from-text)
+          (pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn (kill-buffer (car pair))
+                 (expect (buffer-live-p (cdr pair)) :to-be nil))
+        (pdf-text-tests--drop-pair pair))))
+
+  (it "leaves both halves alone when nil"
+    (let ((pdf-text-kill-together nil)
+          (pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn (kill-buffer (car pair))
+                 (expect (buffer-live-p (cdr pair)) :to-be t))
+        (pdf-text-tests--drop-pair pair))))
+
+  (it "is read at the kill, so a change reaches an existing pair"
+    (let ((pair (let ((pdf-text-kill-together nil)) (pdf-text-tests--pair))))
+      (unwind-protect
+          (progn (kill-buffer (car pair))
+                 (expect (buffer-live-p (cdr pair)) :to-be nil))
+        (pdf-text-tests--drop-pair pair))))
+
+  (it "says nothing when the partner is already gone"
+    (let ((pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn
+            (let ((pdf-text-kill-together nil)) (kill-buffer (cdr pair)))
+            (kill-buffer (car pair))
+            (expect (buffer-live-p (car pair)) :to-be nil))
+        (pdf-text-tests--drop-pair pair))))
+
+  (it "takes the pair down with the sync armed on both buffers"
+    ;; `pdf-text-sync-mode' puts a hook in each buffer, and the pdf-side
+    ;; one removes itself once the companion dies - adjacent code that
+    ;; must not fire into a half-killed pair, and no hook may outlive
+    ;; the buffers into the session's own `post-command-hook'
+    (let ((pair (pdf-text-tests--pair)))
+      (unwind-protect
+          (progn
+            (with-current-buffer (car pair) (pdf-text-sync-mode 1))
+            (expect (memq #'pdf-text-sync--follow-pdf
+                          (buffer-local-value 'pdf-view-after-change-page-hook
+                                              (cdr pair)))
+                    :to-be-truthy)
+            (kill-buffer (car pair))
+            (expect (buffer-live-p (cdr pair)) :to-be nil)
+            (expect (memq #'pdf-text-sync--follow-text post-command-hook)
+                    :to-be nil))
+        (pdf-text-tests--drop-pair pair)))))
+
 (describe "pdf-text--pdf-page"
   (it "reads the page from image-mode window properties"
     (with-temp-buffer

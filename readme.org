@@ -16,6 +16,8 @@ The buffer is an ~org-mode~ derivative, so folding, sparse trees (~C-c /~), subt
 
 The companion is reused as long as the file on disk has not changed, so re-opening a 600-page book costs a millisecond rather than seconds.
 
+The companion and the PDF are one document to you, so closing either closes the other and no half is left behind. ~pdf-text-kill-together~ decides that: ~both~ (the default), ~from-pdf~ or ~from-text~ to carry the kill one way only, or nil to keep the two buffers independent.
+
 * Why
 
 ~pdf-view~ renders pages as images, so nothing a text buffer gives you applies: no soft wrap, no text motions, no isearch, no spell checker, no translate-at-point. The text is right there - epdfinfo serves it - but no one turns it into a buffer that reads like a book and stays in step with the page you are on.
@@ -57,7 +59,7 @@ In a GUI frame bind ~<return>~ next to ~RET~ if another minor mode (evil-org, sa
 
 ** Tuning
 
-Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (paragraph break as a multiple of the leading), ~pdf-text-blank-factor~, ~pdf-text-size-tolerance~, ~pdf-text-heading-height~ and ~pdf-text-heading-max-words~ (what reads as a heading), ~pdf-text-synth-support~ and ~pdf-text-synth-levels~ (how many pages a glyph size must head before an outline-less book folds on it, and how deep), ~pdf-text-monospace-variation~ (what reads as a listing), ~pdf-text-margin-band~ and ~pdf-text-recurring-min-count~ (what reads as a running head), ~pdf-text-script-size~, ~pdf-text-script-raise~ and ~pdf-text-script-drop~ (what reads as a super- or subscript), ~pdf-text-lane-gutter~, ~pdf-text-lane-min-rows~ and ~pdf-text-lane-flows-min-rows~ (what reads as a multicolumn region), ~pdf-text-min-text-fraction~ (below which a document is a scan and the command refuses it).
+Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (paragraph break as a multiple of the leading), ~pdf-text-blank-factor~, ~pdf-text-size-tolerance~, ~pdf-text-heading-height~ and ~pdf-text-heading-max-words~ (what reads as a heading), ~pdf-text-synth-support~ and ~pdf-text-synth-levels~ (how many pages a glyph size must head before an outline-less book folds on it, and how deep), ~pdf-text-monospace-variation~ (what reads as a listing), ~pdf-text-margin-band~ and ~pdf-text-recurring-min-count~ (what reads as a running head), ~pdf-text-script-size~, ~pdf-text-script-raise~ and ~pdf-text-script-drop~ (what reads as a super- or subscript), ~pdf-text-lane-gutter~, ~pdf-text-lane-min-rows~ and ~pdf-text-lane-flows-min-rows~ (what reads as a multicolumn region), ~pdf-text-min-text-fraction~ (below which a document is a scan and the command refuses it), ~pdf-text-kill-together~ (which half of the pair a kill takes with it).
 
 * Known limits
 
