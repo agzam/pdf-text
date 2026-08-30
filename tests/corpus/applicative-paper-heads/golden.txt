@@ -19,14 +19,16 @@ This is the story of a pattern that popped up time and again in our daily work, 
 
 Sequencing commands One often wants to execute a sequence of commands and collect the sequence of their responses, and indeed there is such a function in the Haskell Prelude (here specialised to IO):
 
-  sequence :: [IO a ] → IO [a ]
+  sequence :: [IO a ] →IO [a ]
 
-sequence [ ]
+sequence
+[ ]
+
 = return [ ]
 
   sequence (c : cs) = do
       x ←c
-      xs ← sequence cs
+      xs ←sequence cs
 
 return (x : xs)
 

@@ -1,22 +1,21 @@
-small modiﬁcation will improve this algorithm as we would like. Considering a diﬀerent, random sampling algorithm addresses the problem (Section 8).
+small modification will improve this algorithm as we would like. Considering a different, random sampling algorithm addresses the problem (Section 8).
 
-The structure of the rest of the tutorial is as follows. In Section 2 we describe how incremental modiﬁcations arise and why they can lead to improved eﬃciency and why having general-purpose techniques and languages can help take advantage of this potential. In Section 3 we describe the self-adjusting computation model and the core and the meta primitives for writing self-adjusting programs. In Section 4 we describe an example self-adjusting application, called CIRCLES, and how the user can interact with such a program. In the rest of the tutorial, we use this example to illustrate how the ΔML language may be used to implement self-adjusting programs.
+The structure of the rest of the tutorial is as follows. In Section 2 we describe how incremental modifications arise and why they can lead to improved efficiency and why having general-purpose techniques and languages can help take advantage of this potential. In Section 3 we describe the self-adjusting computation model and the core and the meta primitives for writing self-adjusting programs. In Section 4 we describe an example self-adjusting application, called CIRCLES, and how the user can interact with such a program. In the rest of the tutorial, we use this example to illustrate how the ΔML language may be used to implement self-adjusting programs.
 
 * Motivation
 
-We consider the two kinds of modiﬁcations, discrete and continuous, that arise in incremental applications via simple examples and describe how we may take advantage of them to improve eﬃciency. We then describe how and why language-based techniques are critical for scalability.
+We consider the two kinds of modifications, discrete and continuous, that arise in incremental applications via simple examples and describe how we may take advantage of them to improve efficiency. We then describe how and why language-based techniques are critical for scalability.
 
-2.1
-Discrete and Continuous Modifications
+2.1 Discrete and Continuous Modifications
 
-Close inspection of incremental applications reveal that two kinds of modiﬁcation arise naturally: discrete/dynamic and continuous/kinetic.
+Close inspection of incremental applications reveal that two kinds of modification arise naturally: discrete/dynamic and continuous/kinetic.
 
-Discrete/Dynamic: A discrete or dynamic modiﬁcation is a combinatorial modiﬁcation to the input of the program that modiﬁes the set of objects in the input.
+Discrete/Dynamic: A discrete or dynamic modification is a combinatorial modification to the input of the program that modifies the set of objects in the input.
 
-Continuous/Kinetic: A continuous or kinetic modiﬁcation aﬀects the relationship between the input objects but does not aﬀect the set of objects itself. By a relationship we broadly mean any function mapping objects into a discrete set. For example, comparisons between objects are relationships because the co-domain contains true and false.
+Continuous/Kinetic: A continuous or kinetic modification affects the relationship between the input objects but does not affect the set of objects itself. By a relationship we broadly mean any function mapping objects into a discrete set. For example, comparisons between objects are relationships because the co-domain contains true and false.
 
-As an example, consider sorting a list of numbers and how discrete and continuous modiﬁcations may arise in this application.
+As an example, consider sorting a list of numbers and how discrete and continuous modifications may arise in this application.
 
-Suppose that we sort a list of numbers, e.g., [30,10,20,0], and then we insert a new number to the list, e.g. [7,30,10,20,0]. Since the set of objects itself is modiﬁed this is a discrete modiﬁcation. Note that inserting/deleting an element from the input only causes an in incremental modiﬁcation to the output, that of inserting/deleting the new element into/from the output (at the right position). Thus we can expect to be able to update the output signiﬁcantly faster than recomputing from scratch. In fact, we can update the output for a sorting application in optimal logarithmic time, instead of the O(n log n) time a re-computation would require.
+Suppose that we sort a list of numbers, e.g., [30,10,20,0], and then we insert a new number to the list, e.g. [7,30,10,20,0]. Since the set of objects itself is modified this is a discrete modification. Note that inserting/deleting an element from the input only causes an in incremental modification to the output, that of inserting/deleting the new element into/from the output (at the right position). Thus we can expect to be able to update the output significantly faster than recomputing from scratch. In fact, we can update the output for a sorting application in optimal logarithmic time, instead of the O(n log n) time a re-computation would require.
 
-As an example of continuous modiﬁcations, consider a set of numbers that change as a function of time a(t) = 40.0 − 0.3t, b(t) = 20.0 − 0.3t, c(t) = 10, and
+As an example of continuous modifications, consider a set of numbers that change as a function of time a(t) = 40.0 −0.3t, b(t) = 20.0 −0.3t, c(t) = 10, and

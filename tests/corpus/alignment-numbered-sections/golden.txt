@@ -21,7 +21,6 @@ We define the similarity between two texts in different languages as the number 
 3. for each word token w in T_{X} 4.
 
   if any of its translations D_{XY} (w) is found in T_{Y} 5.
-
 increase translations by 1
 
 where D_{XY} (w) is a function returning a set of the dictionary translations of the word w. Then the number of word tokens without translation in both paragraphs, under the hypothesis that these two paragraphs correspond to each other, is:

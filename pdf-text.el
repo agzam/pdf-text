@@ -29,31 +29,31 @@
 ;;
 ;; `pdf-view-as-text' reads the PDF of the current `pdf-view-mode' buffer as
 ;; reflowed text in a companion buffer, landing on the page the image view
-;; shows and as far into it as the window sits down the image.  Text and glyph
-;; geometry both come from the already-running epdfinfo (`pdf-info-charlayout'
-;; per page, `pdf-info-gettext' as the fallback for a page without one), and
-;; the document outline (`pdf-info-outline') becomes foldable org headings.
+;; shows and as far into it as the window sits down the image.  Text and its
+;; geometry come from MuPDF's structured text (`mutool run' with a walker
+;; script, one record per line with its font runs; `pdf-info-gettext' as the
+;; fallback for a page it finds no text on), and the document outline
+;; (`pdf-info-outline') becomes foldable org headings.
 ;; `pdf-text-show-in-pdf' jumps the PDF back to the page at point;
 ;; `pdf-text-sync-mode' keeps the two on the same page in both directions.
 ;;
-;; poppler hands out lines, never blocks: it computes paragraphs and columns
-;; internally and then discards them while serving text, so the reflow has to
-;; rebuild that structure from the glyph boxes - where a line ends, how far
-;; the next one starts in, how much air sits between their baselines.
+;; Extractors hand out lines, never blocks: the engines compute paragraphs
+;; and columns internally and then discard them while serving text, so the
+;; reflow has to rebuild that structure from the line geometry - where a line
+;; ends, how far the next one starts in, how much air sits between their
+;; baselines.
 ;;
 ;; Everything below the entry commands is pure transformation, testable
-;; without a PDF or pdf-tools on the load path.
+;; without a PDF, pdf-tools or mutool on the load path.
 ;;
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
-(require 'tq)
 
 ;; pdf-tools is a runtime dependency only: every symbol below resolves when a
 ;; command runs, so the transforms load and test without it.  org arrives with
 ;; the derived mode.
-(declare-function pdf-info-charlayout "ext:pdf-info")
 (declare-function pdf-info-gettext "ext:pdf-info")
 (declare-function pdf-info-number-of-pages "ext:pdf-info")
 (declare-function pdf-info-outline "ext:pdf-info")
@@ -63,161 +63,6 @@
 (declare-function org-cycle-overview "org-cycle")
 (declare-function org-fold-show-set-visibility "org-fold")
 (declare-function org-fold-show-entry "org-fold")
-(declare-function pdf-info-process-assert-running "ext:pdf-info")
-(declare-function pdf-info-process "ext:pdf-info")
-(defvar pdf-info--queue)
-(defvar pdf-info-epdfinfo-program)
-
-;;; Charlayout off the wire
-
-;; A charlayout response is a fixed grammar: "OK\n", one record
-;; "X0 Y0 X1 Y1:GLYPH\n" per glyph - %f coordinates, the glyph escaped
-;; only as \\ \: or \n - then ".\n".  pdf-info reads it through a
-;; generic per-character walk that costs more than the server's own
-;; work, and one server lays out pages one at a time however many
-;; cores the machine has.  Reading the wire directly and fanning a
-;; whole book over a few worker servers turns extraction time into
-;; the time it takes to drain the answers.
-
-(defvar pdf-text-charlayout-workers 4
-  "Worker servers a whole-book extraction may spawn.
-Capped by `num-processors'.  The measured knee sits at four: past it,
-draining and parsing the responses saturates the Emacs side.")
-
-(defvar pdf-text-charlayout-pool-min 16
-  "Pages below which extraction stays on the main server.
-Spawning workers and opening the document in each is a fixed cost a
-short window never earns back.")
-
-(defvar pdf-text--charlayout-buffer nil
-  "Work buffer `pdf-text--charlayout-parse' reuses across pages.")
-
-(defun pdf-text--query-escape (file)
-  "FILE escaped for the wire: backslash and colon prefixed, newline as \\n."
-  (string-replace "\n" "\\n" (replace-regexp-in-string "[\\:]" "\\\\\\&" file)))
-
-(defun pdf-text--charlayout-parse (response)
-  "Charlayout RESPONSE string as (GLYPH (X0 Y0 X1 Y1)) records.
-The shape `pdf-info-charlayout' returns, read off the wire grammar
-instead: coordinates never contain a colon and every literal backslash
-arrives escaped, so one colon-to-space pass leaves the four floats to
-the native reader - no intermediate strings - and \"\\ \" can only
-name the colon glyph.  Signals on an ERR or malformed response."
-  (with-current-buffer
-      (or (and (buffer-live-p pdf-text--charlayout-buffer)
-               pdf-text--charlayout-buffer)
-          (setq pdf-text--charlayout-buffer
-                (with-current-buffer
-                    (generate-new-buffer " *pdf-text-charlayout*" t)
-                  (buffer-disable-undo)
-                  (current-buffer))))
-    (erase-buffer)
-    (insert response)
-    (goto-char (point-min))
-    (cond
-     ((looking-at "OK\n")
-      (forward-line 1)
-      (subst-char-in-region (point) (point-max) ?: ?\s)
-      (let ((buf (current-buffer))
-            result)
-        (while (not (eq (char-after) ?.))
-          (let* ((x0 (read buf)) (y0 (read buf)) (x1 (read buf)) (y1 (read buf))
-                 (glyph (progn
-                          (forward-char 1)
-                          (let ((c (char-after)))
-                            (if (eq c ?\\)
-                                (progn
-                                  (forward-char 1)
-                                  (let ((e (char-after)))
-                                    (cond ((eq e ?n) ?\n)
-                                          ((eq e ?\s) ?:)
-                                          (t e))))
-                              c)))))
-            (unless (numberp y1)
-              (error "Malformed charlayout record"))
-            ;; past the glyph's last character and the record's newline
-            (forward-char 2)
-            (push (list glyph (list x0 y0 x1 y1)) result)))
-        (nreverse result)))
-     ((looking-at "ERR\n")
-      (forward-line 1)
-      (error "epdfinfo: %s"
-             (buffer-substring-no-properties
-              (point) (progn (re-search-forward "^\\.\n")
-                             (1- (match-beginning 0))))))
-     (t (error "Invalid charlayout response")))))
-
-(defun pdf-text--charlayout-pool (n)
-  "N transaction queues over worker epdfinfo servers of our own."
-  (cl-loop repeat n
-           collect (let* ((process-connection-type nil)
-                          (default-directory temporary-file-directory)
-                          (proc (start-process "pdf-text-epdfinfo" nil
-                                               pdf-info-epdfinfo-program)))
-                     (set-process-query-on-exit-flag proc nil)
-                     (set-process-coding-system proc 'utf-8-unix 'utf-8-unix)
-                     (tq-create proc))))
-
-(defun pdf-text--charlayout-pool-stop (pool)
-  "Quit and reap POOL's workers; their queue buffers go with them."
-  (dolist (tq pool)
-    (ignore-errors (process-send-string (tq-process tq) "quit\n"))
-    (ignore-errors (tq-close tq))))
-
-(defun pdf-text--charlayouts (file pages)
-  "Charlayout of FILE's PAGES, a list in that order, nil where a page fails.
-Every query goes down the wire before the first answer is read, so the
-server never waits on a round trip; past `pdf-text-charlayout-pool-min'
-pages the queries fan out over `pdf-text-charlayout-workers' worker
-servers, which parallelizes poppler across cores.  A page that fails
-any of it - an ERR response, a malformed parse, a worker death -
-retries once through `pdf-info-charlayout' on the main server, so a
-password the main server holds or a crashed worker costs speed, never
-a page."
-  (pdf-info-process-assert-running)
-  (let* ((file (expand-file-name file))
-         (total (length pages))
-         (workers (max 1 (min pdf-text-charlayout-workers (num-processors))))
-         (pool (and (< 1 workers)
-                    (<= pdf-text-charlayout-pool-min total)
-                    (stringp pdf-info-epdfinfo-program)
-                    (file-executable-p pdf-info-epdfinfo-program)
-                    (condition-case nil (pdf-text--charlayout-pool workers)
-                      (error nil))))
-         (queues (or pool (list pdf-info--queue)))
-         (results (make-vector total nil))
-         (got 0))
-    (unwind-protect
-        (progn
-          (cl-loop for p in pages
-                   for i from 0
-                   do (let ((slot i))
-                        (tq-enqueue (nth (mod i (length queues)) queues)
-                                    (concat "charlayout:"
-                                            (pdf-text--query-escape file)
-                                            ":" (number-to-string p)
-                                            ":0 0 1 1\n")
-                                    "^\\.\n" nil
-                                    (lambda (_ r)
-                                      (aset results slot r)
-                                      (setq got (1+ got))))))
-          ;; a dead worker never answers; wait only while a live queue
-          ;; still owes something, and let the fallback cover the rest
-          (while (and (< got total)
-                      (cl-some (lambda (tq)
-                                 (and (eq (process-status (tq-process tq)) 'run)
-                                      (not (tq-queue-empty tq))))
-                               queues))
-            (accept-process-output nil 0.05)))
-      (when pool (pdf-text--charlayout-pool-stop pool)))
-    (cl-loop for r across results
-             for p in pages
-             collect (or (and r (condition-case nil
-                                    (pdf-text--charlayout-parse r)
-                                  (error nil)))
-                         (condition-case nil
-                             (pdf-info-charlayout p nil file)
-                           (error nil))))))
 
 ;;; Statistics over glyph measurements
 
@@ -301,19 +146,11 @@ character heuristics."
   space                                 ; median width of the line's spaces
   cv                                    ; advance variation; ~0 is monospaced
   first-width                           ; width of the first word
+  font                                  ; dominant font name, or nil
+  size                                  ; dominant font em size, page-relative
+  bold italic                           ; dominant font's weight and slant
+  synth                                 ; characters the extractor invented
   claimed)                              ; owned by a lane region; zones keep out
-
-(defun pdf-text--layout-lines (layout)
-  "Charlayout LAYOUT split at newline glyphs into per-line glyph lists.
-Entries are (CHAR (X0 Y0 X1 Y1)); the newline glyphs poppler emits
-mirror the line breaks of the gettext stream."
-  (let (lines cur)
-    (dolist (e layout)
-      (if (eq (car e) ?\n)
-          (progn (push (nreverse cur) lines) (setq cur nil))
-        (push e cur)))
-    (when cur (push (nreverse cur) lines))
-    (nreverse lines)))
 
 (defvar pdf-text-script-size 0.78
   "Glyph height, in body heights, at and under which a glyph can be a script.
@@ -353,206 +190,11 @@ bar-ruled page footer - stay plain text."
     "\\[fn:" "[\u200Bfn:"
     (replace-regexp-in-string "\\([_^]\\){" "\\1\u200B{" text))))
 
-(defun pdf-text--glyph-baseline (glyphs)
-  "The typeset baseline of GLYPHS and its body height, as (BASE . HEIGHT).
-Letters and digits anchor their boxes at the pen position, so their
-box bottoms cluster on the baselines the line was set at; symbol
-fonts hang their boxes below the same pen and stay out of the vote.
-The widest cluster names the baseline, but every cluster within a
-raise of it - each measured by its own glyph size - contests, and the
-highest wins: a fragment set mostly in subscript cedes to its few
-full-size glyphs, and a line of math-font variables, whose alphabetic
-boxes hang below the pen like their operators, cedes to the words set
-beside them.  Nothing legitimate sits below a baseline within a
-raise's reach of it.  Nil without alphanumeric ink."
-  (let (boxes)
-    (dolist (g glyphs)
-      (when (and (not (memq (car g) '(?\s ?\t)))
-                 (string-match-p "[[:alnum:]]" (string (car g))))
-        (push (cadr g) boxes)))
-    (when boxes
-      (let* ((sorted (sort boxes (lambda (a b) (< (nth 3 a) (nth 3 b)))))
-             (heights (mapcar (lambda (b) (- (nth 3 b) (nth 1 b))) sorted))
-             (gap (* 0.04 (pdf-text--quantile heights 0.5)))
-             (levels nil)
-             (current (list (car sorted))))
-        (dolist (b (cdr sorted))
-          (if (< (- (nth 3 b) (nth 3 (car current))) gap)
-              (push b current)
-            (push current levels)
-            (setq current (list b))))
-        (push current levels)
-        (let* ((stats (mapcar
-                       (lambda (level)
-                         (list (nth 3 (car (last level)))
-                               (pdf-text--quantile
-                                (mapcar (lambda (b) (- (nth 3 b) (nth 1 b)))
-                                        level)
-                                0.5)
-                               (apply #'+ (mapcar (lambda (b)
-                                                    (- (nth 2 b) (nth 0 b)))
-                                                  level))))
-                       levels))
-               (widest (cl-reduce (lambda (a b) (if (< (nth 2 a) (nth 2 b)) b a))
-                                  stats))
-               (contest (cl-remove-if-not
-                         (lambda (level)
-                           (<= (abs (- (nth 0 level) (nth 0 widest)))
-                               (* pdf-text-script-raise (nth 1 level))))
-                         stats))
-               (ref (cl-reduce (lambda (a b) (if (< (nth 0 b) (nth 0 a)) b a))
-                               (or contest (list widest)))))
-          (cons (nth 0 ref) (nth 1 ref)))))))
-
-(defun pdf-text--script-dir (glyph base height)
-  "Which script GLYPH reads as against baseline BASE and body HEIGHT.
-`up', `down', or nil for a glyph on the baseline, too large to be a
-script, or past `pdf-text-script-reach' - another typeset line the
-record carries, not a script of this one.  Box bottoms are baselines:
-a descender does not lower its glyph's box, so any real offset is
-typeset, not ink."
-  (let* ((box (cadr glyph))
-         (h (- (nth 3 box) (nth 1 box)))
-         (offset (- (nth 3 box) base)))
-    (when (and (< h (* pdf-text-script-size height))
-               (< (abs offset) (* pdf-text-script-reach height)))
-      (cond ((< offset (* (- pdf-text-script-raise) height)) 'up)
-            ((< (* pdf-text-script-drop height) offset) 'down)))))
-
 (defvar pdf-text-script-symbol-offset 0.25
   "Baseline offset, in body heights, a run of pure symbols needs to be a script.
 A footnote asterisk sits half a body height up; an operator font whose
 boxes anchor a shade off the baseline - a midline ellipsis - sits
 within 0.15 of it, and stays text.")
-
-(defun pdf-text--script-segments (glyphs base height)
-  "GLYPHS split into script runs and plain text, as (DIR . GLYPHS) segments.
-DIR is `up', `down' or nil, each glyph read against the typeset
-baseline BASE and body HEIGHT.  A space joins the run around it only
-when the ink on both sides continues it."
-  (let ((vec (vconcat glyphs))
-        (segments nil))
-    (cl-flet ((dir-at (i)
-                (let ((g (aref vec i)))
-                  (unless (memq (car g) '(?\s ?\t))
-                    (pdf-text--script-dir g base height))))
-              (next-ink (i)
-                (cl-loop for j from i below (length vec)
-                         unless (memq (car (aref vec j)) '(?\s ?\t))
-                         return j)))
-      (let ((i 0))
-        (while (< i (length vec))
-          (let* ((g (aref vec i))
-                 (space (memq (car g) '(?\s ?\t)))
-                 (dir (unless space (dir-at i)))
-                 (current (car segments)))
-            (cond
-             ;; a space continues the segment around it only when the
-             ;; ink on both sides agrees; otherwise it reads as plain
-             (space
-              (let* ((j (next-ink i))
-                     (ahead (and j (dir-at j))))
-                (if (and current (car current) (eq ahead (car current)))
-                    (push g (cdr current))
-                  (if (and current (null (car current)))
-                      (push g (cdr current))
-                    (push (cons nil (list g)) segments)))))
-             ((and current (eq dir (car current)))
-              (push g (cdr current)))
-             (t (push (cons dir (list g)) segments)))
-            (setq i (1+ i))))))
-    (mapcar (lambda (segment)
-              (cons (car segment) (nreverse (cdr segment))))
-            (nreverse segments))))
-
-(defun pdf-text--script-markup (glyphs base height space)
-  "The text of GLYPHS with script runs wrapped as org ^{...}/_{...} markup.
-BASE and HEIGHT are the line's typeset baseline and body height, SPACE
-its median word gap.  A run's edge spaces stay outside the wrap; a
-lone space poppler set between a run and its host at a fraction of a
-word gap - a font switch, not a space the page set - goes, so the
-markup attaches where the page attaches.  A run that fails its own
-test - symbols alone without a symbol's offset, a brace among the
-glyphs - reads as the plain text it was, and literal ^{ and _{ pairs
-from the page are broken so org never parses them."
-  (let ((out nil)
-        (last-ink nil))
-    (dolist (segment (pdf-text--script-segments glyphs base height))
-      (let* ((dir (car segment))
-             (glyphs (cdr segment))
-             (text (apply #'string (mapcar #'car glyphs)))
-             (ink (cl-remove-if (lambda (g) (memq (car g) '(?\s ?\t))) glyphs)))
-        (if (null dir)
-            (push (pdf-text--escape-literals text) out)
-          (let* ((trimmed (string-trim text))
-                 (symbols (not (string-match-p "[[:alnum:]]" trimmed)))
-                 (weak (and symbols
-                            (cl-some
-                             (lambda (g)
-                               (< (abs (- (nth 3 (cadr g)) base))
-                                  (* pdf-text-script-symbol-offset height)))
-                             ink))))
-            (if (or weak (string-match-p "[{}]" trimmed) (string-empty-p trimmed))
-                (push (pdf-text--escape-literals text) out)
-              ;; a lone space before the run at under half a word gap
-              ;; is the font switch showing, not a space the page set
-              (when (and (stringp (car out))
-                         (string-suffix-p " " (car out))
-                         (not (string-suffix-p "  " (car out)))
-                         space last-ink ink
-                         (< (- (nth 0 (cadr (car ink))) (nth 2 last-ink))
-                            (* 0.5 space)))
-                (setcar out (substring (car out) 0 -1)))
-              (push (concat (if (eq dir 'up) "^{" "_{") trimmed "}") out))))
-        (when ink (setq last-ink (cadr (car (last ink)))))))
-    (apply #'concat (nreverse out))))
-
-(defun pdf-text--glyph-line (glyphs)
-  "Line record for GLYPHS, one line of `pdf-info-charlayout' output.
-The text carries org script markup for glyph runs set smaller than and
-offset from the line's baseline - the raised exponent, the subscript
-index - which only exists here, while the per-glyph boxes still do."
-  (let* ((text (apply #'string (mapcar #'car glyphs)))
-         (ink (cl-remove-if (lambda (g) (memq (car g) '(?\s ?\t))) glyphs))
-         (boxes (mapcar #'cadr ink))
-         (spaces (cl-loop for g in glyphs
-                          when (eq (car g) ?\s)
-                          collect (- (nth 2 (cadr g)) (nth 0 (cadr g)))))
-         (advances (cl-loop for (a b) on glyphs while b
-                            for step = (- (nth 0 (cadr b)) (nth 0 (cadr a)))
-                            when (< 0 step) collect step))
-         (opening (cl-position-if (lambda (g) (not (eq (car g) ?\s))) glyphs))
-         (gap (and opening (cl-position ?\s glyphs :key #'car :start opening))))
-    (if (null boxes)
-        (pdf-text-line-create :text (pdf-text--escape-literals text))
-      (let ((ref (pdf-text--glyph-baseline glyphs))
-            (space (pdf-text--quantile spaces 0.5)))
-        (pdf-text-line-create
-         :text (if ref
-                   (pdf-text--script-markup glyphs (car ref) (cdr ref) space)
-                 (pdf-text--escape-literals text))
-         :x0 (apply #'min (mapcar (lambda (b) (nth 0 b)) boxes))
-         :x1 (apply #'max (mapcar (lambda (b) (nth 2 b)) boxes))
-         :top (apply #'min (mapcar (lambda (b) (nth 1 b)) boxes))
-         :bot (apply #'max (mapcar (lambda (b) (nth 3 b)) boxes))
-         ;; the baseline the line's letters anchor at; a line with no
-         ;; letters falls back on the median glyph bottom, which
-         ;; descenders and superscripts are too few to move
-         :base (if ref
-                   (car ref)
-                 (pdf-text--quantile (mapcar (lambda (b) (nth 3 b)) boxes) 0.5))
-         ;; the upper quantile of ink heights tracks the font size, where
-         ;; the median would only report the x-height of the line's vowels
-         :height (pdf-text--quantile
-                  (mapcar (lambda (b) (- (nth 3 b) (nth 1 b))) boxes) 0.8)
-         :space space
-         :cv (pdf-text--variation advances)
-         :first-width (- (nth 2 (cadr (nth (1- (or gap (length glyphs))) glyphs)))
-                         (nth 0 (cadr (nth opening glyphs)))))))))
-
-(defun pdf-text--layout-text (layout)
-  "The plain text of LAYOUT's glyph stream, newlines included."
-  (apply #'string (delq nil (mapcar #'car layout))))
 
 (defun pdf-text--strip-unprinted (text)
   "TEXT without the characters the page never prints, spaces normalized.
@@ -573,20 +215,501 @@ themselves, so they all read as plain spaces."
     "\u00AD+\\(.\\)" "\\1"
     (replace-regexp-in-string "[\x00-\x08\x0B-\x1F\x7F]+" "" text))))
 
-(defun pdf-text--page-lines (text &optional layout)
-  "Line records for one page, from LAYOUT when it exists, else from TEXT.
-Taking the text from the same glyph stream as its geometry is what
-keeps the two aligned; the fallback path reflows on character
-heuristics alone."
-  (let ((lines (if layout
-                   (mapcar #'pdf-text--glyph-line (pdf-text--layout-lines layout))
-                 (mapcar (lambda (line)
-                           (pdf-text-line-create
-                            :text (pdf-text--escape-literals line)))
-                         (split-string text "\n")))))
-    (dolist (line lines lines)
-      (setf (pdf-text-line-text line)
-            (pdf-text--strip-unprinted (pdf-text-line-text line))))))
+(defun pdf-text--page-lines (text)
+  "Text-only line records for one page, from TEXT.
+The fallback for a page the walker finds no text on: no geometry, so
+every rule that reads some falls back to character heuristics."
+  (mapcar (lambda (line)
+            (pdf-text-line-create
+             :text (pdf-text--strip-unprinted
+                    (pdf-text--escape-literals line))))
+          (split-string text "\n")))
+
+;;; Line records off MuPDF's structured text
+
+(defvar pdf-text-mupdf-program "mutool"
+  "The MuPDF tool the text extraction runs.
+Text comes from `mutool run' walking the structured text, because
+poppler's extraction invents spaces in tracked type, loses small caps
+and carries no font identity; MuPDF applies ActualText, expands
+ligatures, flags the characters it synthesizes and names the font of
+every glyph.")
+
+(defconst pdf-text--walker-source "\
+// Emitted by pdf-text.el; edit there.  One elisp form per stext line:
+// (PAGE X0 TOP X1 BOT HEIGHT SPACE CV FIRST-WIDTH SYNTH RUNS \"TEXT\")
+// with RUNS a list of (OFFSET LENGTH X0 X1 OY QH SIZE BOLD ITALIC \"FONT\"),
+// one per stretch of chars agreeing on font, size and descent line.
+// Coordinates are page fractions; offsets count characters, not UTF-16
+// units, so they index elisp strings directly.
+// mutool run WALKER FILE [FIRST [LAST]] < /dev/null
+var doc = Document.openDocument(scriptArgs[0]);
+var first = scriptArgs.length > 1 ? parseInt(scriptArgs[1]) : 1;
+var last = scriptArgs.length > 2 ? parseInt(scriptArgs[2]) : doc.countPages();
+if (last > doc.countPages()) last = doc.countPages();
+
+function esc(s) {
+	if (s.indexOf('\\\\') < 0 && s.indexOf('\"') < 0) return s;
+	var out = '';
+	for (var i = 0; i < s.length; i++) {
+		var c = s.charAt(i);
+		if (c === '\\\\' || c === '\"') out += '\\\\';
+		out += c;
+	}
+	return out;
+}
+function clen(s) {
+	var n = 0;
+	for (var i = 0; i < s.length; i++) {
+		var u = s.charCodeAt(i);
+		if (u < 0xDC00 || u > 0xDFFF) n++;
+	}
+	return n;
+}
+function asc(a) { return a.sort(function (x, y) { return x - y; }); }
+function median(a) {
+	return a.length === 0 ? null : asc(a)[Math.floor(a.length / 2)];
+}
+function quantile(a, f) {
+	if (a.length === 0) return null;
+	asc(a);
+	var i = Math.floor(f * a.length);
+	return a[i > a.length - 1 ? a.length - 1 : i];
+}
+function num(v) { return v === null ? 'nil' : v.toFixed(5); }
+function sym(v) { return v ? 't' : 'nil'; }
+// point-space values normalize at emit: positions against the page
+// origin, extents by scale alone
+function px(v) { return v === null ? 'nil' : ((v - PX) / PW).toFixed(5); }
+function py(v) { return v === null ? 'nil' : ((v - PY) / PH).toFixed(5); }
+function wx(v) { return v === null ? 'nil' : (v / PW).toFixed(5); }
+function hy(v) { return v === null ? 'nil' : (v / PH).toFixed(5); }
+
+var buf = [];
+var lastFontObj = null, fontName = '', fontBold = false, fontItalic = false;
+var line = null;
+var pageno = 0, PX = 0, PY = 0, PW = 1, PH = 1;
+
+var walker = {
+	beginLine: function () {
+		line = { text: '', off: 0, runs: [],
+			 x0: null, x1: null, top: null, bot: null,
+			 spaces: [], advances: [],
+			 synth: 0, sawInk: false,
+			 openX: null, fwX: null, lastInkX1: null, prevX: null };
+	},
+	onChar: function (c, origin, font, size, quad, color, flags) {
+		if (font !== lastFontObj) {
+			lastFontObj = font;
+			fontName = font.getName();
+			fontBold = font.isBold();
+			fontItalic = font.isItalic();
+		}
+		var x0 = quad[0] < quad[2] ? quad[0] : quad[2];
+		var x1 = quad[0] < quad[2] ? quad[2] : quad[0];
+		var y0 = quad[1] < quad[5] ? quad[1] : quad[5];
+		var y1 = quad[1] < quad[5] ? quad[5] : quad[1];
+		if (quad[4] < x0) x0 = quad[4];
+		if (quad[4] > x1) x1 = quad[4];
+		if (quad[6] < x0) x0 = quad[6];
+		if (quad[6] > x1) x1 = quad[6];
+		if (quad[3] < y0) y0 = quad[3];
+		if (quad[3] > y1) y1 = quad[3];
+		if (quad[7] < y0) y0 = quad[7];
+		if (quad[7] > y1) y1 = quad[7];
+		var sp = c === ' ' || c === '\\t' || c === '\\u00A0';
+		var L = line;
+		var runs = L.runs;
+		var run = runs.length === 0 ? null : runs[runs.length - 1];
+		if (run === null
+		    || (!sp
+			&& (fontName !== run.f
+			    || (size < run.szp ? run.szp - size : size - run.szp)
+			    > 0.0005 * PH
+			    || (y1 < run.oyp ? run.oyp - y1 : y1 - run.oyp)
+			    > 0.0004 * PH))) {
+			run = { off: L.off, len: 0, x0: null, x1: null,
+				oy: null, qh: null, ink: 0, chars: 0,
+				f: fontName, szp: size, oyp: y1,
+				bold: fontBold, it: fontItalic };
+			runs.push(run);
+		}
+		var n = c.length === 1 ? 1 : clen(c);
+		run.len += n;
+		L.off += n;
+		L.text += c;
+		if (flags & 4) L.synth += 1;
+		if (sp) {
+			// a synthetic space's quad is the engine's own gap
+			// estimate: a DVI-born page has no other spaces at all
+			if (x1 > x0) L.spaces.push(x1 - x0);
+			if (L.sawInk && L.fwX === null) L.fwX = L.lastInkX1;
+		} else {
+			if (L.x0 === null || x0 < L.x0) L.x0 = x0;
+			if (x1 > L.x1) L.x1 = x1;
+			if (L.top === null || y0 < L.top) L.top = y0;
+			if (y1 > L.bot) L.bot = y1;
+			if (!L.sawInk) { L.sawInk = true; L.openX = x0; }
+			L.lastInkX1 = x1;
+			if (run.x0 === null || x0 < run.x0) run.x0 = x0;
+			if (x1 > run.x1) run.x1 = x1;
+			if (run.oy === null) { run.oy = y1; run.qh = y1 - y0; }
+			run.ink += x1 - x0;
+			run.chars += 1;
+		}
+		if (L.prevX !== null) {
+			var step = x0 - L.prevX;
+			if (step > 0) L.advances.push(step);
+		}
+		L.prevX = x0;
+	},
+	endLine: function () {
+		var L = line;
+		if (L === null || L.text.length === 0) { line = null; return; }
+		var cv = null;
+		var a = L.advances;
+		if (a.length > 1) {
+			var mean = 0, i;
+			for (i = 0; i < a.length; i++) mean += a[i];
+			mean /= a.length;
+			if (mean > 0) {
+				var vsum = 0;
+				for (i = 0; i < a.length; i++)
+					vsum += (a[i] - mean) * (a[i] - mean);
+				cv = Math.sqrt(vsum / a.length) / mean;
+			}
+		}
+		var fw = null;
+		if (L.sawInk)
+			fw = (L.fwX === null ? L.lastInkX1 : L.fwX) - L.openX;
+		// the 0.8 quantile of glyph heights, run-weighted: chars of one
+		// run share a font box, so the run carries their height once
+		var levels = [], total = 0, r, q;
+		for (r = 0; r < L.runs.length; r++) {
+			q = L.runs[r];
+			if (q.oy !== null) {
+				levels.push([q.qh, q.chars]);
+				total += q.chars;
+			}
+		}
+		levels.sort(function (u, v) { return u[0] - v[0]; });
+		var height = null, seen = 0, want = Math.floor(0.8 * total);
+		for (r = 0; r < levels.length; r++) {
+			seen += levels[r][1];
+			if (seen > want) { height = levels[r][0]; break; }
+		}
+		var rs = '';
+		for (r = 0; r < L.runs.length; r++) {
+			q = L.runs[r];
+			rs += (r === 0 ? '(' : ' ')
+				+ '(' + q.off + ' ' + q.len
+				+ ' ' + px(q.x0) + ' ' + px(q.x1)
+				+ ' ' + py(q.oy) + ' ' + hy(q.qh)
+				+ ' ' + hy(q.szp) + ' ' + sym(q.bold) + ' ' + sym(q.it)
+				+ ' \"' + esc(q.f) + '\")';
+		}
+		rs += ')';
+		buf.push('(' + pageno + ' ' + px(L.x0) + ' ' + py(L.top)
+			 + ' ' + px(L.x1) + ' ' + py(L.bot)
+			 + ' ' + hy(height)
+			 + ' ' + wx(median(L.spaces)) + ' ' + num(cv)
+			 + ' ' + wx(fw) + ' ' + L.synth + ' ' + rs
+			 + ' \"' + esc(L.text) + '\")');
+		line = null;
+	}
+};
+
+for (var p = first; p <= last; p++) {
+	var page = doc.loadPage(p - 1);
+	var b = page.getBounds();
+	pageno = p;
+	PX = b[0]; PY = b[1]; PW = b[2] - b[0]; PH = b[3] - b[1];
+	page.toStructuredText('preserve-whitespace').walk(walker);
+	if (buf.length > 400) { print(buf.join('\\n')); buf = []; }
+}
+if (buf.length > 0) print(buf.join('\\n'));
+"
+  "The mutool walker, written to a file by `pdf-text--walker-file'.
+Lives in the elisp so the reader and its walker can never drift apart,
+whatever a package manager copies where.")
+
+(defvar pdf-text--walker-cache nil
+  "Path the walker source is written at, once per session.")
+
+(defun pdf-text--walker-file ()
+  "The walker source on disk, written on first use."
+  (if (and pdf-text--walker-cache (file-readable-p pdf-text--walker-cache))
+      pdf-text--walker-cache
+    (setq pdf-text--walker-cache
+          (make-temp-file "pdf-text-walker" nil ".js"
+                          pdf-text--walker-source))))
+
+(defvar pdf-text-mupdf-workers 4
+  "Walker processes a whole-book extraction may fan out over.
+Capped by `num-processors'.  The walker is compute-bound in mutool's
+own interpreter, so separate processes are the only parallelism.")
+
+(defvar pdf-text-mupdf-pool-min 64
+  "Pages below which extraction stays on one walker process.
+Opening the document costs each worker a fixed price a short window
+never earns back.")
+
+(defun pdf-text--mupdf-call (file first last)
+  "One walker process over FILE's pages FIRST to LAST, as a string.
+Signals with mutool's own words when the extraction fails, and names
+the missing program when there is no mutool at all."
+  (unless (executable-find pdf-text-mupdf-program)
+    (error "No %s executable; the text extraction needs MuPDF (brew install mupdf-tools)"
+           pdf-text-mupdf-program))
+  (let ((stderr (make-temp-file "pdf-text-mupdf" nil ".err")))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((coding-system-for-read 'utf-8)
+                (status (call-process pdf-text-mupdf-program nil
+                                      (list (current-buffer) stderr) nil
+                                      "run" (pdf-text--walker-file)
+                                      (expand-file-name file)
+                                      (number-to-string first)
+                                      (number-to-string last))))
+            (unless (eql status 0)
+              (error "mutool: %s"
+                     (with-temp-buffer
+                       (insert-file-contents stderr)
+                       (string-trim (buffer-string)))))
+            (buffer-string)))
+      (delete-file stderr))))
+
+(defun pdf-text--mupdf-output (file first last)
+  "The walker's output over FILE's pages FIRST to LAST, as a string.
+Past `pdf-text-mupdf-pool-min' pages the range fans out over
+`pdf-text-mupdf-workers' mutool processes, each walking its own
+stretch of the document; a stretch whose worker fails retries on a
+synchronous call, so a crashed worker costs speed, never a page.
+Order does not matter to the parse - every form names its page."
+  (let* ((total (1+ (- last first)))
+         (workers (max 1 (min pdf-text-mupdf-workers (num-processors)))))
+    (if (or (< total pdf-text-mupdf-pool-min) (= workers 1))
+        (pdf-text--mupdf-call file first last)
+      (let* ((chunk (ceiling total workers))
+             (ranges (cl-loop for a from first to last by chunk
+                              collect (cons a (min last (+ a chunk -1)))))
+             (jobs (mapcar
+                    (lambda (range)
+                      (let* ((buf (generate-new-buffer " *pdf-text-mupdf*" t))
+                             (proc
+                              (condition-case nil
+                                  ;; a worker's warnings are noise; the
+                                  ;; synchronous retry captures them
+                                  ;; when they matter
+                                  (let ((process-connection-type nil)
+                                        (coding-system-for-read 'utf-8))
+                                    (start-process
+                                     "pdf-text-mutool" buf
+                                     shell-file-name shell-command-switch
+                                     (concat
+                                      (mapconcat
+                                       #'shell-quote-argument
+                                       (list pdf-text-mupdf-program "run"
+                                             (pdf-text--walker-file)
+                                             (expand-file-name file)
+                                             (number-to-string (car range))
+                                             (number-to-string (cdr range)))
+                                       " ")
+                                      " 2>/dev/null")))
+                                (error nil))))
+                        (when proc
+                          (set-process-query-on-exit-flag proc nil))
+                        (list proc buf range)))
+                    ranges)))
+        (unwind-protect
+            (progn
+              (while (cl-some (lambda (job)
+                                (and (car job) (process-live-p (car job))))
+                              jobs)
+                (accept-process-output nil 0.05))
+              (mapconcat
+               (lambda (job)
+                 (pcase-let ((`(,proc ,buf ,range) job))
+                   (if (and proc (eql (process-exit-status proc) 0))
+                       (with-current-buffer buf (buffer-string))
+                     (pdf-text--mupdf-call file (car range) (cdr range)))))
+               jobs))
+          (dolist (job jobs) (kill-buffer (nth 1 job))))))))
+
+(defun pdf-text--run-ink (run)
+  "The ink width RUN covers, zero for a wordless one."
+  (if (and (nth 2 run) (nth 3 run)) (- (nth 3 run) (nth 2 run)) 0.0))
+
+(defun pdf-text--run-baseline (runs)
+  "The typeset baseline of RUNS and its glyph height, as (BASE . HEIGHT).
+The port of the glyph-bottom vote onto font runs: chars agreeing on
+their descent line already arrive as one run, so the runs cluster
+where the glyphs once did.  The widest cluster by ink names the
+baseline, every cluster within a raise of it - measured by its own
+glyph height - contests, and the highest wins, so a fragment set
+mostly in subscript cedes to its few full-size glyphs.  Nil without
+ink."
+  (when-let* ((ink (seq-filter (lambda (r) (nth 4 r)) runs)))
+    (let* ((sorted (sort (copy-sequence ink)
+                         (lambda (a b) (< (nth 4 a) (nth 4 b)))))
+           (gap (* 0.04 (pdf-text--quantile
+                         (mapcar (lambda (r) (nth 5 r)) sorted) 0.5)))
+           (levels nil)
+           (current (list (car sorted))))
+      (dolist (r (cdr sorted))
+        (if (< (- (nth 4 r) (nth 4 (car current))) gap)
+            (push r current)
+          (push current levels)
+          (setq current (list r))))
+      (push current levels)
+      (let* ((stats (mapcar
+                     (lambda (level)
+                       (let ((widest (cl-reduce
+                                      (lambda (a b)
+                                        (if (< (pdf-text--run-ink a)
+                                               (pdf-text--run-ink b))
+                                            b a))
+                                      level)))
+                         (list (apply #'max (mapcar (lambda (r) (nth 4 r))
+                                                    level))
+                               (nth 5 widest)
+                               (apply #'+ (mapcar #'pdf-text--run-ink level)))))
+                     levels))
+             (widest (cl-reduce (lambda (a b) (if (< (nth 2 a) (nth 2 b)) b a))
+                                stats))
+             (contest (cl-remove-if-not
+                       (lambda (level)
+                         (<= (abs (- (nth 0 level) (nth 0 widest)))
+                             (* pdf-text-script-raise (nth 1 level))))
+                       stats))
+             (ref (cl-reduce (lambda (a b) (if (< (nth 0 b) (nth 0 a)) b a))
+                             (or contest (list widest)))))
+        (cons (nth 0 ref) (nth 1 ref))))))
+
+(defun pdf-text--run-dir (run base height)
+  "Which script RUN reads as against baseline BASE and body HEIGHT.
+`up', `down', or nil for a run on the baseline, too large to be a
+script, or past `pdf-text-script-reach' - another typeset line the
+record carries, not a script of this one."
+  (when-let* ((oy (nth 4 run))
+              (qh (nth 5 run))
+              (offset (- oy base)))
+    (when (and (< qh (* pdf-text-script-size height))
+               (< (abs offset) (* pdf-text-script-reach height)))
+      (cond ((< offset (* (- pdf-text-script-raise) height)) 'up)
+            ((< (* pdf-text-script-drop height) offset) 'down)))))
+
+(defun pdf-text--run-markup (text runs base height space)
+  "TEXT with script runs wrapped as org ^{...}/_{...} markup.
+RUNS are the walker's font runs over TEXT, BASE and HEIGHT the line's
+typeset baseline and glyph height from `pdf-text--run-baseline', SPACE
+its median word gap.  A run's edge spaces stay plain outside the wrap;
+a lone space left between a run and its host at a fraction of a word
+gap - a font switch, not a space the page set - goes, so the markup
+attaches where the page attaches.  A run that fails its own test -
+symbols alone without a symbol's offset, a brace among the characters -
+reads as the plain text it was, and literal ^{ and _{ pairs from the
+page are broken so org never parses them."
+  (let ((out nil)
+        (last-ink nil))
+    (dolist (run runs)
+      (let* ((seg (substring text (nth 0 run) (+ (nth 0 run) (nth 1 run))))
+             (dir (pdf-text--run-dir run base height)))
+        (if (null dir)
+            (push (pdf-text--escape-literals seg) out)
+          (let* ((trimmed (string-trim seg))
+                 (symbols (not (string-match-p "[[:alnum:]]" trimmed)))
+                 (weak (and symbols
+                            (< (abs (- (nth 4 run) base))
+                               (* pdf-text-script-symbol-offset height)))))
+            (if (or weak (string-match-p "[{}]" trimmed)
+                    (string-empty-p trimmed))
+                (push (pdf-text--escape-literals seg) out)
+              ;; a lone space before the run at under half a word gap
+              ;; is the font switch showing, not a space the page set
+              (when (and (stringp (car out))
+                         (string-suffix-p " " (car out))
+                         (not (string-suffix-p "  " (car out)))
+                         space last-ink (nth 2 run)
+                         (< (- (nth 2 run) last-ink) (* 0.5 space)))
+                (setcar out (substring (car out) 0 -1)))
+              (when (string-match "\\`[ \t]+" seg)
+                (push (match-string 0 seg) out))
+              (push (concat (if (eq dir 'up) "^{" "_{") trimmed "}") out)
+              (when (string-match "[ \t]+\\'" seg)
+                (push (match-string 0 seg) out)))))
+        (when (nth 3 run) (setq last-ink (nth 3 run)))))
+    (apply #'concat (nreverse out))))
+
+(defun pdf-text--mupdf-record (form)
+  "The `pdf-text-line' one walker FORM describes.
+The text carries org script markup for font runs set smaller than and
+offset from the line's baseline; the dominant run by ink names the
+line's font.  A line with no ink keeps only its text, like the
+text-only fallback records."
+  (pcase-let* ((`(,_page ,x0 ,top ,x1 ,bot ,height ,space ,cv ,fw ,synth
+                  ,runs ,text)
+                form)
+               (ink (seq-filter (lambda (r) (nth 4 r)) runs)))
+    (if (null ink)
+        (pdf-text-line-create
+         :text (pdf-text--strip-unprinted (pdf-text--escape-literals text)))
+      (let* ((ref (pdf-text--run-baseline runs))
+             (dominant (cl-reduce (lambda (a b)
+                                    (if (< (pdf-text--run-ink a)
+                                           (pdf-text--run-ink b))
+                                        b a))
+                                  ink)))
+        (pdf-text-line-create
+         ;; space runs collapse to the shape poppler served, the shape
+         ;; every text rule was tuned on: MuPDF writes the page's own
+         ;; runs - double-spaced sentences, wide-set section numbers,
+         ;; the paragraph's first-line indent as leading spaces - and
+         ;; the tabular-alignment and indent tests would read structure
+         ;; into them.  The record's geometry carries the indent as x0.
+         ;; The right-trim precedes the strip so a line-final soft
+         ;; hyphen stays line-final for the wrap join to read.
+         :text (pdf-text--strip-unprinted
+                (string-trim-right
+                 (replace-regexp-in-string
+                  "\\([^ ]\\)  +" "\\1 "
+                  (string-trim-left
+                   (if (and ref (cdr runs))
+                       (pdf-text--run-markup text runs (car ref) (cdr ref)
+                                             space)
+                     (pdf-text--escape-literals text))
+                   " +"))
+                 "[ \t]+"))
+         :x0 x0 :x1 x1 :top top :bot bot
+         :base (car ref)
+         :height height :space space :cv cv :first-width fw
+         :font (nth 9 dominant) :size (nth 6 dominant)
+         :bold (nth 7 dominant) :italic (nth 8 dominant)
+         :synth synth)))))
+
+(defun pdf-text--mupdf-parse (output first last)
+  "OUTPUT of the walker as per-page record lists, pages FIRST to LAST.
+A list in page order; nil where a page emitted no lines - the caller's
+cue to fall back on plain text extraction."
+  (with-temp-buffer
+    (insert output)
+    (goto-char (point-min))
+    (let ((pages (make-vector (1+ (- last first)) nil))
+          form)
+      (while (setq form (condition-case nil (read (current-buffer))
+                          (end-of-file nil)))
+        (when (and (consp form) (integerp (car form)))
+          (let ((i (- (car form) first)))
+            (when (and (<= 0 i) (< i (length pages)))
+              (aset pages i (cons (pdf-text--mupdf-record form)
+                                  (aref pages i)))))))
+      (mapcar #'nreverse (append pages nil)))))
+
+(defun pdf-text--mupdf-pages (file first last)
+  "Line records for FILE's pages FIRST to LAST, one list per page.
+Nil for a page MuPDF finds no text on."
+  (pdf-text--mupdf-parse (pdf-text--mupdf-output file first last)
+                         first last))
 
 (defun pdf-text--profile (pages)
   "Modal body geometry of PAGES, each a list of `pdf-text-line'.
@@ -719,7 +842,13 @@ the merged line would skew every leading measured against it."
      :height (apply #'max (mapcar #'pdf-text-line-height records))
      :space (pdf-text-line-space widest)
      :cv (pdf-text-line-cv widest)
-     :first-width (pdf-text-line-first-width (car records)))))
+     :first-width (pdf-text-line-first-width (car records))
+     :font (pdf-text-line-font widest)
+     :size (pdf-text-line-size widest)
+     :bold (pdf-text-line-bold widest)
+     :italic (pdf-text-line-italic widest)
+     :synth (apply #'+ (mapcar (lambda (r) (or (pdf-text-line-synth r) 0))
+                               records)))))
 
 (defvar pdf-text-script-fragment-chars 8
   "Characters an undissected fragment may hold and still wrap as one script.
@@ -1720,12 +1849,163 @@ merge and reorder records, never drop one."
          ;; window measures both differently than its book does
          (profile (or pdf-text-extra-profile (pdf-text--profile page-lines))))
     (mapcar (lambda (lines)
-              (pdf-text--reassemble-zones
-               (pdf-text--mark-lanes
-                (pdf-text--merge-script-fragments lines profile)
-                profile)
-               profile))
+              (pdf-text--mark-entry-runs
+               (pdf-text--defer-margin-notes
+                (pdf-text--reassemble-zones
+                 (pdf-text--mark-lanes
+                  (pdf-text--merge-script-fragments
+                   (pdf-text--join-split-lines
+                    (pdf-text--float-drop-caps lines profile)
+                    profile)
+                   profile)
+                  profile)
+                 profile)
+                profile)))
             page-lines)))
+
+(defvar pdf-text-entry-run-min 3
+  "Neighbouring folio-closed lines that make a contents run.
+A lone prose line can wrap right after a bare number; three in a row
+is a table of contents, an index column, a list of figures.")
+
+(defun pdf-text--mark-entry-runs (lines)
+  "Tag runs of contents-style entry lines to render one per line.
+MuPDF serves a TOC entry with its folio inline - one line, full
+measure - so the short-line rule reads every entry as a wrapped line
+and the entries chain into paragraphs.  `pdf-text-entry-run-min'
+neighbours each closing on a short digit group are a contents run,
+not prose, and each keeps its own line."
+  (let ((vec (vconcat lines))
+        (entry-re "[^0-9 ] [0-9]\\{1,4\\}\\'")
+        (run nil))
+    (cl-flet ((flush ()
+                (when (<= pdf-text-entry-run-min (length run))
+                  (dolist (i run)
+                    (setf (pdf-text-line-kind (aref vec i)) 'fixed)))
+                (setq run nil)))
+      (dotimes (i (length vec))
+        (let ((line (aref vec i)))
+          (if (and (null (pdf-text-line-kind line))
+                   (not (pdf-text-line-claimed line))
+                   (string-match-p entry-re
+                                   (string-trim (pdf-text-line-text line))))
+              (push i run)
+            (flush))))
+      (flush))
+    (append vec nil)))
+
+(defun pdf-text--defer-margin-notes (lines profile)
+  "LINES with unclaimed records past the page's column served last.
+MuPDF serves an outer-margin term label at its vertical position -
+mid-paragraph, severing the sentence around it - where poppler served
+it after the page's flow.  A narrow record standing wholly right of
+the page's own column, and claimed by no lane, is such a label: it
+moves to the page's end, reads after the text it annotates, and the
+paragraph stays whole.  PROFILE hands the page profile its document
+frame; mirrored margins put the column elsewhere on facing pages, so
+the page's own edges are the measure."
+  (let* ((page (pdf-text--page-profile lines profile))
+         (right (plist-get page :right))
+         (space (or (plist-get profile :space) 0.005)))
+    (if (null right)
+        lines
+      (let (body notes)
+        (dolist (line lines)
+          (if (and (not (pdf-text-line-claimed line))
+                   (when-let* ((x0 (pdf-text-line-x0 line))
+                               (x1 (pdf-text-line-x1 line)))
+                     (and (<= (+ right space) x0)
+                          (< (- x1 x0) 0.25))))
+              (push line notes)
+            (push line body)))
+        (nconc (nreverse body) (nreverse notes))))))
+
+(defvar pdf-text-split-line-gap 6
+  "Modal spaces of gap under which a split typeset line may rejoin.
+MuPDF opens a new line at a gap wider than its own space threshold -
+a stretch of justified type, a wide kern - and serves one typeset
+line as two records.  Table cells and paired lane items also share a
+baseline, but their gaps run wider and their texts fail the clause
+test, so the bound and the words together keep structure apart.")
+
+(defun pdf-text--join-split-lines (lines profile)
+  "LINES with a typeset line the extractor served as two rejoined.
+Two neighbours on one baseline, set in the same face and size, closer
+than `pdf-text-split-line-gap' of PROFILE's modal spaces, rejoin when
+their words read as one clause - the first ends unpunctuated and the
+second opens lowercase.  A folio opens on a digit, a table cell on a
+capital, a list marker ends on its dot, and every one of them stays
+its own record."
+  (let ((space (or (plist-get profile :space) 0.005))
+        (case-fold-search nil)
+        out)
+    (dolist (line lines)
+      (let ((prev (car out)))
+        (if (and prev
+                 (pdf-text-line-base prev) (pdf-text-line-base line)
+                 (< (abs (- (pdf-text-line-base line)
+                            (pdf-text-line-base prev)))
+                    (* 0.25 (or (pdf-text-line-height prev) 0.01)))
+                 (pdf-text--similar-height-p prev line)
+                 (pdf-text-line-x1 prev) (pdf-text-line-x0 line)
+                 (let ((gap (- (pdf-text-line-x0 line)
+                               (pdf-text-line-x1 prev))))
+                   (and (< 0 gap) (< gap (* pdf-text-split-line-gap space))))
+                 (or
+                  ;; one clause split at a wide kern
+                  (and (pdf-text-line-font prev) (pdf-text-line-font line)
+                       (equal (pdf-text-line-font prev)
+                              (pdf-text-line-font line))
+                       (string-match-p "[[:alnum:]]\\'"
+                                       (string-trim
+                                        (pdf-text-line-text prev)))
+                       (string-match-p "\\`[[:lower:]]"
+                                       (string-trim
+                                        (pdf-text-line-text line))))
+                  ;; a dotted section number served apart from its
+                  ;; title, often in another face; a bare enumerator
+                  ;; carries no dot chain and stays a list marker
+                  (and (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)+\\.?\\'"
+                                       (string-trim (pdf-text-line-text prev)))
+                       (string-match-p "\\`[[:upper:]]"
+                                       (string-trim
+                                        (pdf-text-line-text line))))))
+            (setcar out (pdf-text--merge-records
+                         (list prev line)
+                         (concat (string-trim-right (pdf-text-line-text prev))
+                                 " "
+                                 (string-trim (pdf-text-line-text line)))))
+          (push line out))))
+    (nreverse out)))
+
+(defun pdf-text--float-drop-caps (lines profile)
+  "LINES with each drop cap floated down to the line it visually opens.
+Poppler served a page's drop cap after the running head above it;
+MuPDF serves the cap first, so the forced join after a drop cap would
+swallow the head.  A cap whose following line sits above its own top
+arrived early: it moves to just before the first line whose baseline
+falls within the cap's span, and every rule downstream sees the order
+the page reads in.  A cap with no such line in reach stays put."
+  (let ((leading (or (plist-get profile :leading) 0.02))
+        out)
+    (while lines
+      (let* ((line (pop lines))
+             (top (pdf-text-line-top line))
+             (bot (pdf-text-line-bot line)))
+        (if (and (pdf-text--drop-cap-p line profile) top bot lines
+                 (when-let* ((next (pdf-text-line-base (car lines))))
+                   (< next top)))
+            (let ((span (cl-position-if
+                         (lambda (l)
+                           (when-let* ((base (pdf-text-line-base l)))
+                             (and (<= top base) (<= base (+ bot leading)))))
+                         lines :end (min 5 (length lines)))))
+              (if (null span)
+                  (push line out)
+                (dotimes (_ span) (push (pop lines) out))
+                (push line out)))
+          (push line out))))
+    (nreverse out)))
 
 ;;; Line classification
 
@@ -3326,18 +3606,14 @@ geometry at all fall back to the text-only
         (pdf-text--synthesize-headings rendered)
       rendered)))
 
-(defun pdf-text-render-pages (pages &optional layouts headings synthesize)
-  "Raw PAGES reflowed into readable text, one string per page.
-PAGES are `pdf-info-gettext' strings and LAYOUTS the matching
-`pdf-info-charlayout' output.  The layout is what carries paragraph
-structure - indents, line fullness, the air between baselines - so a
-page without one falls back to character heuristics.  HEADINGS and
-SYNTHESIZE are what `pdf-text-render-lines' takes."
-  (pdf-text-render-lines
-   (cl-loop for text in pages
-            for rest = layouts then (cdr rest)
-            collect (pdf-text--page-lines text (car rest)))
-   headings nil synthesize))
+(defun pdf-text-render-pages (pages &optional headings synthesize)
+  "Raw text PAGES reflowed into readable text, one string per page.
+PAGES are plain extraction strings with no geometry, so the reflow
+runs on character heuristics alone - the shape of the gettext
+fallback.  HEADINGS and SYNTHESIZE are what `pdf-text-render-lines'
+takes."
+  (pdf-text-render-lines (mapcar #'pdf-text--page-lines pages)
+                         headings nil synthesize))
 
 (defun pdf-text--outline-heads (outline)
   "OUTLINE as org heading lines, keyed by the page each one names.
@@ -3877,7 +4153,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 15
+(defconst pdf-text-render-version 16
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")
@@ -3967,26 +4243,29 @@ error instead of an empty buffer."
       ;; the render blocks until it is done; say so up front
       (message "pdf-text: extracting text from %s..." (buffer-name))
       (pdf-text--with-render-gc
-        ;; the layout carries the text as well as its geometry, so gettext
-        ;; only runs for a page epdfinfo lays out no glyphs for
+        ;; the walker carries the text as well as its geometry, so gettext
+        ;; only runs for a page MuPDF finds no text on
         (let* ((start (float-time))
-               (layouts (pdf-text--charlayouts
-                         buffer-file-name
-                         (number-sequence 1 (pdf-info-number-of-pages))))
+               (total (pdf-info-number-of-pages))
+               (line-pages (pdf-text--mupdf-pages buffer-file-name 1 total))
                (raw (cl-loop for p from 1
-                             for layout in layouts
-                             collect (if layout
-                                         (pdf-text--layout-text layout)
+                             for lines in line-pages
+                             collect (if lines
+                                         (mapconcat #'pdf-text-line-text
+                                                    lines "\n")
                                        (pdf-info-gettext p '(0 0 1 1))))))
           (when (pdf-text--scanned-p raw)
             (user-error "%s has no text layer (%d of %d pages carry text)"
                         (buffer-name)
                         (cl-count-if-not #'string-blank-p raw) (length raw)))
           (let* ((outline (pdf-info-outline))
-                 (rendered (pdf-text-render-pages
-                            raw layouts
+                 (rendered (pdf-text-render-lines
+                            (cl-loop for text in raw
+                                     for lines in line-pages
+                                     collect (or lines
+                                                 (pdf-text--page-lines text)))
                             (pdf-text-page-headings outline 1 (length raw))
-                            (null outline)))
+                            nil (null outline)))
                  (pages (if outline
                             (pdf-text--interleave-outline rendered outline)
                           rendered)))

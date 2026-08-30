@@ -2,3 +2,12 @@
 ;; folios, the echo of a title painted twice.  A line of prose
 ;; here is a defect, not a licence.
 254
+1
+2
+3
+4
+6
+7
+8
+9
+12

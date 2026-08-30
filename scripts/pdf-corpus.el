@@ -109,16 +109,15 @@ page 0 - carry nothing a heading can be placed by."
 
 (defun pdf-corpus-script-pages (file first last)
   "Line records for pages FIRST to LAST of FILE, as (PAGE . LINES).
-The layout carries the text as well as its geometry, so gettext only
-runs for a page epdfinfo lays out no glyphs for - the same order
+The walker carries the text as well as its geometry, so gettext only
+runs for a page MuPDF finds no text on - the same order
 `pdf-view-as-text' uses."
-  (cl-loop for layout in (pdf-text--charlayouts file
-                                                (number-sequence first last))
+  (cl-loop for lines in (pdf-text--mupdf-pages file first last)
            for page from first
-           collect (let ((text (if layout
-                                   (pdf-text--layout-text layout)
-                                 (pdf-info-gettext page '(0 0 1 1) nil file))))
-                     (cons page (pdf-text--page-lines text layout)))))
+           collect (cons page
+                         (or lines
+                             (pdf-text--page-lines
+                              (pdf-info-gettext page '(0 0 1 1) nil file))))))
 
 (defun pdf-corpus-script--compounds (lines)
   "Compounds the wrap hyphens in LINES could be closing up.
@@ -458,19 +457,29 @@ own cannot show that."
 (defun pdf-corpus-audit (&optional fragment limit)
   "Render every book under `pdf-corpus-books-directory' and account for it.
 FRAGMENT narrows the list to paths matching it, LIMIT to the first N.
-One line per book: how much of the source reached the reader, how many
-headings fold to nothing, how much text no running head explains.  A
-book with no text layer is named and skipped, since a scan has nothing
-to convert."
+When FRAGMENT names a readable file that is not itself a PDF, its
+lines name the books instead (`pdf-corpus-book-list'), which is how a
+curated reading set stays comparable across runs - the library
+directory has grown walk-hostile.  One line per book: how much of the
+source reached the reader, how many headings fold to nothing, how much
+text no running head explains.  A book with no text layer is named and
+skipped, since a scan has nothing to convert."
   (pdf-corpus-script-connect)
-  (let* ((files (seq-filter
-                 (lambda (file)
-                   (or (null fragment) (string-empty-p fragment)
-                       (string-match-p (regexp-quote (downcase fragment))
-                                       (downcase file))))
-                 (sort (directory-files-recursively pdf-corpus-books-directory
-                                                    "\\.pdf\\'")
-                       #'string<)))
+  (let* ((list-file (and fragment
+                         (let ((path (expand-file-name fragment)))
+                           (and (file-regular-p path)
+                                (not (string-suffix-p ".pdf" (downcase path)))
+                                path))))
+         (files (if list-file
+                    (pdf-corpus-book-list list-file)
+                  (seq-filter
+                   (lambda (file)
+                     (or (null fragment) (string-empty-p fragment)
+                         (string-match-p (regexp-quote (downcase fragment))
+                                         (downcase file))))
+                   (sort (directory-files-recursively pdf-corpus-books-directory
+                                                      "\\.pdf\\'")
+                         #'string<))))
          (files (if limit (seq-take files (if (stringp limit)
                                               (string-to-number limit)
                                             limit))

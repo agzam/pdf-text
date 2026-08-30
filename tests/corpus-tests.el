@@ -105,16 +105,68 @@ that moved; this reports the line and its number."
         (expect bare :to-match "INTRO")
         (expect seeded :not :to-match "INTRO"))))
 
+  (it "stores profile values exactly, since they multiply into thresholds"
+    (let ((printed (pdf-corpus--print-profile
+                    '(:height 0.014 :leading 0.018000000000000002
+                      :left 0.095 :right 0.905
+                      :space 0.004666666666666667))))
+      (expect (plist-get (car (read-from-string printed)) :space)
+              :to-equal 0.004666666666666667)
+      (expect (plist-get (car (read-from-string printed)) :leading)
+              :to-equal 0.018000000000000002)))
+
   (it "writes a measurement no glyph established as nil"
     (let ((blank (pdf-text-line-create :text "")))
       (expect (pdf-corpus--print-record blank)
-              :to-equal "  (\"\" nil nil nil nil nil nil nil nil nil)")))
+              :to-equal
+              "  (\"\" nil nil nil nil nil nil nil nil nil nil nil nil nil nil)")))
+
+  (it "round-trips the font fields, and reads an old record without them"
+    (let* ((line (pdf-text-line-create
+                  :text "styled" :x0 0.10 :x1 0.20 :base 0.12 :top 0.105
+                  :bot 0.12 :height 0.015 :space 0.005 :cv 0.3
+                  :first-width 0.03 :font "MinionPro-Regular" :size 0.0159
+                  :bold t :italic nil :synth 2))
+           (read-back (pdf-corpus-line
+                       (with-temp-buffer
+                         (insert (pdf-corpus--print-record line))
+                         (goto-char (point-min))
+                         (read (current-buffer))))))
+      (expect (pdf-text-line-font read-back) :to-equal "MinionPro-Regular")
+      (expect (pdf-text-line-size read-back) :to-be-close-to 0.0159 4)
+      (expect (pdf-text-line-bold read-back) :to-be t)
+      (expect (pdf-text-line-italic read-back) :to-be nil)
+      (expect (pdf-text-line-synth read-back) :to-be 2))
+    (expect (pdf-text-line-font
+             (pdf-corpus-line '("bare" 0.1 0.9 0.1 0.12 0.12 0.015
+                                0.005 0.3 0.03)))
+            :to-be nil))
 
   (it "builds a fresh record every time, so one render cannot tag the next"
     (let* ((record (pdf-corpus-record (car (pdf-corpus-tests--lines "text"))))
            (first (pdf-corpus-line record)))
       (setf (pdf-text-line-kind first) 'mono)
       (expect (pdf-text-line-kind (pdf-corpus-line record)) :to-be nil))))
+
+;;; The audit's curated set
+
+(describe "pdf-corpus-book-list"
+  (it "reads one path per line, comments and blanks skipped, whitespace trimmed"
+    (let* ((book (make-temp-file "pdf-corpus-book" nil ".pdf"))
+           (list-file (make-temp-file
+                       "pdf-corpus-books" nil ".list"
+                       (concat ";; the curated set\n\n  " book "  \n"))))
+      (unwind-protect
+          (expect (pdf-corpus-book-list list-file) :to-equal (list book))
+        (delete-file book)
+        (delete-file list-file))))
+
+  (it "refuses a line that names no readable file"
+    (let ((list-file (make-temp-file "pdf-corpus-books" nil ".list"
+                                     "~/pdf-corpus-no-such-book.pdf\n")))
+      (unwind-protect
+          (expect (pdf-corpus-book-list list-file) :to-throw 'error)
+        (delete-file list-file)))))
 
 ;;; Invariants
 

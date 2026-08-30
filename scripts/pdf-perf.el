@@ -3,13 +3,12 @@
 ;; The timing harness: where a render's time goes, so a performance
 ;; claim is a number that reruns instead of a guess.  `bb perf' walks
 ;; the pipeline stage by stage over a whole book and prints seconds,
-;; ms/page and share per stage; `bb perf-ipc' splits the charlayout
-;; stage into epdfinfo's own work and pdf-info's parsing of the
-;; response, which is what tells a poppler cost from an elisp one.
+;; ms/page and share per stage; the mutool and parse stages separate
+;; MuPDF's own work from the elisp read of its records.
 ;;
 ;; The staging here mirrors `pdf-text-render-lines' call for call, and
 ;; a run checks itself against the product: it fails when the staged
-;; render disagrees with `pdf-text-render-pages' output.
+;; render disagrees with a fresh `pdf-text-render-lines' pass.
 ;;
 ;; Shares the corpus script's plumbing: the pdf-tools lookup
 ;; (PDF_TOOLS overrides), the book-by-fragment lookup (BOOKS
@@ -82,6 +81,16 @@ package byte-compiled and 2.6x separates the two."
                              ((and (consp f) (symbolp (car f))) (car f))
                              (t "<anonymous>"))))))))
 
+(defun pdf-perf--records (output file pages)
+  "Per-page records from walker OUTPUT over FILE's PAGES.
+Gettext fills a page the walker found no text on, the way
+`pdf-view-as-text' fills it."
+  (cl-loop for p from 1
+           for lines in (pdf-text--mupdf-parse output 1 pages)
+           collect (or lines
+                       (pdf-text--page-lines
+                        (pdf-info-gettext p '(0 0 1 1) nil file)))))
+
 (defun pdf-perf-stages (book)
   "Print the render's stage table over BOOK: seconds, ms/page, share.
 The stages compose exactly as `pdf-view-as-text' renders - every
@@ -93,28 +102,31 @@ what the reader pays."
          (pages (pdf-info-number-of-pages file))
          (whole (float-time))
          (pdf-perf--stages nil)
-         layouts raw records cleaned repaired profile profiles marginal
+         output records cleaned repaired profile profiles marginal
          vocabulary outline heads rendered composed)
     (princ (format "%s: %d pages, %s\n"
                    (file-name-base file) pages (pdf-perf--form-name)))
     (when (getenv "PROFILE") (profiler-start 'cpu))
-    (setq layouts (pdf-perf--stage "charlayout (epdfinfo)"
-                    (pdf-text--charlayouts file (number-sequence 1 pages))))
-    (setq raw (pdf-perf--stage "text from layout"
-                (cl-loop for layout in layouts
-                         collect (pdf-text--layout-text layout))))
+    (setq output (pdf-perf--stage "mutool stext"
+                   (pdf-text--mupdf-output file 1 pages)))
     (setq records (pdf-perf--stage "line records"
-                    (cl-loop for text in raw for layout in layouts
-                             collect (pdf-text--page-lines text layout))))
+                    (pdf-perf--records output file pages)))
     (setq cleaned (pdf-perf--stage "clean-pages" (pdf-text-clean-pages records)))
     (setq repaired (pdf-perf--stage "reading-order repair"
                      (let ((pre (pdf-text--profile cleaned)))
                        (mapcar (lambda (lines)
-                                 (pdf-text--reassemble-zones
-                                  (pdf-text--mark-lanes
-                                   (pdf-text--merge-script-fragments lines pre)
-                                   pre)
-                                  pre))
+                                 (pdf-text--mark-entry-runs
+                                  (pdf-text--defer-margin-notes
+                                   (pdf-text--reassemble-zones
+                                    (pdf-text--mark-lanes
+                                     (pdf-text--merge-script-fragments
+                                      (pdf-text--join-split-lines
+                                       (pdf-text--float-drop-caps lines pre)
+                                       pre)
+                                      pre)
+                                     pre)
+                                    pre)
+                                   pre)))
                                cleaned))))
     (setq profile (pdf-perf--stage "document profile"
                     (pdf-text--profile repaired)))
@@ -169,31 +181,8 @@ what the reader pays."
       (let ((log (profiler-cpu-log)))
         (profiler-stop)
         (pdf-perf--print-profile log)))
-    (unless (equal rendered (pdf-text-render-pages raw layouts heads (null outline)))
-      (error "The staging no longer mirrors pdf-text-render-pages; realign the stages"))))
-
-(defun pdf-perf-ipc (book &optional pages)
-  "Split BOOK's charlayout cost: epdfinfo's work against pdf-info's parsing.
-Walks up to PAGES pages (default 120) under `elp' instrumentation of
-the pdf-info package; wire time plus poppler's own work is what the
-per-call total leaves unexplained."
-  (pdf-corpus-script-connect)
-  (pdf-perf--load-form)
-  (require 'elp)
-  (let* ((file (pdf-corpus-script-book book))
-         (limit (min (or (and pages (if (stringp pages) (string-to-number pages)
-                                      pages))
-                         120)
-                     (pdf-info-number-of-pages file)))
-         (glyphs 0))
-    ;; warm the server, so the first-request cost is not counted
-    (pdf-info-charlayout 1 nil file)
-    (elp-instrument-package "pdf-info")
-    (dolist (p (number-sequence 1 limit))
-      (cl-incf glyphs (length (condition-case nil
-                                  (pdf-info-charlayout p nil file)
-                                (error nil)))))
-    (princ (format "%s: %d pages, %d glyphs\n\n"
-                   (file-name-base file) limit glyphs))
-    ;; in batch elp-results princs the table itself
-    (elp-results)))
+    ;; a fresh parse, because the staged render mutated its records
+    (unless (equal rendered (pdf-text-render-lines
+                             (pdf-perf--records output file pages)
+                             heads nil (null outline)))
+      (error "The staging no longer mirrors pdf-text-render-lines; realign the stages"))))

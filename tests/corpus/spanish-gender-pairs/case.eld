@@ -11,4 +11,4 @@ above the list - keeps flowing.  The dropped line is the
 folio-merged running head.  The budget is the item lines themselves:
 an entry ending lowercase over the next entry opening lowercase is
 what the mid-sentence measure reads as a break, the listings class."
- :budget (:mid-sentence 19))
+ :budget (:mid-sentence 20))

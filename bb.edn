@@ -83,7 +83,7 @@
                         (corpus-task (format "(pdf-corpus-sweep %s %s %s)"
                                              (pr-str book) (pr-str first) (pr-str last))))}
 
-  corpus-audit {:doc "Render every book under ~/SyncMobile/Books and account for the conversion, one line each: `bb corpus-audit [FRAGMENT] [LIMIT]'. Where the library-wide verdict comes from. Needs epdfinfo built."
+  corpus-audit {:doc "Render every book under ~/SyncMobile/Books and account for the conversion, one line each: `bb corpus-audit [FRAGMENT] [LIMIT]'. A FRAGMENT naming a non-PDF file reads the books from its lines instead - `bb corpus-audit tests/corpus/audit-books.list' is the curated set. Needs epdfinfo built."
                 :task (let [[fragment limit] *command-line-args*]
                         (corpus-task (format "(pdf-corpus-audit %s %s)"
                                              (pr-str fragment) (pr-str limit))))}
@@ -95,14 +95,6 @@
                   (System/exit 2))
                 (script-task "pdf-perf.el" (format "(pdf-perf-stages %s)"
                                                    (pr-str book))))}
-
-  perf-ipc {:doc "Split the charlayout stage into epdfinfo's work and pdf-info's response parsing: `bb perf-ipc BOOK [PAGES]'. Needs epdfinfo built."
-            :task (let [[book pages] *command-line-args*]
-                    (when-not book
-                      (println "usage: bb perf-ipc BOOK [PAGES]")
-                      (System/exit 2))
-                    (script-task "pdf-perf.el" (format "(pdf-perf-ipc %s %s)"
-                                                       (pr-str book) (pr-str pages))))}
 
   ci {:doc "deps + lint + test"
       :depends [deps lint test]}}}

@@ -41,6 +41,10 @@ than any threshold the reflow compares against, and keep a case's
 line records diffable."
   (if value (format "%.4f" value) "nil"))
 
+(defun pdf-corpus--exact (value)
+  "VALUE printed so `read' returns it exactly, or \"nil\"."
+  (if value (format "%S" value) "nil"))
+
 (defun pdf-corpus-record (line)
   "LINE, a `pdf-text-line', as the list a case file stores."
   (list (pdf-text-line-text line)
@@ -48,47 +52,77 @@ line records diffable."
         (pdf-text-line-top line) (pdf-text-line-bot line)
         (pdf-text-line-base line) (pdf-text-line-height line)
         (pdf-text-line-space line) (pdf-text-line-cv line)
-        (pdf-text-line-first-width line)))
+        (pdf-text-line-first-width line)
+        (pdf-text-line-font line) (pdf-text-line-size line)
+        (pdf-text-line-bold line) (pdf-text-line-italic line)
+        (pdf-text-line-synth line)))
 
 (defun pdf-corpus-line (record)
   "A fresh `pdf-text-line' for RECORD, as stored in a case file.
 Fresh every time on purpose: the reflow tags records as it works, so a
 record shared between two renders would carry the first one's verdict
-into the second."
-  (cl-destructuring-bind (text x0 x1 top bot base height space cv first-width) record
+into the second.  The font fields arrived with the MuPDF input;
+records captured before it carry none and read as nil."
+  (cl-destructuring-bind (text x0 x1 top bot base height space cv first-width
+                          &optional font size bold italic synth)
+      record
     (pdf-text-line-create :text text :x0 x0 :x1 x1 :top top :bot bot
                           :base base :height height :space space :cv cv
-                          :first-width first-width)))
+                          :first-width first-width
+                          :font font :size size :bold bold :italic italic
+                          :synth synth)))
 
 (defun pdf-corpus--print-record (line)
-  "LINE as one line of a case file."
-  (format "  (%s %s)"
+  "LINE as one line of a case file.
+Coordinates round to four decimals; the space width is stored exact,
+because the verbatim renders divide by it - a listing's indent is
+x-distance over space width, and the rounded divisor lands a column
+one space off the book's own render."
+  (format "  (%s %s %s %s %s %s %s %s %s)"
           (prin1-to-string (pdf-text-line-text line))
-          (mapconcat #'pdf-corpus--number (cdr (pdf-corpus-record line)) " ")))
+          (mapconcat #'pdf-corpus--number
+                     (seq-take (cdr (pdf-corpus-record line)) 6) " ")
+          (pdf-corpus--exact (pdf-text-line-space line))
+          (mapconcat #'pdf-corpus--number
+                     (list (pdf-text-line-cv line)
+                           (pdf-text-line-first-width line))
+                     " ")
+          (prin1-to-string (pdf-text-line-font line))
+          (pdf-corpus--number (pdf-text-line-size line))
+          (if (pdf-text-line-bold line) "t" "nil")
+          (if (pdf-text-line-italic line) "t" "nil")
+          (or (pdf-text-line-synth line) "nil")))
 
 (defun pdf-corpus--print-profile (profile)
-  "PROFILE, a `pdf-text--profile' plist, rounded as a case stores it."
+  "PROFILE, a `pdf-text--profile' plist, stored exact.
+Record coordinates round to four decimals, but a profile value
+multiplies into thresholds - three modal spaces, 1.35 leadings - and
+a page whose measure sits at such a boundary renders differently
+under the rounded value than under the book's own (AIMA p44: the
+rounded :space widened the fragment gap and a margin note merged into
+its paragraph).  `%S' prints a float exactly and `read' returns it
+exactly."
   (format "(:height %s :leading %s :left %s :right %s%s :space %s)"
-          (pdf-corpus--number (plist-get profile :height))
-          (pdf-corpus--number (plist-get profile :leading))
-          (pdf-corpus--number (plist-get profile :left))
-          (pdf-corpus--number (plist-get profile :right))
+          (pdf-corpus--exact (plist-get profile :height))
+          (pdf-corpus--exact (plist-get profile :leading))
+          (pdf-corpus--exact (plist-get profile :left))
+          (pdf-corpus--exact (plist-get profile :right))
           ;; the text-area edges appeared with the two-column-paper fix;
           ;; earlier cases carry none and render against :left/:right
           (if (plist-get profile :text-left)
               (format " :text-left %s :text-right %s"
-                      (pdf-corpus--number (plist-get profile :text-left))
-                      (pdf-corpus--number (plist-get profile :text-right)))
+                      (pdf-corpus--exact (plist-get profile :text-left))
+                      (pdf-corpus--exact (plist-get profile :text-right)))
             "")
-          (pdf-corpus--number (plist-get profile :space))))
+          (pdf-corpus--exact (plist-get profile :space))))
 
 (defun pdf-corpus--print-clusters (clusters)
-  "CLUSTERS of heading heights, rounded as a case stores them."
+  "CLUSTERS of heading heights, stored exact like the profile."
   (format "(%s)"
           (mapconcat (lambda (cluster)
                        (format "(%s . %s)"
-                               (pdf-corpus--number (car cluster))
-                               (pdf-corpus--number (cdr cluster))))
+                               (pdf-corpus--exact (car cluster))
+                               (pdf-corpus--exact (cdr cluster))))
                      clusters " ")))
 
 (defun pdf-corpus-print-lines (window outline vocabulary facts pages)
@@ -132,6 +166,18 @@ clusters, as `pdf-corpus-script-facts' collects them."
       (insert-file-contents file)
       (seq-remove (lambda (line) (string-prefix-p ";;" line))
                   (split-string (buffer-string) "\n" t)))))
+
+(defun pdf-corpus-book-list (file)
+  "The books FILE names, one path per line, expanded and verified.
+Blank lines and `;;' comments are skipped.  A line that resolves to no
+readable file is an error rather than a skip: an audit set that
+silently shrinks would fake improvement against its baseline."
+  (mapcar (lambda (line)
+            (let ((path (expand-file-name (string-trim line))))
+              (unless (file-readable-p path)
+                (error "No readable PDF at %s (named by %s)" path file))
+              path))
+          (pdf-corpus--read-text-lines file)))
 
 (defun pdf-corpus-slugs ()
   "Every case in `pdf-corpus-directory', by name."

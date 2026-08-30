@@ -1,26 +1,26 @@
-(1) Some fruits are masculine: el aguacate ‘avocado’ (la palta south of Ecuador), el albaricoque ‘apricot’, el higo ‘fig’, el limón ‘lemon’, el melón ‘melon’, etc. ‘A banana’ is una banana for most Latin Americans, but un plátano in some regions and in Spain. Plátano also means ‘plane-tree’ in Spain, so ‘banana tree’ is el plátano bananero.
+(1)  Some fruits are masculine: el aguacate ‘avocado’ (la palta south of Ecuador), el albaricoque ‘apricot’, el higo ‘fig’, el limón ‘lemon’, el melón ‘melon’, etc. ‘A banana’ is una banana for most Latin Americans, but un plátano in some regions and in Spain. Plátano also means ‘plane-tree’ in Spain, so ‘banana tree’ is el plátano bananero.
 
-(2) ’Nuts’ in general are los frutos secos. However, in Latin America las nueces can be used for ‘nuts’, cf. cuando está comprando nueces, debe elegir los tipos más populares como almendras, manís, pacanas y nueces de nogal (Colombian cookery book) ‘when buying nuts you should choose the most popular kinds like almonds, peanuts, pecans and walnuts’. El maní = el cacahuete in Spain.
+(2)  ’Nuts’ in general are los frutos secos. However, in Latin America las nueces can be used for  ‘nuts’, cf. cuando está comprando nueces, debe elegir los tipos más populares como almendras, manís, pacanas y nueces de nogal (Colombian cookery book) ‘when buying nuts you should choose the most popular kinds like almonds, peanuts, pecans and walnuts’. El maní = el cacahuete in Spain.
 
-1.3.4 Masculine by form
+1.3.4  Masculine by form
 
-(a) Nouns ending in -o are usually masculine: el colegio ‘school’, el libro ‘book’, el macro ‘macro’ (in computing), el resguardo ‘receipt’/‘payslip’ (e.g. from an ATM), el trampantojo ‘illusion’/‘trick’. There are a few exceptions, some of them important:
+(a)  Nouns ending in -o are usually masculine: el colegio ‘school’, el libro ‘book’, el macro ‘macro’ (in computing), el resguardo ‘receipt’/‘payslip’ (e.g. from an ATM), el trampantojo ‘illusion’/‘trick’. There are a few exceptions, some of them important:
 
 la nao ship (archaic)
 la dinamo dynamo
-  (el dínamo in Lat. Am.)
+    (el dínamo in Lat. Am.)
 la disco disco
 la foto photo
 la Gestapo the Gestapo
 la libido libido
 la magneto magneto
-  (frequently masc.)
+    (frequently masc.)
 la mano hand (dim. la manita
-  or la manito)
+    or la manito)
 la moto motorbike
 la polio polio
 
-(b) Words ending in -aje, -or, -án, -ambre or a stressed vowel:
+(b)  Words ending in -aje, -or, -án, -ambre or a stressed vowel:
 
 el equipaje luggage
 el paisaje landscape
@@ -44,10 +44,16 @@ Exceptions: la flor ‘flower’, la labor ‘labour’. El hambre ‘hunger’ 
 
 (2) El porno is masculine even though it comes from la pornografía: detenido T., el rey del porno español (El Periódico, Sp.) ‘T., king of Spanish porn, arrested’.
 
-1.3.5 Common masculine nouns ending in -a
+1.3.5  Common masculine nouns ending in -a
 
 There is no rule in Spanish that says that nouns ending in -a must be feminine. Many nouns ending in -ma and several others ending in -a are masculine:
 
-(a) Masculine nouns ending in -a (for masculine nouns ending in -ma see list b):
+(a)  Masculine nouns ending in -a (for masculine nouns ending in -ma see list b):
 
-  el alerta alert (el alerta rojo ‘red alert’ or el bocata familiar in Spain for ‘sandwich’/ la alerta) ‘baguette’(el bocadillo)
+el alerta alert (el alerta rojo ‘red alert’ or
+
+    la alerta)
+
+el bocata familiar in Spain for ‘sandwich’/
+
+    ‘baguette’(el bocadillo)

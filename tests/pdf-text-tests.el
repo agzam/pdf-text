@@ -53,252 +53,455 @@ HEADINGS are the org heading lines the outline puts on that page."
                              (pdf-text--hyphenated-words (list lines))
                              headings)))
 
-(defun pdf-text-tests--glyphs (text &optional x0 base width height)
-  "Charlayout glyphs for TEXT laid out from X0 at BASE, WIDTH per glyph.
-Glyph widths alternate around WIDTH unless WIDTH is given, so a fixture
-line reads as proportional type; pass an explicit WIDTH for a
-monospaced one."
-  (let* ((x (or x0 0.10))
-         (base (or base 0.12))
-         (height (or height 0.015))
-         (n -1))
-    (mapcar (lambda (char)
-              (let ((advance (or width (if (cl-oddp (cl-incf n)) 0.006 0.014))))
-                (prog1 (list char (list x (- base height) (+ x advance) base))
-                  (setq x (+ x advance)))))
-            (append text nil))))
+(cl-defun pdf-text-tests--run (off len &key (x0 0.10) (x1 0.20) (oy 0.3400)
+                                       (qh 0.0134) (size 0.016) bold italic
+                                       (font "Body"))
+  "A walker font run over OFF..OFF+LEN of its line's text."
+  (list off len x0 x1 oy qh size bold italic font))
 
-(defun pdf-text-tests--boxed (specs)
-  "Charlayout glyphs from SPECS, each (CHAR WIDTH BOT HEIGHT), laid left to right.
-The box bottom is the glyph's baseline, the way poppler anchors font
-boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
-  (let ((x 0.10))
-    (mapcar (lambda (s)
-              (cl-destructuring-bind (ch w bot h) s
-                (prog1 (list ch (list x (- bot h) (+ x w) bot))
-                  (setq x (+ x w)))))
-            specs)))
+(cl-defun pdf-text-tests--form (text runs &key (page 1) (x0 0.10) (top 0.3266)
+                                     (x1 0.90) (bot 0.3400) (height 0.0134)
+                                     (space 0.005) (cv 0.3) (fw 0.02)
+                                     (synth 0))
+  "A walker line form carrying TEXT and its font RUNS."
+  (list page x0 top x1 bot height space cv fw synth runs text))
 
 ;;; Charlayout off the wire
 
-(describe "pdf-text--query-escape"
-  (it "prefixes backslash and colon, writes newline as backslash-n"
-    (expect (pdf-text--query-escape "/a/b:c\\d\ne")
-            :to-equal "/a/b\\:c\\\\d\\ne"))
-  (it "leaves a plain path alone"
-    (expect (pdf-text--query-escape "/tmp/book.pdf")
-            :to-equal "/tmp/book.pdf")))
+;;; Line records off the walker
 
-(describe "pdf-text--charlayout-parse"
-  (it "reads records into the pdf-info-charlayout shape"
-    (expect (pdf-text--charlayout-parse
-             (concat "OK\n"
-                     "0.100000 0.200000 0.300000 0.400000:T\n"
-                     "0.310000 0.200000 0.320000 0.400000: \n"
-                     ".\n"))
-            :to-equal '((?T (0.1 0.2 0.3 0.4))
-                        (?\s (0.31 0.2 0.32 0.4)))))
-  (it "unescapes the three escaped glyphs"
-    (expect (pdf-text--charlayout-parse
-             (concat "OK\n"
-                     "0.100000 0.200000 0.300000 0.400000:\\:\n"
-                     "0.100000 0.200000 0.300000 0.400000:\\\\\n"
-                     "0.100000 0.200000 0.300000 0.400000:\\n\n"
-                     ".\n"))
-            :to-equal '((?: (0.1 0.2 0.3 0.4))
-                        (?\\ (0.1 0.2 0.3 0.4))
-                        (?\n (0.1 0.2 0.3 0.4)))))
-  (it "keeps multibyte glyphs and negative coordinates"
-    (expect (pdf-text--charlayout-parse
-             "OK\n-0.001000 0.200000 0.300000 0.400000:α\n.\n")
-            :to-equal '((?α (-0.001 0.2 0.3 0.4)))))
-  (it "reads an empty page as nil"
-    (expect (pdf-text--charlayout-parse "OK\n.\n") :to-equal nil))
-  (it "signals the server's own error message"
-    (expect (pdf-text--charlayout-parse "ERR\nNo such page 999\n.\n")
-            :to-throw 'error '("epdfinfo: No such page 999")))
-  (it "signals on a response that is not the grammar"
-    (expect (pdf-text--charlayout-parse "mystery meat")
-            :to-throw 'error)))
-
-(defvar pdf-info--queue)
-
-(describe "pdf-text--charlayouts"
-  (it "assembles pages in order and falls back per failed page"
-    (let ((pdf-info--queue 'queue)
-          (pdf-text-charlayout-pool-min 999))
-      (cl-letf (((symbol-function 'pdf-info-process-assert-running)
-                 (lambda () t))
-                ((symbol-function 'tq-enqueue)
-                 (lambda (_tq question _re _closure fn)
-                   ;; the page is the query's third field; answer at once
-                   (let ((page (string-to-number
-                                (nth 2 (split-string question ":")))))
-                     (funcall fn nil
-                              (if (= page 2)
-                                  "ERR\nboom\n.\n"
-                                "OK\n0.100000 0.200000 0.300000 0.400000:A\n.\n")))))
-                ((symbol-function 'pdf-info-charlayout)
-                 (lambda (page &optional _edges _file)
-                   (list (list ?F (list 0 0 0 (float page)))))))
-        (expect (pdf-text--charlayouts "/tmp/x.pdf" '(1 2 3))
-                :to-equal '(((?A (0.1 0.2 0.3 0.4)))
-                            ((?F (0 0 0 2.0)))
-                            ((?A (0.1 0.2 0.3 0.4)))))))))
-
-;;; Line records and profile
-
-(describe "pdf-text--glyph-line"
-  (it "measures the line's edges, baseline, and first word"
-    (let ((line (pdf-text--glyph-line (pdf-text-tests--glyphs "ab cd" nil nil 0.01))))
+(describe "pdf-text--mupdf-record"
+  (it "carries the walker's measurements into the record"
+    (let ((line (pdf-text--mupdf-record
+                 (pdf-text-tests--form
+                  "ab cd" (list (pdf-text-tests--run 0 5 :x0 0.10 :x1 0.15
+                                                     :bold t :font "Mono"))
+                  :x0 0.10 :x1 0.15 :top 0.3266 :bot 0.3400 :height 0.015
+                  :space 0.004 :cv 0.02 :fw 0.02 :synth 3))))
       (expect (pdf-text-line-text line) :to-equal "ab cd")
       (expect (pdf-text-line-x0 line) :to-be-close-to 0.10 3)
       (expect (pdf-text-line-x1 line) :to-be-close-to 0.15 3)
-      (expect (pdf-text-line-base line) :to-be-close-to 0.12 3)
+      (expect (pdf-text-line-base line) :to-be-close-to 0.34 3)
       (expect (pdf-text-line-height line) :to-be-close-to 0.015 3)
-      (expect (pdf-text-line-first-width line) :to-be-close-to 0.02 3)))
+      (expect (pdf-text-line-space line) :to-be-close-to 0.004 3)
+      (expect (pdf-text-line-cv line) :to-be-close-to 0.02 3)
+      (expect (pdf-text-line-first-width line) :to-be-close-to 0.02 3)
+      (expect (pdf-text-line-font line) :to-equal "Mono")
+      (expect (pdf-text-line-bold line) :to-be t)
+      (expect (pdf-text-line-italic line) :to-be nil)
+      (expect (pdf-text-line-synth line) :to-be 3)))
 
-  (it "reports even advances as a monospaced line"
-    (expect (pdf-text-line-cv (pdf-text--glyph-line
-                              (pdf-text-tests--glyphs "let x = 1;" nil nil 0.01)))
-            :to-be-close-to 0.0 3))
+  (it "names the line's font after the run with the most ink"
+    (let ((line (pdf-text--mupdf-record
+                 (pdf-text-tests--form
+                  "word one" (list (pdf-text-tests--run 0 5 :x0 0.10 :x1 0.20
+                                                        :font "Body")
+                                   (pdf-text-tests--run 5 3 :x0 0.21 :x1 0.24
+                                                        :italic t
+                                                        :font "Italic"))))))
+      (expect (pdf-text-line-font line) :to-equal "Body")
+      (expect (pdf-text-line-italic line) :to-be nil)))
 
-  (it "reports uneven advances as proportional type"
-    (expect (pdf-text-line-cv (pdf-text--glyph-line
-                              (pdf-text-tests--glyphs "ordinary prose here")))
-            :to-be-greater-than pdf-text-monospace-variation))
+  (it "keeps a line with no ink as text alone, geometry and all"
+    (let ((line (pdf-text--mupdf-record
+                 (pdf-text-tests--form "\t" (list (list 0 1 nil nil nil nil
+                                                        0.016 nil nil "Body"))
+                                       :x0 nil :top nil :x1 nil :bot nil
+                                       :height nil :space nil :cv nil
+                                       :fw nil))))
+      (expect (pdf-text-line-text line) :to-equal "\t")
+      (expect (pdf-text-line-x0 line) :to-be nil)))
 
-  (it "keeps a blank line, geometry and all, out of the measurements"
-    (let ((line (pdf-text--glyph-line nil)))
-      (expect (pdf-text-line-text line) :to-equal "")
-      (expect (pdf-text-line-x0 line) :to-be nil))))
-
-(describe "pdf-text--glyph-line script detection"
-  (it "wraps a raised smaller run as a superscript, exponent sign included"
+  (it "trims the trailing space the walker preserves, before the strip"
+    ;; a trailing space would hide a line-final wrap hyphen from the join
     (expect (pdf-text-line-text
-             (pdf-text--glyph-line
-              (pdf-text-tests--boxed
-               '((?1 0.010 0.3400 0.0134) (?0 0.010 0.3400 0.0134)
-                 (?- 0.006 0.3336 0.0089) (?4 0.006 0.3336 0.0089)
-                 (?3 0.006 0.3336 0.0089)
-                 (?s 0.010 0.3400 0.0134)))))
-            :to-equal "10^{-43}s"))
+             (pdf-text--mupdf-record
+              (pdf-text-tests--form
+               "informa\u00AD " (list (pdf-text-tests--run 0 9)))))
+            :to-equal "informa\u00AD"))
 
-  (it "wraps a far-raised footnote asterisk, symbols alone sufficing"
+  (it "collapses the page's own space runs to the shape the rules know"
+    ;; double-spaced sentences and wide-set section numbers arrive as
+    ;; real space runs; the preformatted test would read them as
+    ;; tabular alignment and break the paragraph
     (expect (pdf-text-line-text
-             (pdf-text--glyph-line
-              (pdf-text-tests--boxed
-               '((?d 0.010 0.3400 0.0134) (?. 0.005 0.3400 0.0134)
-                 (?* 0.006 0.3336 0.0089)))))
-            :to-equal "d.^{*}"))
-
-  (it "wraps a dropped smaller run as a subscript"
+             (pdf-text--mupdf-record
+              (pdf-text-tests--form
+               "all.  Tune the set" (list (pdf-text-tests--run 0 18)))))
+            :to-equal "all. Tune the set")
     (expect (pdf-text-line-text
-             (pdf-text--glyph-line
-              (pdf-text-tests--boxed
-               '((?F 0.012 0.3400 0.0134)
-                 (?j 0.006 0.3413 0.0089) (?k 0.006 0.3413 0.0089)))))
-            :to-equal "F_{jk}"))
+             (pdf-text--mupdf-record
+              (pdf-text-tests--form
+               "3   Distance Measure" (list (pdf-text-tests--run 0 20)))))
+            :to-equal "3 Distance Measure"))
 
-  (it "re-bases a fragment set mostly in subscript on its full-size glyphs"
-    (let ((line (pdf-text--glyph-line
-                 (pdf-text-tests--boxed
-                  '((?k 0.007 0.3424 0.0089) (?= 0.007 0.3424 0.0089)
-                    (?1 0.007 0.3424 0.0089) (?\s 0.002 0.3424 0.0089)
-                    (?F 0.0124 0.3394 0.0134) (?. 0.005 0.3394 0.0134))))))
-      (expect (pdf-text-line-text line) :to-equal "_{k=1} F.")
-      (expect (pdf-text-line-base line) :to-be-close-to 0.3394 4)))
-
-  (it "leaves an inline code font alone, its raise being under a script's"
+  (it "strips the leading space run, whose indent the geometry carries"
+    ;; a paragraph's typographic first-line indent arrives as leading
+    ;; spaces; as text they read as preformatted indentation, while x0
+    ;; already says everything the indent rules ask
     (expect (pdf-text-line-text
-             (pdf-text--glyph-line
-              (pdf-text-tests--boxed
-               '((?l 0.008 0.5000 0.0214) (?a 0.008 0.5000 0.0214)
-                 (?\s 0.005 0.5000 0.0214)
-                 (?c 0.008 0.4968 0.0181) (?o 0.008 0.4968 0.0181)
-                 (?d 0.008 0.4968 0.0181) (?e 0.008 0.4968 0.0181)))))
-            :to-equal "la code"))
+             (pdf-text--mupdf-record
+              (pdf-text-tests--form
+               "    Soon afterward" (list (pdf-text-tests--run 0 18)))))
+            :to-equal "Soon afterward"))
 
-  (it "leaves a slightly raised operator alone, symbols needing a symbol's offset"
+  (it "strips what the page never prints"
     (expect (pdf-text-line-text
-             (pdf-text--glyph-line
-              (pdf-text-tests--boxed
-               '((?x 0.008 0.3400 0.0134) (?\s 0.005 0.3400 0.0134)
-                 (?⋯ 0.012 0.3414 0.0094)))))
-            :to-equal "x ⋯"))
+             (pdf-text--mupdf-record
+              (pdf-text-tests--form
+               "l\u001F11 rule" (list (pdf-text-tests--run 0 8)))))
+            :to-equal "l11 rule")))
 
-  (it "keeps the baseline on the letters when a symbol font hangs below it"
-    (let ((line (pdf-text--glyph-line
-                 (pdf-text-tests--boxed
-                  '((?a 0.008 0.3400 0.0134) (?b 0.008 0.3400 0.0134)
-                    (?∧ 0.012 0.3424 0.0196))))))
-      (expect (pdf-text-line-text line) :to-equal "ab∧")
-      (expect (pdf-text-line-base line) :to-be-close-to 0.3400 4)))
+(describe "pdf-text--float-drop-caps"
+  :var ((profile '(:height 0.0165 :leading 0.019)))
 
+  (it "floats a cap served before the running head down to its body line"
+    (let* ((cap (pdf-text-tests--line "T" :x0 0.117 :x1 0.165 :base 0.3044
+                                      :height 0.0563))
+           (head (pdf-text-tests--line "preface" :x0 0.42 :x1 0.58
+                                       :base 0.1922 :height 0.0341))
+           (body (pdf-text-tests--line "his book can make" :base 0.2739))
+           (floated (pdf-text--float-drop-caps (list cap head body) profile)))
+      (expect (mapcar #'pdf-text-line-text floated)
+              :to-equal '("preface" "T" "his book can make"))))
+
+  (it "leaves a cap already in reading order alone"
+    (let* ((head (pdf-text-tests--line "preface" :base 0.1922 :height 0.0341))
+           (cap (pdf-text-tests--line "T" :base 0.3044 :height 0.0563))
+           (body (pdf-text-tests--line "his book can make" :base 0.2739)))
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--float-drop-caps (list head cap body) profile))
+              :to-equal '("preface" "T" "his book can make"))))
+
+  (it "leaves a cap alone when no line in reach opens under it"
+    (let* ((cap (pdf-text-tests--line "T" :base 0.3044 :height 0.0563))
+           (head (pdf-text-tests--line "preface" :base 0.1922 :height 0.0341)))
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--float-drop-caps (list cap head) profile))
+              :to-equal '("T" "preface")))))
+
+(describe "pdf-text--defer-margin-notes"
+  :var ((profile '(:height 0.0136 :leading 0.017 :left 0.095 :right 0.795
+                   :space 0.0047)))
+
+  (it "serves an outer-margin term label after the page's flow"
+    (let ((lines (list (pdf-text-tests--line
+                        "Two aspects of HMMs are relevant."
+                        :x0 0.095 :x1 0.795 :base 0.66 :height 0.0136)
+                       (pdf-text-tests--line
+                        "Hidden Markov models"
+                        :x0 0.809 :x1 0.915 :base 0.677 :height 0.0098)
+                       (pdf-text-tests--line
+                        "First, they are based on a rigorous theory."
+                        :x0 0.095 :x1 0.795 :base 0.68 :height 0.0136))))
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--defer-margin-notes lines profile))
+              :to-equal '("Two aspects of HMMs are relevant."
+                          "First, they are based on a rigorous theory."
+                          "Hidden Markov models"))))
+
+  (it "leaves a lane's claimed record and a wide record in place"
+    (let ((claimed (pdf-text-tests--line "right lane cell"
+                                         :x0 0.82 :x1 0.93 :base 0.30))
+          (wide (pdf-text-tests--line "a spanning row of its own"
+                                      :x0 0.80 :x1 0.93 :base 0.32)))
+      (setf (pdf-text-line-claimed claimed) t)
+      (setf (pdf-text-line-x1 wide) 1.06)
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--defer-margin-notes
+                       (list claimed wide
+                             (pdf-text-tests--line "body text line"
+                                                   :x0 0.095 :x1 0.795
+                                                   :base 0.34 :height 0.0136))
+                       profile))
+              :to-equal '("right lane cell" "a spanning row of its own"
+                          "body text line")))))
+
+(describe "pdf-text--mark-entry-runs"
+  (it "tags a contents run to render one entry per line"
+    (let ((lines (list (pdf-text-tests--line "Generalization 111")
+                       (pdf-text-tests--line "Overfitting 113")
+                       (pdf-text-tests--line "Overfitting Examined 113"))))
+      (expect (mapcar #'pdf-text-line-kind
+                      (pdf-text--mark-entry-runs lines))
+              :to-equal '(fixed fixed fixed))))
+
+  (it "leaves fewer folio-closed neighbours than a run as the prose they are"
+    (let ((lines (list (pdf-text-tests--line "the events of 1988")
+                       (pdf-text-tests--line "shaped the field for 30")
+                       (pdf-text-tests--line "years to come."))))
+      (expect (mapcar #'pdf-text-line-kind
+                      (pdf-text--mark-entry-runs lines))
+              :to-equal '(nil nil nil)))))
+
+(describe "pdf-text--join-split-lines"
+  :var ((profile '(:height 0.0136 :leading 0.017 :space 0.0047)))
+
+  (cl-flet ((faced (text &rest props)
+              (let ((line (apply #'pdf-text-tests--line text props)))
+                (setf (pdf-text-line-font line) "CMR10")
+                line)))
+
+    (it "rejoins one typeset line the extractor served as two"
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "an element from the input only"
+                                    :x0 0.0973 :x1 0.4233 :base 0.7822
+                                    :height 0.0136)
+                             (faced "causes an incremental change"
+                                    :x0 0.4420 :x1 0.9014 :base 0.7822
+                                    :height 0.0136))
+                       profile))
+              :to-equal
+              '("an element from the input only causes an incremental change")))
+
+    (it "keeps a folio and a capitalized cell out of the join"
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "1. Birth of a habit"
+                                    :x0 0.10 :x1 0.70 :base 0.30)
+                             (faced "3" :x0 0.72 :x1 0.73 :base 0.30))
+                       profile))
+              :to-equal '("1. Birth of a habit" "3"))
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "voiced bilabial fricative"
+                                    :x0 0.22 :x1 0.39 :base 0.30)
+                             (faced "Air released between the lips"
+                                    :x0 0.41 :x1 0.57 :base 0.30))
+                       profile))
+              :to-equal '("voiced bilabial fricative"
+                          "Air released between the lips")))
+
+    (it "keeps paired lane items apart, their gap running wide"
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "el alerta alert"
+                                    :x0 0.109 :x1 0.30 :base 0.30)
+                             (faced "la alerta alarm"
+                                    :x0 0.523 :x1 0.70 :base 0.30))
+                       profile))
+              :to-equal '("el alerta alert" "la alerta alarm")))
+
+    (it "keeps records of different faces apart"
+      (let ((body (faced "development of Bayesian networks"
+                         :x0 0.09 :x1 0.79 :base 0.68))
+            (note (faced "margin note" :x0 0.80 :x1 0.91 :base 0.68)))
+        (setf (pdf-text-line-font note) "CMSS8")
+        (expect (length (pdf-text--join-split-lines (list body note) profile))
+                :to-be 2)))
+
+    (it "joins a dotted section number to its title across a face change"
+      (let ((number (faced "3.2.2" :x0 0.1812 :x1 0.2205 :base 0.4996))
+            (title (faced "Hilbert Systems" :x0 0.2358 :x1 0.3732
+                          :base 0.4996)))
+        (setf (pdf-text-line-font title) "CMBX12")
+        (expect (mapcar #'pdf-text-line-text
+                        (pdf-text--join-split-lines (list number title)
+                                                    profile))
+                :to-equal '("3.2.2 Hilbert Systems"))))
+
+    (it "leaves a bare enumerator apart from its item"
+      (expect (mapcar #'pdf-text-line-text
+                      (pdf-text--join-split-lines
+                       (list (faced "1." :x0 0.2223 :x1 0.2328 :base 0.30)
+                             (faced "For each word token" :x0 0.25 :x1 0.84
+                                    :base 0.30))
+                       profile))
+              :to-equal '("1." "For each word token")))))
+
+(describe "pdf-text--run-baseline"
+  (it "reads a one-run line's descent line as its baseline"
+    (expect (car (pdf-text--run-baseline
+                  (list (pdf-text-tests--run 0 4 :oy 0.3400 :qh 0.0134))))
+            :to-be-close-to 0.3400 4))
+
+  (it "re-bases a fragment set mostly in subscript on its full-size run"
+    (let ((ref (pdf-text--run-baseline
+                (list (pdf-text-tests--run 0 4 :x0 0.10 :x1 0.123
+                                           :oy 0.3424 :qh 0.0089)
+                      (pdf-text-tests--run 4 2 :x0 0.125 :x1 0.1424
+                                           :oy 0.3394 :qh 0.0134)))))
+      (expect (car ref) :to-be-close-to 0.3394 4)
+      (expect (cdr ref) :to-be-close-to 0.0134 4)))
+
+  (it "keeps the baseline on the letters when a symbol font hangs below"
+    (expect (car (pdf-text--run-baseline
+                  (list (pdf-text-tests--run 0 2 :x0 0.10 :x1 0.116
+                                             :oy 0.3400 :qh 0.0134)
+                        (pdf-text-tests--run 2 1 :x0 0.117 :x1 0.129
+                                             :oy 0.3424 :qh 0.0196))))
+            :to-be-close-to 0.3400 4))
+
+  (it "reads no baseline off wordless runs"
+    (expect (pdf-text--run-baseline (list (list 0 1 nil nil nil nil
+                                                0.016 nil nil "Body")))
+            :to-be nil)))
+
+(describe "pdf-text--run-markup script detection"
+  (cl-flet ((markup (text runs)
+              (pdf-text-line-text
+               (pdf-text--mupdf-record (pdf-text-tests--form text runs)))))
+
+    (it "wraps a raised smaller run as a superscript, exponent sign included"
+      (expect (markup "10-43s"
+                      (list (pdf-text-tests--run 0 2 :x0 0.10 :x1 0.12)
+                            (pdf-text-tests--run 2 3 :x0 0.12 :x1 0.138
+                                                 :oy 0.3336 :qh 0.0089)
+                            (pdf-text-tests--run 5 1 :x0 0.14 :x1 0.15)))
+              :to-equal "10^{-43}s"))
+
+    (it "wraps a far-raised footnote asterisk, symbols alone sufficing"
+      (expect (markup "d.*"
+                      (list (pdf-text-tests--run 0 2 :x0 0.10 :x1 0.115)
+                            (pdf-text-tests--run 2 1 :x0 0.116 :x1 0.122
+                                                 :oy 0.3336 :qh 0.0089)))
+              :to-equal "d.^{*}"))
+
+    (it "wraps a dropped smaller run as a subscript"
+      (expect (markup "Fjk"
+                      (list (pdf-text-tests--run 0 1 :x0 0.10 :x1 0.112)
+                            (pdf-text-tests--run 1 2 :x0 0.113 :x1 0.125
+                                                 :oy 0.3413 :qh 0.0089)))
+              :to-equal "F_{jk}"))
+
+    (it "wraps the subscript majority when the full-size run re-bases it"
+      (expect (markup "k=1 F."
+                      (list (pdf-text-tests--run 0 4 :x0 0.10 :x1 0.123
+                                                 :oy 0.3424 :qh 0.0089)
+                            (pdf-text-tests--run 4 2 :x0 0.125 :x1 0.1424
+                                                 :oy 0.3394 :qh 0.0134)))
+              :to-equal "_{k=1} F."))
+
+    (it "leaves an inline code font alone, its raise being under a script's"
+      (expect (markup "la code"
+                      (list (pdf-text-tests--run 0 3 :x0 0.10 :x1 0.121
+                                                 :oy 0.5000 :qh 0.0214)
+                            (pdf-text-tests--run 3 4 :x0 0.121 :x1 0.153
+                                                 :oy 0.4968 :qh 0.0181)))
+              :to-equal "la code"))
+
+    (it "leaves a slightly raised operator alone, symbols needing a symbol's offset"
+      (expect (markup "x ⋯"
+                      (list (pdf-text-tests--run 0 2 :x0 0.10 :x1 0.108)
+                            (pdf-text-tests--run 2 1 :x0 0.113 :x1 0.125
+                                                 :oy 0.3414 :qh 0.0094)))
+              :to-equal "x ⋯"))
+
+    (it "reads a run past a script's reach as another line, not a script"
+      (expect (markup "This"
+                      (list (pdf-text-tests--run 0 1 :x0 0.10 :x1 0.13
+                                                 :oy 0.4200 :qh 0.0500)
+                            (pdf-text-tests--run 1 3 :x0 0.131 :x1 0.155)))
+              :to-equal "This"))
+
+    (it "absorbs the hair space a font switch leaves before a script"
+      (expect (markup "in α 2"
+                      (list (pdf-text-tests--run 0 5 :x0 0.10 :x1 0.1295)
+                            (pdf-text-tests--run 5 1 :x0 0.1310 :x1 0.137
+                                                 :oy 0.3424 :qh 0.0089)))
+              :to-equal "in α_{2}"))
+
+    (it "keeps a word gap the page set before a script"
+      (expect (markup "in α 2"
+                      (list (pdf-text-tests--run 0 5 :x0 0.10 :x1 0.1295)
+                            (pdf-text-tests--run 5 1 :x0 0.1345 :x1 0.140
+                                                 :oy 0.3424 :qh 0.0089)))
+              :to-equal "in α _{2}"))))
+
+(describe "pdf-text--mupdf-record literals"
   (it "breaks a literal script pair so org will not parse it"
     (expect (pdf-text-line-text
-             (pdf-text--glyph-line
-              (pdf-text-tests--boxed
-               '((?x 0.008 0.3400 0.0134) (?_ 0.008 0.3400 0.0134)
-                 (?{ 0.006 0.3400 0.0134) (?i 0.004 0.3400 0.0134)
-                 (?} 0.006 0.3400 0.0134)))))
+             (pdf-text--mupdf-record
+              (pdf-text-tests--form "x_{i}"
+                                    (list (pdf-text-tests--run 0 5)))))
             :to-equal "x_\u200B{i}"))
-
-  (it "absorbs the hair space a font switch leaves before a script"
-    (expect (pdf-text-line-text
-             (pdf-text--glyph-line
-              (pdf-text-tests--boxed
-               '((?i 0.008 0.3400 0.0134) (?n 0.008 0.3400 0.0134)
-                 (?\s 0.005 0.3400 0.0134)
-                 (?α 0.0095 0.3400 0.0134)
-                 (?\s 0.0015 0.3400 0.0134)
-                 (?2 0.006 0.3424 0.0089)))))
-            :to-equal "in α_{2}"))
 
   (it "marks nothing on a line set in one size, script or not"
     (expect (pdf-text-line-text
-             (pdf-text--glyph-line
-              (pdf-text-tests--boxed
-               '((?k 0.006 0.3424 0.0089) (?= 0.006 0.3424 0.0089)
-                 (?1 0.006 0.3424 0.0089)))))
-            :to-equal "k=1"))
+             (pdf-text--mupdf-record
+              (pdf-text-tests--form "k=1"
+                                    (list (pdf-text-tests--run 0 3 :oy 0.3424
+                                                               :qh 0.0089)))))
+            :to-equal "k=1")))
 
-  (it "reads a glyph past a script's reach as another line, not a script"
-    (expect (pdf-text-line-text
-             (pdf-text--glyph-line
-              (pdf-text-tests--boxed
-               '((?T 0.030 0.4200 0.0500)
-                 (?h 0.008 0.3400 0.0134) (?i 0.008 0.3400 0.0134)
-                 (?s 0.008 0.3400 0.0134)))))
-            :to-equal "This")))
+(describe "pdf-text--mupdf-parse"
+  (it "assembles pages in order, nil where a page emitted nothing"
+    (let ((pages (pdf-text--mupdf-parse
+                  (concat (format "%S\n" (pdf-text-tests--form
+                                          "on three"
+                                          (list (pdf-text-tests--run 0 8))
+                                          :page 3))
+                          (format "%S\n" (pdf-text-tests--form
+                                          "on five"
+                                          (list (pdf-text-tests--run 0 7))
+                                          :page 5)))
+                  3 5)))
+      (expect (length pages) :to-be 3)
+      (expect (pdf-text-line-text (car (nth 0 pages))) :to-equal "on three")
+      (expect (nth 1 pages) :to-be nil)
+      (expect (pdf-text-line-text (car (nth 2 pages))) :to-equal "on five")))
+
+  (it "drops a form outside the requested range"
+    (expect (pdf-text--mupdf-parse
+             (format "%S\n" (pdf-text-tests--form
+                             "stray" (list (pdf-text-tests--run 0 5))
+                             :page 9))
+             1 2)
+            :to-equal '(nil nil)))
+
+  (it "reads an empty output as empty pages"
+    (expect (pdf-text--mupdf-parse "" 1 2) :to-equal '(nil nil))))
+
+(describe "pdf-text--mupdf-output pool"
+  (it "fans a large range over workers and reassembles every page"
+    (let* ((stub (make-temp-file "pdf-text-stub" nil ".sh"))
+           (pdf-text-mupdf-program stub)
+           (pdf-text-mupdf-pool-min 2)
+           (pdf-text-mupdf-workers 2))
+      (with-temp-file stub
+        (insert "#!/bin/sh\n"
+                "for p in $(seq \"$4\" \"$5\"); do\n"
+                "printf '(%s 0.1 0.3 0.9 0.34 0.0134 0.005 0.3 0.02 0"
+                " ((0 6 0.1 0.2 0.34 0.0134 0.016 nil nil \"F\"))"
+                " \"page-%s\")\\n' \"$p\" \"$p\"\n"
+                "done\n"))
+      (set-file-modes stub #o755)
+      (unwind-protect
+          (let ((pages (pdf-text--mupdf-pages "/tmp/fake.pdf" 1 4)))
+            (expect (length pages) :to-be 4)
+            (expect (mapcar (lambda (lines)
+                              (pdf-text-line-text (car lines)))
+                            pages)
+                    :to-equal '("page-1" "page-2" "page-3" "page-4")))
+        (delete-file stub)))))
+
+(describe "pdf-text--walker-file"
+  (it "writes the walker once and reuses the file"
+    (let ((pdf-text--walker-cache nil))
+      (let ((first (pdf-text--walker-file)))
+        (unwind-protect
+            (progn
+              (expect (pdf-text--walker-file) :to-equal first)
+              (expect (with-temp-buffer
+                        (insert-file-contents first)
+                        (buffer-string))
+                      :to-equal pdf-text--walker-source))
+          (delete-file first))))))
 
 (describe "pdf-text--page-lines"
-  (it "takes text and geometry from the same glyph stream"
-    (let ((lines (pdf-text--page-lines
-                  "ignored"
-                  (append (pdf-text-tests--glyphs "ab" nil nil 0.01)
-                          (list (list ?\n '(0.12 0.10 0.12 0.12)))
-                          (pdf-text-tests--glyphs "cd" 0.10 0.14 0.01)))))
-      (expect (mapcar #'pdf-text-line-text lines) :to-equal '("ab" "cd"))
-      (expect (pdf-text-line-base (nth 1 lines)) :to-be-close-to 0.14 3)))
-
-  (it "falls back to the plain text lines without a layout"
+  (it "reads plain text lines with no geometry"
     (let ((lines (pdf-text--page-lines "one\ntwo")))
       (expect (mapcar #'pdf-text-line-text lines) :to-equal '("one" "two"))
       (expect (pdf-text-line-x0 (car lines)) :to-be nil)))
 
-  (it "strips what the page never prints, on both paths"
+  (it "strips what the page never prints"
     ;; the Spanish grammar leaves the discretionary hyphen at the head
     ;; of the continuation line and a BELL inside the heading's text
     (let ((lines (pdf-text--page-lines
                   "1.2.9\aGender\n\u00ADapplied to hu\u00ADmans\ninforma\u00AD")))
       (expect (mapcar #'pdf-text-line-text lines)
-              :to-equal '("1.2.9Gender" "applied to humans" "informa\u00AD")))
-    (expect (pdf-text-line-text
-             (car (pdf-text--page-lines
-                   "ignored"
-                   (pdf-text-tests--glyphs "l\u001F11 rule" nil nil 0.01))))
-            :to-equal "l11 rule")))
+              :to-equal '("1.2.9Gender" "applied to humans" "informa\u00AD")))))
 
 (describe "pdf-text--strip-unprinted"
   (it "removes a soft hyphen anywhere but the line's end"
@@ -1913,18 +2116,15 @@ boxes; a script glyph gets a smaller HEIGHT and an offset BOT."
 ;;; The pipeline end to end
 
 (describe "pdf-text-render-pages"
-  (it "reflows pages from their glyph layout"
-    (let* ((page (append
-                  (pdf-text-tests--glyphs "First paragraph line one" 0.10 0.12)
-                  (list (list ?\n '(0.34 0.10 0.34 0.12)))
-                  (pdf-text-tests--glyphs "ends here." 0.10 0.14)
-                  (list (list ?\n '(0.20 0.12 0.20 0.14)))
-                  (pdf-text-tests--glyphs "Second paragraph opens" 0.13 0.16)
-                  (list (list ?\n '(0.35 0.14 0.35 0.16)))
-                  (pdf-text-tests--glyphs "and ends." 0.10 0.18))))
-      (expect (pdf-text-render-pages '("ignored") (list page))
-              :to-equal
-              '("First paragraph line one ends here.\n\nSecond paragraph opens and ends."))))
+  (it "reflows a page of records carrying geometry"
+    (expect (pdf-text-render-lines
+             (list (pdf-text-tests--page
+                    '(("First paragraph line one")
+                      ("ends here." :x1 0.30)
+                      ("Second paragraph opens" :x0 0.13 :x1 0.88)
+                      ("and ends." :x1 0.29)))))
+            :to-equal
+            '("First paragraph line one ends here.\n\nSecond paragraph opens and ends.")))
 
   (it "closes small-caps gaps in the pipeline"
     (expect (pdf-text-render-pages '("H OW TO D ESIGN P ROGRAMS\nS ECOND E DITION"))

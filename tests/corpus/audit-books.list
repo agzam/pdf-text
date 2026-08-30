@@ -1,0 +1,25 @@
+;; The curated audit set: every document a corpus case names, plus the
+;; documents user reports established as evidence (Rounds 9-11).  The
+;; audit takes this file in place of a fragment - `bb corpus-audit
+;; tests/corpus/audit-books.list` - and refuses to run past a missing
+;; book, so a baseline and its comparison always cover the same set.
+~/SyncMobile/Books/Language Agnostic/[Data.Science.for.Business(2013.7)].Foster.Provost.pdf
+~/SyncMobile/Books/A Mind for Numbers - How to Excel at Math and Science.pdf
+~/SyncMobile/Books/A Short History of Nearly Everything by Bill Bryson.pdf
+~/SyncMobile/Books/Espanol/A new reference grammar of modern Spanish (2019).pdf
+~/SyncMobile/Books/ANAYA_Gramatica_B1.pdf
+~/SyncMobile/Books/Espanol/Manual de la Nueva Gramática de la lengua española.pdf
+~/SyncMobile/Books/Rust/Blandy J., Orendorff J. - Programming Rust - 2018.pdf
+~/SyncMobile/Books/Felleisen M., Findler R.B., Flatt M., Krishnamurthi Sh. - How to Design Programs, 2nd edition - 2018.pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Graham_Hutton-Programming_in_Haskell-Cambridge_University_Press(2007).pdf
+~/SyncMobile/Books/Logic_in_computer_science__Benji_MO.pdf
+~/SyncMobile/Books/Russell S.J., Norvig P. - Artificial Intelligence. A Modern Approach, 4th Global Edition (Pearson Series In Artificial Intelligence) - 2022.pdf
+~/SyncMobile/Books/Haskell/Springer - Advanced Functional Programming Edition 2009 (Elements) Haskell.pdf
+~/SyncMobile/Books/Haskell/Simon Marlow - Parallel and Concurrent Programming in Haskell - 2013.pdf
+~/SyncMobile/Books/Logic_for_computer_science Steve Reeves Mike Clarke.pdf
+~/SyncMobile/Papers/Aligment of Paragraphs in Bilingual Texts.pdf
+~/SyncMobile/Papers/Applicative.pdf
+~/SyncMobile/Papers/bornstein1989.pdf
+~/SyncMobile/Papers/dean_2013.pdf
+~/SyncMobile/Papers/Academia-Letters-Number-498-Rapid_Loss_of_Habitat_for_Homo_sapiens.pdf
+~/SyncMobile/Papers/wadler88-adhoc polymorphism.pdf

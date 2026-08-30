@@ -1,37 +1,34 @@
 and generates the eleventh rule:
 
-  11 i(x ∗ y) ∗ x → i(y)
+  11 i(x ∗y) ∗x → i(y)
 
-A critical pair comes from rule 11 and rule 4, and the mgu of l_{11} /1.1 and l_{4} is σ = [x_{11} ↼ i(x), y_{11} ↼ x ∗ y]:
+A critical pair comes from rule 11 and rule 4, and the mgu of l_{11}/1.1 and l_{4} is σ = [x_{11} ↼i(x), y_{11} ↼x ∗y]:
 
-  ⟨ (11) i(x ∗ y) i(i(x) ∗ (x ∗ y)) ∗ i(x) ⇒ (4) i(y) ∗ i(x)
+  i(i(x) ∗(x ∗y)) ∗i(x) ⇒ ⟨(11) i(x ∗y) (4) i(y) ∗i(x)
 
 and generates the twelfth rule:
 
-  12 i(x ∗ y) → i(y) ∗ i(x)
+  12 i(x ∗y) → i(y) ∗i(x)
 
-The ﬁnal critical pair comes from rule 4 and rule 5, and generates the thirteenth rule:
+The final critical pair comes from rule 4 and rule 5, and generates the thirteenth rule:
 
-  13 x ∗ (i(x) ∗ y) → y
+  13 x ∗(i(x) ∗y) → y
 
-Since rules 5, 10, and 11 can be rewritten to the identity i.e., t = t, by rules 5 and 12, the ﬁnal set of rewrite rules are
+Since rules 5, 10, and 11 can be rewritten to the identity i.e., t = t, by rules 5 and 12, the final set of rewrite rules are
 
-  1 e∗x → x
+                          e ∗x → x
+                    i(x) ∗x → e
+               (x ∗y) ∗z → x ∗(y ∗z)
+          i(x) ∗(x ∗y) → y
+                          x ∗e → x
+                           i(e) → e
+                    x ∗i(x) → e
+                      i(i(x)) → x
+                    i(x ∗y) → i(y) ∗i(x)
+  13 x ∗(i(x) ∗y) → y
 
-  2 i(x) ∗ x → e
-  3 (x ∗ y) ∗ z → x ∗ (y ∗ z)
-  4 i(x) ∗ (x ∗ y) → y
-
-  6 x∗e → x
-
-  7 i(e) → e
-  8 x ∗ i(x) → e
-  9 i(i(x)) → x
-  12 i(x ∗ y) → i(y) ∗ i(x)
-  13 x ∗ (i(x) ∗ y) → y
-
-All the critical pairs from this set of 10 rules can be reduced to the identity. These 10 rules are suﬃcient to solve the word problem for a free group with no other properties. The word problem is to ﬁnd a decision procedure to decide whether any two terms are equal, according to the axioms of group theory. The above rewrite system can serve as a decision procedure by checking if the two terms have the same canonical form.
+All the critical pairs from this set of 10 rules can be reduced to the identity. These 10 rules are sufficient to solve the word problem for a free group with no other properties. The word problem is to find a decision procedure to decide whether any two terms are equal, according to the axioms of group theory. The above rewrite system can serve as a decision procedure by checking if the two terms have the same canonical form.
 
 The above example illustrates the execution of the Knuth-Bendix completion procedure, which is described by the following pseudo-code.
 
-Procedure 7.2.15. The procedure KnuthBendix(E, ) takes a set E of equations and a simpliﬁcation order , and generates a canonical rewrite system from E when it succeeds. It calls four procedures:
+Procedure 7.2.15. The procedure KnuthBendix(E, ≻) takes a set E of equations and a simplification order ≻, and generates a canonical rewrite system from E when it succeeds. It calls four procedures:
