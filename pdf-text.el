@@ -50,6 +50,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'thingatpt)
 
 ;; pdf-tools is a runtime dependency only: every symbol below resolves when a
 ;; command runs, so the transforms load and test without it.  org arrives with
@@ -60,6 +61,15 @@
 (declare-function pdf-view-goto-page "ext:pdf-view")
 (declare-function image-mode-window-get "image-mode")
 (declare-function pdf-view-image-size "ext:pdf-view")
+(declare-function pdf-view-image-type "ext:pdf-view")
+(declare-function pdf-view-display-image "ext:pdf-view")
+(declare-function pdf-view-redisplay "ext:pdf-view")
+(declare-function pdf-info-renderpage-text-regions "ext:pdf-info")
+(declare-function pdf-util-face-colors "ext:pdf-util")
+(declare-function pdf-util-frame-scale-factor "ext:pdf-util")
+;; dynamic in pdf-info; declared so the let-binding around the async
+;; render compiles as special without pdf-tools on the load path
+(defvar pdf-info-asynchronous)
 (declare-function org-cycle-overview "org-cycle")
 (declare-function org-fold-show-set-visibility "org-fold")
 (declare-function org-fold-show-entry "org-fold")
@@ -4085,11 +4095,21 @@ settled it."
 
 ;;; Rendering blocks back to text
 
+(defun pdf-text--line-tagged (line)
+  "LINE's text carrying its record as a `pdf-text-line' text property.
+The follow highlight reads the record back from the rendered buffer,
+mapping any span of text to the page rects that drew it.  Tagging the
+one place a record's text enters the render is enough: every trim,
+join and substring downstream preserves string properties, and
+nothing outside the buffer sees them - `equal' ignores properties,
+and a golden written to disk drops them."
+  (propertize (pdf-text-line-text line) 'pdf-text-line line))
+
 (defun pdf-text--join-block (block vocabulary)
   "BLOCK's lines joined into one paragraph line, de-hyphenated by VOCABULARY."
   (let (para)
     (dolist (line (pdf-text-block-lines block) (or para ""))
-      (let ((text (string-trim (pdf-text-line-text line))))
+      (let ((text (string-trim (pdf-text--line-tagged line))))
         (setq para (if para
                        (pdf-text--join-lines para text vocabulary)
                      text))))))
@@ -4123,7 +4143,7 @@ space width, PROFILE's where its lines carry none."
                                  (round (/ (- (pdf-text-line-x0 line) left) unit))
                                0)))
                    (concat "  " (make-string (max 0 step) ?\s)
-                           (string-trim (pdf-text-line-text line)))))
+                           (string-trim (pdf-text--line-tagged line)))))
                lines "\n")))
 
 (defun pdf-text--inset-p (block profile)
@@ -4410,7 +4430,12 @@ heading a merged pair makes carries both halves' text already."
                      blocks))
       (let* ((kind (pdf-text-block-kind block))
              (placement (cdr (assq block placed)))
-             (head (car placement))
+             ;; a heading line's words are the outline's, not the page's,
+             ;; so it carries its block's records whole: the follow
+             ;; highlight lights the lines the heading stands for
+             (head (when-let* ((title (car placement)))
+                     (propertize title 'pdf-text-line
+                                 (pdf-text-block-lines block))))
              (note (cdr (assq block (car notes))))
              indent)
         (unless (eq 'item kind) (setq stack nil))
@@ -4439,7 +4464,7 @@ heading a merged pair makes carries both halves' text already."
                             ((or 'table 'fixed)
                              (mapconcat (lambda (line)
                                           (string-trim-right
-                                           (pdf-text-line-text line)))
+                                           (pdf-text--line-tagged line)))
                                         (pdf-text-block-lines block) "\n"))
                             ;; a table of contents is a list, and the
                             ;; reader gets one: entry per item, the
@@ -4447,7 +4472,7 @@ heading a merged pair makes carries both halves' text already."
                             ('entry
                              (mapconcat (lambda (line)
                                           (concat "- " (string-trim
-                                                        (pdf-text-line-text
+                                                        (pdf-text--line-tagged
                                                          line))))
                                         (pdf-text-block-lines block) "\n"))
                             ('item (pdf-text--cite-footnotes
@@ -5205,7 +5230,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 21
+(defconst pdf-text-render-version 22
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")
@@ -5421,6 +5446,174 @@ whose title closes the page opens only as far as its opening text."
     (pop-to-buffer buf)
     (pdf-view-goto-page page)))
 
+;;; Follow highlight
+
+(defvar pdf-text-follow-mode)
+
+(defvar pdf-text-follow-default t
+  "Whether enabling the sync also enables `pdf-text-follow-mode'.
+Consulted when `pdf-text-sync-mode' turns on, not at a re-arm of a
+sync already running, so a reader's explicit follow-off survives the
+reuse path the way the sync's own state does.")
+
+(defface pdf-text-follow-face
+  '((t :inherit lazy-highlight))
+  "Face of the sentence highlight on the PDF page.
+Only its colors reach the page: epdfinfo renders the highlight into
+the page image, so no overlay attributes apply."
+  :group 'pdf-text)
+
+(defvar pdf-text-follow--tick 0
+  "Monotonic id of the newest highlight render; stale answers drop.")
+
+(defvar-local pdf-text-follow--bounds nil
+  "Sentence bounds the highlight last settled on.
+Motions inside them repaint nothing.")
+
+(defvar-local pdf-text-follow--painted nil
+  "Page number the highlight last painted, nil while the page is clean.")
+
+(defun pdf-text-follow--sentence ()
+  "Bounds of the sentence at point, or nil off prose.
+Reflowed text separates sentences with a single space, which the
+default `sentence-end-double-space' reads past."
+  (let ((sentence-end-double-space nil))
+    (bounds-of-thing-at-point 'sentence)))
+
+(defun pdf-text-follow--rects (bounds)
+  "Source-line rects under BOUNDS, as (LEFT TOP RIGHT BOT) page fractions.
+Reads the `pdf-text-line' properties the render left on the text and
+reduces them to the distinct records' ink boxes.  A span without
+geometry - a page rendered from bare text, characters the render
+wrote itself - yields nil, and the highlight clears rather than
+guess."
+  (let ((pos (car bounds))
+        (end (cdr bounds))
+        records)
+    (while (< pos end)
+      (let ((value (get-text-property pos 'pdf-text-line)))
+        ;; a heading carries its block's records as a list; prose
+        ;; carries one record; untagged text carries nil, which is
+        ;; also a list, and contributes nothing
+        (dolist (record (if (listp value) value (list value)))
+          (when (and record (not (memq record records)))
+            (push record records))))
+      (setq pos (or (next-single-property-change pos 'pdf-text-line nil end)
+                    end)))
+    (nreverse
+     (delq nil
+           (mapcar (lambda (record)
+                     (let ((x0 (pdf-text-line-x0 record))
+                           (top (pdf-text-line-top record))
+                           (x1 (pdf-text-line-x1 record))
+                           (bot (pdf-text-line-bot record)))
+                       (and x0 top x1 bot (list x0 top x1 bot))))
+                   records)))))
+
+(defun pdf-text-follow--clear ()
+  "Restore the PDF page image the highlight painted over, if any.
+Bumps the tick so a render still in flight drops instead of painting
+over the restored page."
+  (setq pdf-text-follow--bounds nil)
+  (when pdf-text-follow--painted
+    (setq pdf-text-follow--painted nil)
+    (cl-incf pdf-text-follow--tick)
+    (when-let* ((pdf pdf-text--pdf-buffer)
+                ((buffer-live-p pdf))
+                (win (get-buffer-window pdf t)))
+      (with-selected-window win
+        (pdf-view-redisplay win)))))
+
+(defun pdf-text-follow--paint (page rects)
+  "Render PAGE with RECTS highlighted into the PDF window's image.
+The render is asynchronous and its answer drops when a newer one was
+issued, the window moved on, or the page turned under it - the
+`pdf-isearch-hl-matches' shape.  Where `pdf-view-use-scaling' doubles
+the page's own render width the highlight render doubles too, so the
+highlighted page stays as crisp as the clean one."
+  (when-let* ((pdf pdf-text--pdf-buffer)
+              ((buffer-live-p pdf))
+              (win (get-buffer-window pdf t)))
+    (let* ((tick (cl-incf pdf-text-follow--tick))
+           (width (with-selected-window win
+                    (car (pdf-view-image-size nil win page))))
+           (scale (if (buffer-local-value 'pdf-view-use-scaling pdf) 2 1))
+           (colors (pdf-util-face-colors
+                    'pdf-text-follow-face
+                    (buffer-local-value 'pdf-view-dark-minor-mode pdf)))
+           (pdf-info-asynchronous
+            (lambda (status data)
+              (when (and (null status)
+                         (eq tick pdf-text-follow--tick)
+                         (buffer-live-p pdf)
+                         (window-live-p win)
+                         (eq (window-buffer win) pdf))
+                (with-selected-window win
+                  (when (eq page (pdf-text--pdf-page))
+                    (pdf-view-display-image
+                     (apply #'create-image data (pdf-view-image-type) t
+                            :width width
+                            :relief (or (bound-and-true-p pdf-view-image-relief)
+                                        0)
+                            ;; the mac port serves 2x displays from
+                            ;; :data-2x; other ports scale :width down
+                            (when (and (eq (framep-on-display) 'mac)
+                                       (= (pdf-util-frame-scale-factor) 2))
+                              (list :data-2x data)))
+                     page win)))))))
+      (setq pdf-text-follow--painted page)
+      (apply #'pdf-info-renderpage-text-regions
+             page (* scale width) t nil pdf
+             (list (append (list (car colors) (cdr colors)) rects))))))
+
+(defvar pdf-text-follow-delay 0.15
+  "Idle seconds before the highlight moves to the sentence at point.
+The paint schedules instead of firing per command: a held-down motion
+key must cost nothing, while an epdfinfo render per sentence queues
+behind itself in the single-threaded server and lags every
+synchronous query the reading flow makes - and each render's arrival
+costs the main thread a full-page PNG decode.")
+
+(defvar-local pdf-text-follow--timer nil
+  "Pending idle render; the next command swaps it out.")
+
+(defun pdf-text-follow--schedule ()
+  "Move the highlight once the reader pauses.
+The companion's post-command hook, and the call the pdf-side sync
+makes after it moves point here - that path runs no post-command in
+this buffer.  Per command this only swaps a timer, so motion issues
+no renders at all."
+  (when pdf-text-follow--timer
+    (cancel-timer pdf-text-follow--timer))
+  (setq pdf-text-follow--timer
+        (run-with-idle-timer pdf-text-follow-delay nil
+                             #'pdf-text-follow--idle-refresh
+                             (current-buffer))))
+
+(defun pdf-text-follow--idle-refresh (buffer)
+  "Refresh BUFFER's highlight; the idle-timer half of the schedule."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq pdf-text-follow--timer nil)
+      (when pdf-text-follow-mode
+        (pdf-text-follow--refresh)))))
+
+(defun pdf-text-follow--refresh ()
+  "Move the highlight to the sentence at point when it changed."
+  (let ((bounds (pdf-text-follow--sentence)))
+    (unless (equal bounds pdf-text-follow--bounds)
+      (let ((rects (and bounds (pdf-text-follow--rects bounds))))
+        (if rects
+            (progn
+              (setq pdf-text-follow--bounds bounds)
+              (pdf-text-follow--paint (pdf-text-page-at-point) rects))
+          (pdf-text-follow--clear)
+          ;; remember the rect-less bounds too, or every motion inside
+          ;; a verbatim block would re-walk it just to clear again
+          (setq pdf-text-follow--bounds bounds))))))
+
+;;; Page sync
+
 (defvar pdf-text-sync--inhibit nil
   "Non-nil while one side of the sync moves the other; breaks the loop.")
 
@@ -5466,7 +5659,16 @@ stays put, so the explicit RET jump keeps its exact position."
                   (pdf-text--reveal-page page)
                   (when moved (recenter 0)))
               (when moved (goto-char pos))
-              (pdf-text--reveal-page page)))))))))
+              (pdf-text--reveal-page page))
+            ;; this path runs no post-command in the companion, so the
+            ;; highlight is moved by hand
+            (when pdf-text-follow-mode
+              (pdf-text-follow--schedule)))))))))
+
+(defvar-local pdf-text-sync--armed nil
+  "Whether the sync's hooks are armed; tells a real enable from a re-arm.
+The follow rides only a real enable, so the reuse path's re-arm
+cannot resurrect a follow the reader toggled off.")
 
 (define-minor-mode pdf-text-sync-mode
   "Keep the companion and its PDF on the same page, both directions.
@@ -5480,7 +5682,7 @@ on RET works without the mode."
   (let ((companion (current-buffer))
         (pdf pdf-text--pdf-buffer))
     (if pdf-text-sync-mode
-        (progn
+        (let ((rearm pdf-text-sync--armed))
           (unless (buffer-live-p pdf)
             (setq pdf-text-sync-mode nil)
             (user-error "The source PDF buffer is gone"))
@@ -5489,12 +5691,48 @@ on RET works without the mode."
           (with-current-buffer pdf
             (setq pdf-text--companion companion)
             (add-hook 'pdf-view-after-change-page-hook
-                      #'pdf-text-sync--follow-pdf nil t)))
+                      #'pdf-text-sync--follow-pdf nil t))
+          (setq pdf-text-sync--armed t)
+          ;; the sync carries the follow: a real enable brings it up,
+          ;; and the follow's own toggle alone turns it off for a
+          ;; synced page without the highlight
+          (unless (or rearm pdf-text-follow-mode
+                      (not pdf-text-follow-default))
+            (pdf-text-follow-mode 1)))
+      (setq pdf-text-sync--armed nil)
+      (when pdf-text-follow-mode
+        (pdf-text-follow-mode -1))
       (remove-hook 'post-command-hook #'pdf-text-sync--follow-text t)
       (when (buffer-live-p pdf)
         (with-current-buffer pdf
           (remove-hook 'pdf-view-after-change-page-hook
                        #'pdf-text-sync--follow-pdf t))))))
+
+(define-minor-mode pdf-text-follow-mode
+  "Highlight the sentence at point on the PDF page.
+Rides `pdf-text-sync-mode': enabling the follow pulls the sync up,
+disabling the sync takes the follow down with it, and the follow
+toggles off alone for a reader who wants the page synced but clean."
+  :lighter " pdf-follow"
+  (unless (derived-mode-p 'pdf-text-mode)
+    (setq pdf-text-follow-mode nil)
+    (user-error "Not in a pdf-text buffer"))
+  (if pdf-text-follow-mode
+      (progn
+        (unless pdf-text-sync-mode
+          (condition-case err
+              (pdf-text-sync-mode 1)
+            (error (setq pdf-text-follow-mode nil)
+                   (signal (car err) (cdr err)))))
+        ;; after the sync's own hook: the page must flip before the
+        ;; paint reads the pdf window
+        (add-hook 'post-command-hook #'pdf-text-follow--schedule 90 t)
+        (pdf-text-follow--schedule))
+    (remove-hook 'post-command-hook #'pdf-text-follow--schedule t)
+    (when pdf-text-follow--timer
+      (cancel-timer pdf-text-follow--timer)
+      (setq pdf-text-follow--timer nil))
+    (pdf-text-follow--clear)))
 
 (provide 'pdf-text)
 ;;; pdf-text.el ends here

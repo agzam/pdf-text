@@ -556,12 +556,18 @@ RENDERED is `pdf-corpus-render' output, computed when not supplied."
                       (length detail)
                       (string-join (seq-take detail 5) " ")))
       ('page-marker (format "page marker survived: %s" (string-join detail " ")))
+      ;; rendered heading lines carry the pdf-text-line property,
+      ;; which %S would print
       ('outline (format "outline title placed wrong: %s"
                         (mapconcat (lambda (found)
-                                     (format "%S x%d" (car found) (cdr found)))
+                                     (format "%S x%d"
+                                             (substring-no-properties (car found))
+                                             (cdr found)))
                                    detail "; ")))
       ('heading (format "heading folds to an empty section: %s"
-                        (mapconcat (lambda (title) (format "%S" title)) detail "; ")))
+                        (mapconcat (lambda (title)
+                                     (format "%S" (substring-no-properties title)))
+                                   detail "; ")))
       (_ (format "%s: %S" kind detail)))))
 
 ;;; What a case declares about the invariants it breaks

@@ -4169,6 +4169,252 @@ HEADINGS are the org heading lines the outline puts on that page."
             (expect pdf-text-sync-mode :to-be nil))
         (kill-buffer companion)))))
 
+(defun pdf-text-tests--tagged-page (specs &optional headings)
+  "SPECS rendered as one page, returned as (TEXT . LINES).
+The render carries each line's record in the `pdf-text-line' text
+property; LINES are those records, so a spec can assert identity."
+  (let* ((lines (pdf-text-tests--page specs))
+         (profile (pdf-text--profile (list lines)))
+         (page (pdf-text--page-profile lines profile)))
+    (cons (pdf-text--render-blocks (pdf-text--blocks lines page) page
+                                   (pdf-text--hyphenated-words (list lines))
+                                   headings)
+          lines)))
+
+(describe "the render tags text with its source lines"
+  (it "carries a paragraph's records through the join, in order"
+    (pcase-let* ((`(,text . ,lines)
+                  (pdf-text-tests--tagged-page
+                   '(("The parser accepts the докument and re-" :x1 0.90)
+                     ("jects the rest of the input stream today." :x1 0.90)
+                     ("The reader wins." :x1 0.40)))))
+      (expect (get-text-property 0 'pdf-text-line text)
+              :to-be (nth 0 lines))
+      (expect (get-text-property (1- (length text)) 'pdf-text-line text)
+              :to-be (nth 2 lines))
+      ;; the de-hyphenated word spans both records: "re" keeps the
+      ;; first line's, "jects" the second's
+      (let ((junction (string-match "rejects" text)))
+        (expect (get-text-property (1+ junction) 'pdf-text-line text)
+                :to-be (nth 0 lines))
+        (expect (get-text-property (+ junction 2) 'pdf-text-line text)
+                :to-be (nth 1 lines)))))
+
+  (it "gives a placed heading its block's records as a list"
+    (pcase-let* ((`(,text . ,lines)
+                  (pdf-text-tests--tagged-page
+                   '(("Other Skills and Concepts" :x1 0.45 :height 0.024)
+                     ("There are many other concepts and skills that a" :x1 0.90)
+                     ("practical data scientist needs to know." :x1 0.50))
+                   '("** Other Skills and Concepts"))))
+      (expect (string-prefix-p "** Other Skills" text) :to-be-truthy)
+      (expect (get-text-property 0 'pdf-text-line text)
+              :to-equal (list (nth 0 lines)))))
+
+  (it "tags each verbatim listing line with its own record"
+    (pcase-let* ((`(,text . ,lines)
+                  (pdf-text-tests--tagged-page
+                   '(("let mut count = 0;" :cv 0.01 :x1 0.50)
+                     ("count += 1;" :cv 0.01 :x1 0.40)))))
+      (let* ((rows (split-string text "\n"))
+             (first-row (car rows))
+             (last-row (car (last rows))))
+        (expect (get-text-property (1- (length first-row)) 'pdf-text-line
+                                   first-row)
+                :to-be (nth 0 lines))
+        (expect (get-text-property (1- (length last-row)) 'pdf-text-line
+                                   last-row)
+                :to-be (nth 1 lines)))))
+
+  (it "keeps the property through the org escape pass"
+    (let* ((line (pdf-text-tests--line "* a bullet the page wrote"))
+           (tagged (pdf-text--escape-org-lines (pdf-text--line-tagged line))))
+      (expect (string-prefix-p "\u200B" tagged) :to-be-truthy)
+      (expect (get-text-property 2 'pdf-text-line tagged) :to-be line))))
+
+(describe "pdf-text-follow--sentence"
+  (it "finds a single-space sentence boundary mid-line"
+    (with-temp-buffer
+      (insert "The parser accepts it. The reader wins today.")
+      (goto-char (point-min))
+      (search-forward "reader")
+      (let ((bounds (pdf-text-follow--sentence)))
+        (expect (buffer-substring-no-properties (car bounds) (cdr bounds))
+                :to-equal "The reader wins today.")))))
+
+(describe "pdf-text-follow--rects"
+  (it "reduces a sentence's span to its lines' ink boxes, in order"
+    (pcase-let* ((`(,text . ,lines)
+                  (pdf-text-tests--tagged-page
+                   '(("One sentence runs over this line and the" :x1 0.90)
+                     ("next before it ends. A second one follows" :x1 0.90)
+                     ("along here." :x1 0.30)))))
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (search-forward "runs")
+        (let ((sentence-end-double-space nil))
+          (expect (pdf-text-follow--rects
+                   (bounds-of-thing-at-point 'sentence))
+                  :to-equal
+                  (mapcar (lambda (line)
+                            (list (pdf-text-line-x0 line)
+                                  (pdf-text-line-top line)
+                                  (pdf-text-line-x1 line)
+                                  (pdf-text-line-bot line)))
+                          (list (nth 0 lines) (nth 1 lines))))))))
+
+  (it "yields nil over records with no geometry"
+    (let ((text (car (pdf-text-render-pages
+                      '("A page with no layout at all.")))))
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (expect (pdf-text-follow--rects (cons (point-min) (point-max)))
+                :to-be nil))))
+
+  (it "reads a heading's list of records"
+    (pcase-let* ((`(,text . ,lines)
+                  (pdf-text-tests--tagged-page
+                   '(("Other Skills and Concepts" :x1 0.45 :height 0.024)
+                     ("Body text below the heading, long enough." :x1 0.60))
+                   '("** Other Skills and Concepts"))))
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (expect (pdf-text-follow--rects
+                 (cons (point-min) (line-end-position)))
+                :to-equal
+                (list (list (pdf-text-line-x0 (nth 0 lines))
+                            (pdf-text-line-top (nth 0 lines))
+                            (pdf-text-line-x1 (nth 0 lines))
+                            (pdf-text-line-bot (nth 0 lines)))))))))
+
+(describe "pdf-text-follow-mode"
+  (it "rides the sync up and down"
+    (let ((pdf (generate-new-buffer " *follow-pdf*"))
+          (companion (generate-new-buffer " *follow-text*")))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            (setq pdf-text--pdf-buffer pdf)
+            (pdf-text-sync-mode 1)
+            (expect pdf-text-follow-mode :to-be-truthy)
+            (expect (memq #'pdf-text-follow--schedule post-command-hook)
+                    :to-be-truthy)
+            (pdf-text-sync-mode -1)
+            (expect pdf-text-follow-mode :to-be nil)
+            (expect (memq #'pdf-text-follow--schedule post-command-hook)
+                    :to-be nil))
+        (kill-buffer companion)
+        (kill-buffer pdf))))
+
+  (it "stays down when pdf-text-follow-default says so"
+    (let ((pdf (generate-new-buffer " *follow-pdf*"))
+          (companion (generate-new-buffer " *follow-text*"))
+          (pdf-text-follow-default nil))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            (setq pdf-text--pdf-buffer pdf)
+            (pdf-text-sync-mode 1)
+            (expect pdf-text-follow-mode :to-be nil))
+        (kill-buffer companion)
+        (kill-buffer pdf))))
+
+  (it "toggles off alone, leaving the sync running"
+    (let ((pdf (generate-new-buffer " *follow-pdf*"))
+          (companion (generate-new-buffer " *follow-text*")))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            (setq pdf-text--pdf-buffer pdf)
+            (pdf-text-sync-mode 1)
+            (pdf-text-follow-mode -1)
+            (expect pdf-text-sync-mode :to-be-truthy)
+            (expect pdf-text-follow-mode :to-be nil)
+            (expect (memq #'pdf-text-sync--follow-text post-command-hook)
+                    :to-be-truthy))
+        (kill-buffer companion)
+        (kill-buffer pdf))))
+
+  (it "pulls the sync up when enabled alone"
+    (let ((pdf (generate-new-buffer " *follow-pdf*"))
+          (companion (generate-new-buffer " *follow-text*"))
+          (pdf-text-follow-default nil))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            (setq pdf-text--pdf-buffer pdf)
+            (pdf-text-follow-mode 1)
+            (expect pdf-text-sync-mode :to-be-truthy)
+            (expect pdf-text-follow-mode :to-be-truthy))
+        (kill-buffer companion)
+        (kill-buffer pdf))))
+
+  (it "does not resurrect on the re-arm an explicit off survives"
+    (let ((pdf (generate-new-buffer " *follow-pdf*"))
+          (companion (generate-new-buffer " *follow-text*")))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            (setq pdf-text--pdf-buffer pdf)
+            (pdf-text-sync-mode 1)
+            (pdf-text-follow-mode -1)
+            ;; the reuse path re-arms a sync already on
+            (pdf-text-sync-mode 1)
+            (expect pdf-text-sync-mode :to-be-truthy)
+            (expect pdf-text-follow-mode :to-be nil))
+        (kill-buffer companion)
+        (kill-buffer pdf))))
+
+  (it "refuses outside pdf-text and resets when the sync refuses"
+    (with-temp-buffer
+      (expect (pdf-text-follow-mode 1) :to-throw 'user-error))
+    (let ((companion (generate-new-buffer " *follow-text*")))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            ;; no live pdf buffer: the sync the follow pulls up refuses
+            (expect (pdf-text-follow-mode 1) :to-throw 'user-error)
+            (expect pdf-text-follow-mode :to-be nil)
+            (expect pdf-text-sync-mode :to-be nil))
+        (kill-buffer companion))))
+
+  (it "debounces: a command swaps the pending render, off cancels it"
+    (let ((pdf (generate-new-buffer " *follow-pdf*"))
+          (companion (generate-new-buffer " *follow-text*")))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            (setq pdf-text--pdf-buffer pdf)
+            (pdf-text-sync-mode 1)
+            (let ((first pdf-text-follow--timer))
+              (expect (memq first timer-idle-list) :to-be-truthy)
+              (pdf-text-follow--schedule)
+              ;; one pending render, the newest
+              (expect (memq first timer-idle-list) :to-be nil)
+              (expect (memq pdf-text-follow--timer timer-idle-list)
+                      :to-be-truthy))
+            (let ((last pdf-text-follow--timer))
+              (pdf-text-follow-mode -1)
+              (expect pdf-text-follow--timer :to-be nil)
+              (expect (memq last timer-idle-list) :to-be nil)))
+        (kill-buffer companion)
+        (kill-buffer pdf))))
+
+  (it "lets the idle refresh find its buffer gone or the mode off"
+    ;; the timer outlives what it points at; both guards must hold
+    (let ((companion (generate-new-buffer " *follow-text*")))
+      (kill-buffer companion)
+      (expect (pdf-text-follow--idle-refresh companion) :not :to-throw))
+    (let ((companion (generate-new-buffer " *follow-text*")))
+      (unwind-protect
+          (with-current-buffer companion
+            (pdf-text-mode)
+            (expect (pdf-text-follow--idle-refresh companion) :not :to-throw))
+        (kill-buffer companion)))))
+
 (defun pdf-text-tests--pair ()
   "A paired companion and PDF buffer, as (COMPANION . PDF)."
   (let ((pdf (generate-new-buffer " *kill-pdf*"))
