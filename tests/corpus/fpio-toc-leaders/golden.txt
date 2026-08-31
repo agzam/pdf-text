@@ -2,24 +2,24 @@
 - 4 Operational precongruence 37
 - 4.1 Contexts 38
 - 4.2 Experiments and contextual-experiments 39
-- 4.3 Ground and confined relations in M 41
+- 4.3 Ground and confined relations in ℳ 41
 - 4.4 Contextual and experimental order 44
 - 4.5 Applicative and compatible similarity 49
 - 4.6 Contextual order and applicative similarity 52
 - 5 Theory of the metalanguage 55
-- 5.1 Laws of operational equivalence in M 55
-- 5.2 Empty and one-point types in M 58
-- 5.3 Iterated products and sums in M 59
-- 5.4 Booleans in M 60
-- 5.5 Natural numbers in M 61
+- 5.1 Laws of operational equivalence in ℳ 55
+- 5.2 Empty and one-point types in ℳ 58
+- 5.3 Iterated products and sums in ℳ 59
+- 5.4 Booleans in ℳ 60
+- 5.5 Natural numbers in ℳ 61
 - 6 An operational theory of functional programming 65
-- 6.1 H , a small functional language 66
-- 6.2 Ground and confined relations in H 79
-- 6.3 Operational equivalence for H 82
-- 6.4 Denotational equivalence for H 85
-- 6.5 A theory of H programming 88
+- 6.1 ℋ , a small functional language 66
+- 6.2 Ground and confined relations in ℋ 79
+- 6.3 Operational equivalence for ℋ 82
+- 6.4 Denotational equivalence for ℋ 85
+- 6.5 A theory of ℋ programming 88
 - 6.6 Derived laws of programming 91
-- 6.7 H X , an extension of H with exceptions 93
+- 6.7 ℋ𝒳 , an extension of ℋ with exceptions 93
 - 7 Four mechanisms for teletype I/O 99
 - 7.1 Side-effecting I/O 100
 - 7.2 Labelled transition systems and bisimilarity 103

@@ -267,8 +267,118 @@ if (last > doc.countPages()) last = doc.countPages();
 // en and em dash, 5C/22 the opening and closing double quote - but
 // in typewriter type those bytes are the braces and bar they look
 // like, and uniform widths are that font's own tell.
+//
+// A math font's byte names would decode to false ASCII - a cmmi
+// period is named ':', a cmsy arrow '!' - so glyph identity comes
+// from the widths instead.  Every Computer Modern face carries its
+// canonical width at every position, the subset's Widths array
+// copies them at some scale, and matching the two identifies the
+// family: cmmi reads Greek and italic variables, cmsy operators,
+// arrows and script capitals, cmex the big delimiters.  The same
+// fit vetoes the lying names a text font carries (fpio names its
+// Gamma ';') and overrides the shipped entries a subset CMap gets
+// wrong (a script M mapped to V).  What no family fits keeps unit
+// 1's reading untouched, and what no table maps stays U+FFFD: the
+// honest placeholder over false prose.
 function hx2(v) { return ('00' + v.toString(16).toUpperCase()).slice(-2); }
 function hx4(v) { return ('0000' + v.toString(16).toUpperCase()).slice(-4); }
+// Canonical Computer Modern tables, generated from the TeX
+// distribution's AFMs: T3W holds each candidate family's glyph
+// widths in 1/1000 em, four hex digits a slot, 128 slots; T3U
+// holds the byte-to-Unicode readings as comma-separated UTF-16
+// hex units, an empty slot meaning the byte stays unmapped on
+// purpose - a hook or an accent piece has no honest standalone
+// codepoint, and a wrong letter would read as prose.
+var T3W = {
+	r10: '02710341030902B6029A02EE02D2030902D2030902D20247022B022B034103410115013101F401F401F401F401F402EE01BC01F402D2030901F4038603F503090115011501F4034101F40341030901150184018401F403090115014D011501F401F401F401F401F401F401F401F401F401F401F4011501150115030901D801D8030902EE02C402D202FB02A8028C031002EE0169020103090271039402EE030902A8030902E0022B02D202EE02EE040302EE02EE0263011501F4011501F40115011501F4022B01BC022B01BC013101F4022B01150131020F01150341022B01F4022B020F0187018A0184022B020F02D2020F020F01BC01F403E801F401F401F4',
+	ti10: '0273033102FE02B4029802E702CB02FE02CB02FE02CB02650232024B0371037E0132014C01FF01FF01FF01FF01FF033F01CC021802CB02CB01FF037203D902FE00FF0132020203310301033102FE01320198019801FF02FE01320165013201FF01FF01FF01FF01FF01FF01FF01FF01FF01FF01FF01320132013202FE01FF01FF02FE02E702BF02CB02F302A6028C030502E70181020D03000273038002E702FE02A602FE02D9023202CB02E702E703E602E702E7026501320202013201FF0132013201FF01CC01CC01FF01CC013201CC01FF0132013201CC00FF0331023201FF01FF01CC01A50198014C021801CC029801CF01E5019801FF03FE01FF01FF01FF',
+	bx10: '02B303BE037E032502FE0384033E037E033E037E033E029E027E027E03BE03BE013F015F023F023F023F023F023F036501FF0255033E037E023F04110491037E013F015E025A03BE023F03BE037E013F01BF01BF023F037E013F017F013F023F023F023F023F023F023F023F023F023F023F023F013F013F015E037E021F021F037E03650332033E037102F302D30388038401B40252038502B304430384035F0312035F035E027E03200374036504A40365036502BE013F025A013F023F013F013F022F027E01FF027E020F015F023F027E013F015F025E013F03BE027E023F027E025E01D901C501BF027E025E033E025E025E01FF023F047E023F023F023F',
+	sl10: '02710341030902B6029A02EE02D2030902D2030902D20247022B022B034103410115013101F401F401F401F401F4032801BC01F402D2030901F4038603F503090115011501F4034101F40341030901150184018401F403090115014D011501F401F401F401F401F401F401F401F401F401F401F4011501150115030901D801D8030902EE02C402D202FB02A8028C031002EE0169020103090271039402EE030902A8030902E0022B02D202EE02EE040302EE02EE0263011501F4011501F40115011501F4022B01BC022B01BC013101F4022B01150131020F01150341022B01F4022B020F0187018A0184022B020F02D2020F020F01BC01F403E801F401F401F4',
+	mi10: '0267034102FA02B602E6033F030B0247029A02640304027F0235020501BC019501B501F001D5016102400247025A01ED01B5023A0205023B01B5021C02530271028B026E01D2024F033C0205016A028E03E803E803E803E80115011501F401F401F401F401F401F401F401F401F401F401F401F401150115030901F4030901F4021202EE02F602CA033B02E202830312033F01B7022A035102A803CA032302FA0282031602F70265024802AA024703B0033C024402AA01840184018403E803E801A0021001AD01B0020801D101E901DC02400158019B0208012A036E025801E401F701BE01C301D40169023C01E402CB023B01EA01D101420180027C01F40115',
+	mi7: '02B503BA0364031D034C03A7037602A5030102CC037002E602870258020701DC0207024C022001A6029C02A502B6023C0207029C02500296020E027802AE02C902F302CF021B02B103B5025001B702EF04720472047204720153015302490249024902490249024902490249024902490249024901530153037C0249037C02490262035B035F033303A6034602D4037903A701FA027803BF030F04410388036402D70383035C02BD02A2030A02A2043203A8029F030A01CE01CE01CE0472047201DE026B01F601FE0252021E022D022D029C019401D8025F016903F502C20233024C020B0212021B01AF02A3023B033A028702430221018E01B902DA02490153',
+	sy10: '03090115030901F4030901F4030903090309030903090309030903E801F401F403090309030903090309030903090309030903090309030903E803E80309030903E803E801F401F403E803E803E8030903E803E80263026303E803E803E80309011303E8029A029A0378037800000000022B022B029A01F402D202D2030903090263031E0290020E0303020F02CF0252034C022002A502F902B104B00334031C02B70330034F025D02200271026403DB02C9029C02D4029A029A029A029A029A0263026301BC01BC01BC01BC01F401F401840184011501F401F4026301F40115034102EE034101A0029A029A0309030901BC01BC01BC02630309030903090309',
+	sy7: '037C0153037C0249037C0249037C037C037C037C037C037C037C047202490249037C037C037C037C037C037C037C037C037C037C037C037C04720472037C037C0472047202490249047204720472037C0472047202C402C4047204720472037C014904720301030103F703F7000000000286028603010249033F033F037C037C02C4039502F1026C03790268033202B003D20286030E03670317053E03A70389032903A703D502BE028702CD02CF046F033202FC03370301030103010301030102C402C4020B020B020B020B0249024901CE01CE01530249024902C40249015303AA035B03BA01ED03010301037C037C020B020B020B02C4037C037C037C037C',
+	ex10: '01CA01CA01A001A001D801D801D801D80247024701D801D8014D022B024102410255025502E002E0020F020F024702470247024702EE02EE02EE02EE041404140317031702470247027E027E027E027E032503250325032504FD04FD032B032B036B036B029A029A029A029A029A029A0378037803780378037803780378029A036B036B036B036B026302630341045701D8022B045705E7045705E7045705E7041F03B001D80341034103410341034105A404FD022B0457045704570457045703B004FD022B03E805A4022B03E805A401D801D8020F020F020F020F029A029A03E803E803E803E8041F041F041F0309029A029A01C201C201C201C203090309',
+};
+var T3U = {
+	mi: '0393,0394,0398,039B,039E,03A0,03A3,03A5,03A6,03A8,03A9,03B1,03B2,03B3,03B4,03F5,03B6,03B7,03B8,03B9,03BA,03BB,03BC,03BD,03BE,03C0,03C1,03C3,03C4,03C5,03C6,03C7,03C8,03C9,03B5,03D1,03D6,03F1,03C2,03D5,21BC,21BD,21C0,21C1,,,25B9,25C3,0030,0031,0032,0033,0034,0035,0036,0037,0038,0039,002E,002C,003C,002F,003E,22C6,2202,0041,0042,0043,0044,0045,0046,0047,0048,0049,004A,004B,004C,004D,004E,004F,0050,0051,0052,0053,0054,0055,0056,0057,0058,0059,005A,266D,266E,266F,2323,2322,2113,0061,0062,0063,0064,0065,0066,0067,0068,0069,006A,006B,006C,006D,006E,006F,0070,0071,0072,0073,0074,0075,0076,0077,0078,0079,007A,0131,0237,2118,,2040',
+	sy: '2212,22C5,00D7,2217,00F7,22C4,00B1,2213,2295,2296,2297,2298,2299,25EF,2218,2219,224D,2261,2286,2287,2264,2265,2AAF,2AB0,223C,2248,2282,2283,226A,226B,227A,227B,2190,2192,2191,2193,2194,2197,2198,2243,21D0,21D2,21D1,21D3,21D4,2196,2199,221D,2032,221E,2208,220B,25B3,25BD,,21A6,2200,2203,00AC,2205,211C,2111,22A4,22A5,2135,D835DC9C,212C,D835DC9E,D835DC9F,2130,2131,D835DCA2,210B,2110,D835DCA5,D835DCA6,2112,2133,D835DCA9,D835DCAA,D835DCAB,D835DCAC,211B,D835DCAE,D835DCAF,D835DCB0,D835DCB1,D835DCB2,D835DCB3,D835DCB4,D835DCB5,222A,2229,228E,2227,2228,22A2,22A3,230A,230B,2308,2309,007B,007D,27E8,27E9,007C,2225,2195,21D5,005C,2240,221A,2A3F,2207,222B,2294,2293,2291,2292,00A7,2020,2021,00B6,2663,2662,2661,2660',
+	ex: '0028,0029,005B,005D,230A,230B,2308,2309,007B,007D,27E8,27E9,23D0,2016,002F,005C,0028,0029,0028,0029,005B,005D,230A,230B,2308,2309,007B,007D,27E8,27E9,002F,005C,0028,0029,005B,005D,230A,230B,2308,2309,007B,007D,27E8,27E9,002F,005C,002F,005C,239B,239E,23A1,23A4,23A3,23A6,23A2,23A5,23A7,23AB,23A9,23AD,23A8,23AC,23AA,23D0,239D,23A0,239C,239F,27E8,27E9,2A06,2A06,222E,222E,2A00,2A00,2A01,2A01,2A02,2A02,2211,220F,222B,22C3,22C2,2A04,22C0,22C1,2211,220F,222B,22C3,22C2,2A04,22C0,22C1,2210,2210,02C6,02C6,02C6,02DC,02DC,02DC,005B,005D,230A,230B,2308,2309,007B,007D,221A,221A,221A,221A,,,,2016,,,,,,,,',
+	text: '0393,0394,0398,039B,039E,03A0,03A3,03A5,03A6,03A8,03A9,00660066,00660069,0066006C,006600660069,00660066006C,0131,0237,0060,00B4,02C7,02D8,00AF,02DA,00B8,00DF,00E6,0153,00F8,00C6,0152,00D8,,,,,,,,,,,,,,,,,,,,,,,,,,,,,00A1,,00BF,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,2013,2014,02DD,007E,00A8',
+};
+
+var T3FAM = { r10: 'text', ti10: 'text', bx10: 'text', sl10: 'text',
+	mi10: 'mi', mi7: 'mi', sy10: 'sy', sy7: 'sy', ex10: 'ex' };
+var t3wCache = {}, t3uCache = {};
+function t3w(fam) {
+	if (!t3wCache[fam]) {
+		var s = T3W[fam], out = [];
+		for (var i = 0; i < 128; i++)
+			out.push(parseInt(s.substring(i * 4, i * 4 + 4), 16) / 1000);
+		t3wCache[fam] = out;
+	}
+	return t3wCache[fam];
+}
+function t3u(kind) {
+	if (!t3uCache[kind]) t3uCache[kind] = T3U[kind].split(',');
+	return t3uCache[kind];
+}
+function t3med(a) {
+	var s = a.slice().sort(function (x, y) { return x - y; });
+	var n = s.length;
+	if (!n) return 0;
+	return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+function t3tol(w) { return Math.max(0.03, 0.75 / w); }
+// A glyph named ';' ',' or ';;' may really sit at byte zero - the
+// producers write junk names for code zero's glyph (fpio's Gamma
+// reads ';', CMU's minus reads ',') - so the width arbitrates
+// between the name's own byte and byte zero.
+function t3pos(g, F, em) {
+	var p = g.nb;
+	if (p < 0 || p > 127) return -1;
+	if (!g.amb || g.w <= 0 || em <= 0) return p;
+	var ds = F[p] > 0 ? Math.abs(g.w / (em * F[p]) - 1) : 9;
+	var dz = F[0] > 0 ? Math.abs(g.w / (em * F[0]) - 1) : 9;
+	var t = t3tol(g.w);
+	if (ds <= dz) return ds <= t ? p : -1;
+	return dz <= t ? 0 : -1;
+}
+// Score one candidate family: the widths are integers in the font's
+// own units, so the em falls out as the median ratio against the
+// family's canonical 1/1000-em widths, and the score is the fraction
+// of glyphs whose ratio agrees with that em - tolerance floored for
+// integer rounding on narrow glyphs.  Positions read from the glyph
+// names or from the codes themselves (useCodes), whichever fits: the
+// first is the dvips scheme, the second CMU's original-position one.
+function t3fit(glyphs, F, useCodes) {
+	var ratios = [], i, g, p;
+	for (i = 0; i < glyphs.length; i++) {
+		g = glyphs[i];
+		p = useCodes ? g.code : g.nb;
+		if (p < 0 || p > 127 || g.w <= 0) continue;
+		if (!useCodes && g.amb) continue;
+		if (F[p] > 0) ratios.push(g.w / F[p]);
+	}
+	if (ratios.length < 3) return null;
+	var em = t3med(ratios);
+	if (em <= 0) return null;
+	var hits = 0, scor = 0, dw = {};
+	for (i = 0; i < glyphs.length; i++) {
+		g = glyphs[i];
+		p = useCodes ? g.code : t3pos(g, F, em);
+		if (p < 0 || p > 127 || g.w <= 0 || !(F[p] > 0)) continue;
+		scor++;
+		if (Math.abs(g.w / (em * F[p]) - 1) <= t3tol(g.w)) {
+			hits++;
+			dw[Math.round(F[p] * 1000)] = 1;
+		}
+	}
+	var nd = 0, k;
+	for (k in dw) nd++;
+	return { em: em, hits: hits, scorable: scor, distinct: nd,
+		score: scor ? hits / scor : 0 };
+}
 function completeType3(doc) {
 	var n;
 	try { n = doc.countObjects(); } catch (e) { return; }
@@ -310,20 +420,23 @@ function completeType3(doc) {
 		}
 		var textish = hasDigit || !controlOutside;
 		// proportional type proven by its own Widths; no proof, no remap
-		var varied = false, w = r.get('Widths'), seen = -1;
+		var fc = r.get('FirstChar');
+		fc = (fc && !fc.isNull()) ? parseInt(fc.toString()) : 0;
+		var varied = false, w = r.get('Widths'), seen = -1, wid = {};
 		if (w && !w.isNull()) {
 			w = w.resolve();
 			if (w.isArray()) {
 				for (var wi = 0; wi < w.length; wi++) {
 					var wv = parseFloat(w.get(wi).toString());
 					if (wv > 0) {
+						wid[fc + wi] = wv;
 						if (seen < 0) seen = wv;
-						else if (Math.abs(wv - seen) > 0.01) { varied = true; break; }
+						else if (Math.abs(wv - seen) > 0.01) varied = true;
 					}
 				}
 			}
 		}
-		var covered = {}, chars = [], ranges = [];
+		var covered = {}, keptChar = [], keptRange = [];
 		var tu = r.get('ToUnicode');
 		if (tu && !tu.isNull()) {
 			var text = '';
@@ -339,32 +452,134 @@ function completeType3(doc) {
 					if (isrange && e2[3]) {
 						var b = parseInt(e2[2], 16);
 						for (var c = a; c <= b; c++) covered[c] = true;
-						ranges.push('<' + e2[1] + '> <' + e2[2] + '> <' + e2[4] + '>');
+						keptRange.push([a, b, parseInt(e2[4], 16),
+							'<' + e2[1] + '> <' + e2[2] + '> <' + e2[4] + '>']);
 					} else if (!isrange) {
 						covered[a] = true;
-						chars.push('<' + e2[1] + '> <' + e2[2] + '>');
+						keptChar.push([a, e2[2].toUpperCase(),
+							'<' + e2[1] + '> <' + e2[2] + '>']);
 					}
 				}
 			}
 		}
-		var added = 0;
-		for (var c3 in names) {
-			c3 = parseInt(c3);
-			if (covered[c3]) continue;
-			var nm2 = names[c3], u = null;
-			if (nm2.length == 1) {
-				var byte = nm2.charCodeAt(0);
-				if (byte >= 0x20 && byte < 0x7F)
-					u = (textish && varied && texy[byte]) ? texy[byte] : nm2;
-				else if (textish && lig[byte]) u = lig[byte];
-			}
-			if (u === null) continue;
-			var tgt = '';
-			for (var t = 0; t < u.length; t++) tgt += hx4(u.charCodeAt(t));
-			chars.push('<' + hx2(c3) + '> <' + tgt + '>');
-			added++;
+		// the width fingerprint: which Computer Modern family is this?
+		var glyphs = [];
+		for (var cs in names) {
+			var cc = parseInt(cs), nm1 = names[cs];
+			var nb1 = nm1.length == 1 ? nm1.charCodeAt(0)
+				: (nm1 == ';;' ? 0x3B : -1);
+			glyphs.push({ code: cc, nb: nb1, w: wid[cc] || 0,
+				dbl: nm1 == ';;', amb: nb1 == 0x3B || nb1 == 0x2C });
 		}
-		if (added == 0) continue;
+		var best = null, byFam = {}, fam, fit, fitC;
+		for (fam in T3W) {
+			var F1 = t3w(fam);
+			fit = t3fit(glyphs, F1, false);
+			fitC = t3fit(glyphs, F1, true);
+			// a tie keeps the names: dvips names glyphs honestly, and
+			// where names equal codes both readings agree anyway
+			if (fitC && (!fit || fitC.score > fit.score)) {
+				fitC.codes = true;
+				fit = fitC;
+			}
+			if (!fit) continue;
+			fit.fam = fam;
+			fit.kind = T3FAM[fam];
+			fit.F = F1;
+			if (!byFam[fit.kind] || fit.score > byFam[fit.kind].score)
+				byFam[fit.kind] = fit;
+			if (!best || fit.score > best.score) best = fit;
+		}
+		// small subsets must fit perfectly; every winner needs three
+		// distinct canonical widths (a digits-only or typewriter
+		// subset proves nothing) and a clear margin over the best of
+		// every other family
+		var win = null;
+		if (best && best.scorable >= 3 && best.distinct >= 3 &&
+			best.score >= (best.scorable < 5 ? 1.0 : 0.85)) {
+			var rival = 0;
+			for (var k2 in byFam)
+				if (k2 != best.kind && byFam[k2].score > rival)
+					rival = byFam[k2].score;
+			if (best.score - rival >= 0.1) win = best;
+		}
+		var chars = [], ranges = [], c3, tgt, t;
+		if (win && win.kind != 'text') {
+			// a fingerprinted math font: the family table reads every
+			// positioned glyph, the shipped entries included - subset
+			// CMaps lie (fpio maps a script M to V, a C to E) - and a
+			// byte the table leaves blank stays honestly unmapped
+			var dtab = t3u(win.kind), dec = {}, changed = false;
+			for (var gi = 0; gi < glyphs.length; gi++) {
+				var g2 = glyphs[gi];
+				var p2 = win.codes ? g2.code : t3pos(g2, win.F, win.em);
+				if (p2 >= 0 && p2 <= 127 && dtab[p2]) dec[g2.code] = dtab[p2];
+			}
+			for (c3 in dec) {
+				chars.push('<' + hx2(parseInt(c3)) + '> <' + dec[c3] + '>');
+				if (!covered[c3]) changed = true;
+			}
+			for (var ki = 0; ki < keptChar.length; ki++) {
+				if (dec[keptChar[ki][0]] === undefined)
+					chars.push(keptChar[ki][2]);
+				else if (dec[keptChar[ki][0]] != keptChar[ki][1])
+					changed = true;
+			}
+			for (var ri = 0; ri < keptRange.length; ri++) {
+				var kr = keptRange[ri], whole = true;
+				for (var c4 = kr[0]; c4 <= kr[1]; c4++) {
+					if (dec[c4] === undefined) whole = false;
+					else if (dec[c4] != hx4(kr[2] + (c4 - kr[0]))) changed = true;
+				}
+				if (whole) continue;
+				for (c4 = kr[0]; c4 <= kr[1]; c4++)
+					if (dec[c4] === undefined)
+						chars.push('<' + hx2(c4) + '> <' +
+							hx4(kr[2] + (c4 - kr[0])) + '>');
+			}
+			if (!changed) continue;
+		} else {
+			// text or unfingerprinted: unit 1's name reading, plus the
+			// text table where a text fingerprint licenses it - Greek
+			// capitals, ligatures, accents, the OT1 dashes - and a
+			// width veto where the metrics contradict a printable
+			// name, so byte zero's junk name cannot print as prose
+			var ttab = win ? t3u('text') : null;
+			var added = 0;
+			for (var gj = 0; gj < glyphs.length; gj++) {
+				var g3 = glyphs[gj];
+				c3 = g3.code;
+				if (covered[c3]) continue;
+				if (g3.dbl && !win) continue;
+				var p3 = win ? t3pos(g3, win.F, win.em) : g3.nb;
+				var u = null;
+				tgt = null;
+				if (p3 < 0 || p3 > 127) continue;
+				if (win && ttab[p3]) {
+					tgt = ttab[p3];
+				} else if (p3 >= 0x20 && p3 < 0x7F) {
+					if (win && g3.w > 0 && win.F[p3] > 0 &&
+						Math.abs(g3.w / (win.em * win.F[p3]) - 1) > t3tol(g3.w))
+						continue;
+					u = (textish && varied && texy[p3]) ? texy[p3]
+						: String.fromCharCode(p3);
+				} else if (textish && lig[p3]) {
+					u = lig[p3];
+				}
+				if (u !== null) {
+					tgt = '';
+					for (t = 0; t < u.length; t++) tgt += hx4(u.charCodeAt(t));
+				}
+				if (tgt === null) continue;
+				chars.push('<' + hx2(c3) + '> <' + tgt + '>');
+				added++;
+			}
+			for (var kj = 0; kj < keptChar.length; kj++)
+				chars.push(keptChar[kj][2]);
+			for (var rj = 0; rj < keptRange.length; rj++)
+				ranges.push(keptRange[rj][3]);
+			if (added == 0) continue;
+		}
 		var out = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap\\n' +
 			'/CMapName /T3UVX def /CMapType 2 def\\n' +
 			'1 begincodespacerange <00> <ff> endcodespacerange\\n';
@@ -567,8 +782,16 @@ whatever a package manager copies where.")
   "Path the walker source is written at, once per session.")
 
 (defun pdf-text--walker-file ()
-  "The walker source on disk, written on first use."
-  (if (and pdf-text--walker-cache (file-readable-p pdf-text--walker-cache))
+  "The walker source on disk, written on first use.
+The cached file's contents are checked against the source, because a
+live session that reloads a newer package keeps the old defvar and
+the old file - and a stale walker under fresh elisp is exactly the
+drift keeping the source in the elisp is meant to rule out."
+  (if (and pdf-text--walker-cache
+           (file-readable-p pdf-text--walker-cache)
+           (with-temp-buffer
+             (insert-file-contents pdf-text--walker-cache)
+             (string= (buffer-string) pdf-text--walker-source)))
       pdf-text--walker-cache
     (setq pdf-text--walker-cache
           (make-temp-file "pdf-text-walker" nil ".js"
@@ -4982,7 +5205,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 20
+(defconst pdf-text-render-version 21
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

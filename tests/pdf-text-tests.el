@@ -519,6 +519,48 @@ HEADINGS are the org heading lines the outline puts on that page."
                       "1.2 A brief history : : : : : : 2")))
             :to-equal '("1.2 A brief history 2"))))
 
+(describe "the pipeline over decoded Type 3 math records"
+  ;; The math decode lives in the walker: a fingerprinted cmmi font
+  ;; serves λ, μ, Ω as themselves instead of U+FFFD, and the fpio
+  ;; leader glyphs arrive as the periods they always were rather
+  ;; than the ":" their byte names spelled.  Every elisp rule is
+  ;; glyph-agnostic, so decoded Greek must ride the same paths -
+  ;; these specs are the gate that the decode cannot regress the
+  ;; leader strip or the joins.
+
+  (it "strips a dot fill beside a Greek entry and keeps the pairing"
+    (let ((out (pdf-text--strip-leaders
+                (list (pdf-text-tests--line
+                       "2.1 Types of μνλ2"
+                       :x0 0.1657 :x1 0.3200 :base 0.30 :height 0.0138)
+                      (pdf-text-tests--line
+                       ". . . . . . . . . . . . . . . . . ."
+                       :x0 0.3400 :x1 0.8000 :base 0.30 :height 0.0138)
+                      (pdf-text-tests--line
+                       "16" :x0 0.8159 :x1 0.8335 :base 0.30
+                       :height 0.0138)))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("2.1 Types of μνλ2 16"))
+      (expect (pdf-text-line-kind (car out)) :to-be 'entry)))
+
+  (it "strips a decoded fill welded into a Greek entry's record"
+    (expect (mapcar #'pdf-text-line-text
+                    (pdf-text--strip-leaders
+                     (list (pdf-text-tests--line
+                            "2.3 Reduction in μνλ2 . . . . . . . . . ."
+                            :x0 0.1657 :x1 0.8000 :base 0.30 :height 0.0138)
+                           (pdf-text-tests--line
+                            "18" :x0 0.8159 :x1 0.8335 :base 0.30
+                            :height 0.0138))))
+            :to-equal '("2.3 Reduction in μνλ2 18")))
+
+  (it "collects the book's Greek compounds for the wrap join"
+    (let ((table (pdf-text--hyphenated-words
+                  (list (pdf-text-tests--page
+                         '(("the λ-calculus and the π-calculus differ")))))))
+      (expect (gethash "λ-calculus" table) :to-be-truthy)
+      (expect (gethash "π-calculus" table) :to-be-truthy))))
+
 (describe "pdf-text--join-split-lines"
   :var ((profile '(:height 0.0136 :leading 0.017 :space 0.0047)))
 
@@ -1023,7 +1065,25 @@ HEADINGS are the org heading lines the outline puts on that page."
                         (insert-file-contents first)
                         (buffer-string))
                       :to-equal pdf-text--walker-source))
-          (delete-file first))))))
+          (delete-file first)))))
+
+  (it "rewrites a cached file whose contents drifted from the source"
+    ;; a live session upgrades the package: the elisp reloads but the
+    ;; cache still points at the previous walker on disk, and every
+    ;; extraction would run the stale one - the reader and its walker
+    ;; must never drift, which is the reason the source lives in the
+    ;; elisp at all
+    (let* ((stale (make-temp-file "pdf-text-walker" nil ".js" "// stale"))
+           (pdf-text--walker-cache stale))
+      (unwind-protect
+          (let ((fresh (pdf-text--walker-file)))
+            (unwind-protect
+                (expect (with-temp-buffer
+                          (insert-file-contents fresh)
+                          (buffer-string))
+                        :to-equal pdf-text--walker-source)
+              (unless (equal fresh stale) (delete-file fresh))))
+        (delete-file stale)))))
 
 (describe "pdf-text--page-lines"
   (it "reads plain text lines with no geometry"

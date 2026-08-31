@@ -1,0 +1,33 @@
+1.3. SEMANTICS OF FUNCTIONAL LANGUAGES
+
+of expressing concurrency using streams. They verify a communications protocol expressed as a concurrent network of stream-based functions.
+
+** 1.3 Semantics of functional languages
+
+To obtain a theory of functional I/O, we must begin with a theory of functional programming itself. In the context of this dissertation, such a theory has two purposes: to specify precisely the computational behaviour of functional programs so that implementations could be verified; and to enable program properties to be stated and proved.
+
+Abramsky [2 ] points out that although the untyped λ-calculus has often been viewed as the prototypical functional language, actual implementations of lazy languages do not conform to the standard theory [10 ]. Abramsky considers two functional programs,
+
+  (\x ->
+
+Ω) and Ω, where Ω is a looping or divergent program. He points out that according to the standard theory, the two are equal, but in the implementation of lazy languages such as Miranda or Lazy ML, evaluation of the first converges whereas evaluation of the second diverges. Motivated by this example, Abramsky develops his lazy λ-calculus as a step towards a theory of lazy functional programming. Following Plotkin's study of PCF [117 ], Abramsky equips the lazy λ-calculus with a structural operational semantics [55 , 119 ] and a domain-theoretic denotational semantics. He then proves an adequacy theorem to relate the two semantics.
+
+As far as this dissertation is concerned, Abramsky's key manoeuvre is to view his lazy
+
+λ-calculus as a process calculus. Led by Milner, a great many operationally-based methods have been developed for the CCS theory of concurrency [93 , 94 ]. Bisimilarity, found by taking the greatest fixpoint of a certain functional [31 ], is a cornerstone of this theory. Since it is a greatest fixpoint it admits
+
+co-inductive
+proofs [97 , 114 ]. Abramsky builds
+
+a bridge between CCS and the λ-calculus by proposing
+applicative bisimulation
+
+as the notion of operational equivalence in the lazy λ-calculus. Applicative bisimulation is a reworking of CCS bisimulation for the λ-calculus.
+
+We follow Abramsky and construct a theory of functional programming based on structural operational semantics and applicative bisimulation. Verification of an implementation could be based on the operational semantics, but this is beyond the scope of the dissertation. Proofs of program properties are based on a theory of applicative bisimulation that parallels that of CCS. It is important that applicative bisimulation is a congruence relation, that is, a substitutive equivalence relation. Abramsky's original proof that application bisimulation is a congruence depended on domain-theoretic results. Stoughton and Howe made two suggestions for how congruence could be proved directly from the operational semantics. Stoughton suggested a variant of Milner's context lemma [12 , 91]. Howe, with an ingenious construction, proved congruence for a broad range of lazy computation systems [58 ]. In Chapter 4 we will investigate both the context lemma and Howe's method. In related work, Milner [95 ] and Sangiorgi [129 ] link the lazy λ-calculus with the theory of
+
+  π
+
+-calculus, a development of CCS with mobile processes [96 ]. Smith [133 ] builds on Howe's work to construct semantic domains from operational semantics.
+
+A semantics of functional programs [21 , 54 ] has often been based on domain-theoretic denotational semantics [102 , 118 , 130 , 134 ]. Stoy's classic paper [135 ] shows how domain-
