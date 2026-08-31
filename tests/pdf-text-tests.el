@@ -4242,6 +4242,41 @@ property; LINES are those records, so a spec can assert identity."
         (expect (buffer-substring-no-properties (car bounds) (cdr bounds))
                 :to-equal "The reader wins today.")))))
 
+(describe "pdf-text-follow--span"
+  (it "covers the active region and hands back to the sentence after"
+    (with-temp-buffer
+      (insert "One sentence here. Another sentence there.")
+      (goto-char (point-max))
+      (let ((transient-mark-mode t))
+        (push-mark (point-min) t t)
+        (expect (pdf-text-follow--span)
+                :to-equal (cons (point-min) (point-max)))
+        (deactivate-mark)
+        (let ((span (pdf-text-follow--span)))
+          (expect (buffer-substring-no-properties (car span) (cdr span))
+                  :to-equal "Another sentence there.")))))
+
+  (it "clamps a selection to the page at point"
+    (pcase-let* ((`(,p1 . ,_)
+                  (pdf-text-tests--tagged-page
+                   '(("Alpha beta gamma delta epsilon." :x1 0.6))))
+                 (`(,p2 . ,lines2)
+                  (pdf-text-tests--tagged-page
+                   '(("Zeta eta theta iota kappa." :x1 0.6)))))
+      (with-temp-buffer
+        (pdf-text--insert-pages (list p1 p2))
+        (goto-char (point-max))
+        (let ((transient-mark-mode t))
+          (push-mark (point-min) t t)
+          (let ((span (pdf-text-follow--span)))
+            (expect (car span) :to-equal (pdf-text--page-start 2))
+            (expect (pdf-text-follow--rects span)
+                    :to-equal
+                    (list (list (pdf-text-line-x0 (car lines2))
+                                (pdf-text-line-top (car lines2))
+                                (pdf-text-line-x1 (car lines2))
+                                (pdf-text-line-bot (car lines2)))))))))))
+
 (describe "pdf-text-follow--rects"
   (it "reduces a sentence's span to its lines' ink boxes, in order"
     (pcase-let* ((`(,text . ,lines)

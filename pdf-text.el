@@ -70,6 +70,11 @@
 ;; dynamic in pdf-info; declared so the let-binding around the async
 ;; render compiles as special without pdf-tools on the load path
 (defvar pdf-info-asynchronous)
+;; evil's visual bounds, read guarded when the follow span consults
+;; them; declared so the reads compile without evil on the load path
+(defvar evil-visual-beginning)
+(defvar evil-visual-end)
+(declare-function evil-visual-state-p "ext:evil-states")
 (declare-function org-cycle-overview "org-cycle")
 (declare-function org-fold-show-set-visibility "org-fold")
 (declare-function org-fold-show-entry "org-fold")
@@ -5467,8 +5472,8 @@ the page image, so no overlay attributes apply."
   "Monotonic id of the newest highlight render; stale answers drop.")
 
 (defvar-local pdf-text-follow--bounds nil
-  "Sentence bounds the highlight last settled on.
-Motions inside them repaint nothing.")
+  "Span the highlight last settled on - a sentence or an active region.
+Motions inside it repaint nothing.")
 
 (defvar-local pdf-text-follow--painted nil
   "Page number the highlight last painted, nil while the page is clean.")
@@ -5476,9 +5481,39 @@ Motions inside them repaint nothing.")
 (defun pdf-text-follow--sentence ()
   "Bounds of the sentence at point, or nil off prose.
 Reflowed text separates sentences with a single space, which the
-default `sentence-end-double-space' reads past."
+default `sentence-end-double-space' reads past.  At the end of the
+buffer thingatpt finds nothing, and the reader is on the last
+sentence, not off prose."
   (let ((sentence-end-double-space nil))
-    (bounds-of-thing-at-point 'sentence)))
+    (or (bounds-of-thing-at-point 'sentence)
+        (and (eobp) (not (bobp))
+             (save-excursion
+               (backward-char)
+               (bounds-of-thing-at-point 'sentence))))))
+
+(defun pdf-text-follow--span ()
+  "What the highlight covers: the active region, else the sentence at point.
+A reader selecting a paragraph means the paragraph; the sentence takes
+over when the selection drops.  Evil's visual bounds are read where
+they exist, because a linewise selection covers whole lines there
+while the plain region holds bare point and mark.  The span clamps to
+the page at point - the paint renders one page."
+  (when-let* ((bounds
+               (cond
+                ((and (fboundp 'evil-visual-state-p)
+                      (evil-visual-state-p)
+                      (bound-and-true-p evil-visual-beginning)
+                      (bound-and-true-p evil-visual-end))
+                 (cons evil-visual-beginning evil-visual-end))
+                ((use-region-p)
+                 (cons (region-beginning) (region-end)))
+                (t (pdf-text-follow--sentence)))))
+    (if pdf-text--page-starts
+        (let* ((page (pdf-text-page-at-point))
+               (beg (max (car bounds) (pdf-text--page-start page)))
+               (end (min (cdr bounds) (pdf-text--page-end page))))
+          (and (< beg end) (cons beg end)))
+      bounds)))
 
 (defun pdf-text-follow--rects (bounds)
   "Source-line rects under BOUNDS, as (LEFT TOP RIGHT BOT) page fractions.
@@ -5599,8 +5634,8 @@ no renders at all."
         (pdf-text-follow--refresh)))))
 
 (defun pdf-text-follow--refresh ()
-  "Move the highlight to the sentence at point when it changed."
-  (let ((bounds (pdf-text-follow--sentence)))
+  "Move the highlight to the span at point when it changed."
+  (let ((bounds (pdf-text-follow--span)))
     (unless (equal bounds pdf-text-follow--bounds)
       (let ((rects (and bounds (pdf-text-follow--rects bounds))))
         (if rects
@@ -5710,7 +5745,8 @@ on RET works without the mode."
 
 (define-minor-mode pdf-text-follow-mode
   "Highlight the sentence at point on the PDF page.
-Rides `pdf-text-sync-mode': enabling the follow pulls the sync up,
+An active selection takes over from the sentence for as long as it
+stands.  Rides `pdf-text-sync-mode': enabling the follow pulls the sync up,
 disabling the sync takes the follow down with it, and the follow
 toggles off alone for a reader who wants the page synced but clean."
   :lighter " pdf-follow"
