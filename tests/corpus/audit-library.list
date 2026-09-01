@@ -1,0 +1,398 @@
+;; The whole reading library: every book outside Books/Math (a 4740-file
+;; bulk archive, not a shelf) and every paper.  The standing per-unit gate
+;; is audit-books.list; this list is the on-demand full proof - hours, not
+;; minutes.  Excluded as damaged (kills epdfinfo, the recovery class):
+;;   ~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Simon_Marlow-Haskell_Language_Report_2010(2010).pdf
+~/SyncMobile/Books/A Mind for Numbers - How to Excel at Math and Science.pdf
+~/SyncMobile/Books/A Short History of Nearly Everything by Bill Bryson.pdf
+~/SyncMobile/Books/ANAYA_Gramatica_B1.pdf
+~/SyncMobile/Books/Advice on Upskilling.pdf
+~/SyncMobile/Books/Alex Xu - System Design Interview – An insider's guide, Second Edition.pdf
+~/SyncMobile/Books/Atomic Habits An Easy Proven Way to Build Good Habits Break Bad Ones by James Clear.pdf
+~/SyncMobile/Books/Bash Quick Reference.pdf
+~/SyncMobile/Books/Bill Bryson - The Mother Tongue - English & How It Got That Way.pdf
+~/SyncMobile/Books/Clojure/Clojure Cookbook - 2014.pdf
+~/SyncMobile/Books/Clojure/Clojure Data Analysis Cookbook, 2nd Edition - 2015.pdf
+~/SyncMobile/Books/Clojure/Clojure Data Structures and Algorithms Cookbook True PDF {PRG} 2015.pdf
+~/SyncMobile/Books/Clojure/Clojure Reactive Programming - 2015.pdf
+~/SyncMobile/Books/Clojure/Clojure in Action - 2012.pdf
+~/SyncMobile/Books/Clojure/Clojure in Pieces- Rich Hickey.pdf
+~/SyncMobile/Books/Clojure/Clojure_The_Essential_Reference_v31.pdf
+~/SyncMobile/Books/Clojure/Clojure_на_производстве/clojure_print_19b549b_1592466792.pdf
+~/SyncMobile/Books/Clojure/Clojure_на_производстве/clojure_tablet_bdee6f6_1592488481.pdf
+~/SyncMobile/Books/Clojure/Clojurescript/ClojureScript Up and Running - 2013.pdf
+~/SyncMobile/Books/Clojure/Clojurescript/Closure The Definitive Guide.pdf
+~/SyncMobile/Books/Clojure/Clojurescript/Etudes_for_ClojureScript.pdf
+~/SyncMobile/Books/Clojure/Clojurescript/Ryan Baldwin - Clojure Web Development Essentials - 2015/Ryan Baldwin - Clojure Web Development Essentials - 2015.pdf
+~/SyncMobile/Books/Clojure/Clojurescript/Web Development with Clojure - 2014.pdf
+~/SyncMobile/Books/Clojure/Halloway S., Bedra A. - Programming Clojure, 2nd edition - 2012/Halloway S., Bedra A. - Programming Clojure, 2nd edition - 2012.pdf
+~/SyncMobile/Books/Clojure/Living Clojure - 2015.pdf
+~/SyncMobile/Books/Clojure/Mastering Clojure Data Analysis - 2014.pdf
+~/SyncMobile/Books/Clojure/Mastering Clojure Macros 2014.pdf
+~/SyncMobile/Books/Clojure/Oreilly.Clojure.Programming.Mar.2012.pdf
+~/SyncMobile/Books/Clojure/Programming Clojure, 2nd edition.pdf
+~/SyncMobile/Books/Clojure/Rathore A. - Clojure in Action (MEAP) - 2011.pdf
+~/SyncMobile/Books/Clojure/Shantanu Kumar - Clojure High Performance Programming (Second Edition) - 2015.pdf
+~/SyncMobile/Books/Clojure/The Joy of Clojure, 2nd Edition - 2014.pdf
+~/SyncMobile/Books/Clojure/cheatsheet-usletter-color.pdf
+~/SyncMobile/Books/Clojure/cspbook.pdf
+~/SyncMobile/Books/Clojure/elementsofclojure.pdf
+~/SyncMobile/Books/Coders at Work (2009).pdf
+~/SyncMobile/Books/Emacs/Introduction to Programming in Emacs Lisp.pdf
+~/SyncMobile/Books/Emacs/The GNU Emacs Architecture (unlocking the core).pdf
+~/SyncMobile/Books/Emacs/elisp.pdf
+~/SyncMobile/Books/Emacs/mastering-emacs-v2.pdf
+~/SyncMobile/Books/Emacs/mastering-emacs-v3.pdf
+~/SyncMobile/Books/Emacs/mastering-emacs.pdf
+~/SyncMobile/Books/End-to-End Observability with Grafana.pdf
+~/SyncMobile/Books/Espanol/A new reference grammar of modern Spanish (2019).pdf
+~/SyncMobile/Books/Espanol/Aragones L., Palencia R. - Gramatica de uso del espanol B1-B2 (2009).pdf
+~/SyncMobile/Books/Espanol/Gramatica_B2.pdf
+~/SyncMobile/Books/Espanol/Manual de la Nueva Gramática de la lengua española.pdf
+~/SyncMobile/Books/Espanol/Moreno C., Hernandez C., Kondo C.M. - Gramatica A1-A2. Nivel Elemental (2010).pdf
+~/SyncMobile/Books/Establishing SRE Foundations. Reliability engineering.pdf
+~/SyncMobile/Books/F#/Tomas Petricek, Jon Skeet - Functional Programming for the Real World (2009).pdf
+~/SyncMobile/Books/Felleisen M., Findler R.B., Flatt M., Krishnamurthi Sh. - How to Design Programs, 2nd edition - 2018.pdf
+~/SyncMobile/Books/Fundamentals of Data Observability.pdf
+~/SyncMobile/Books/Gleick, James - Chaos_ making a new science (2015, The Folio Society) - libgen.li.pdf
+~/SyncMobile/Books/Godel, Escher, Bach_ An Eternal Golden Braid by Douglas R. Hofstadter.pdf
+~/SyncMobile/Books/Goetz B., Peierls T., Bloch J., Bowbeer J., Holmes D., Lea D. - Java Concurrency in Practice - 2006.pdf
+~/SyncMobile/Books/Gonzalez J.F. - Java 9 Concurrency Cookbook, 2nd Edition - 2017.pdf
+~/SyncMobile/Books/Haskell/1996-Okasaki--Purely.Functional.Data.Structures[Functional.Programming].pdf
+~/SyncMobile/Books/Haskell/All_About_Monads.pdf
+~/SyncMobile/Books/Haskell/Apress.Beginning Haskell. A Project-based Approach.2014.pdf
+~/SyncMobile/Books/Haskell/HR.pdf
+~/SyncMobile/Books/Haskell/Haskell - The Craft of Functional Programming, 2ed (Addison-Wesley, 1999) by Tantanoid.pdf
+~/SyncMobile/Books/Haskell/Haskell_Programming/haskell-programming-1.0-ereader.pdf
+~/SyncMobile/Books/Haskell/Haskell_Programming/haskell-programming-1.0-screen.pdf
+~/SyncMobile/Books/Haskell/Learn You a Haskell for Great Good - Lipovaca - No Starch (2011).pdf
+~/SyncMobile/Books/Haskell/Real World Haskell (2008).pdf
+~/SyncMobile/Books/Haskell/Simon Marlow - Parallel and Concurrent Programming in Haskell - 2013.pdf
+~/SyncMobile/Books/Haskell/Springer - Advanced Functional Programming Edition 2009 (Elements) Haskell.pdf
+~/SyncMobile/Books/Haskell/haste-lang-paper.pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Berger_E.-FP+OOP=Haskell(1991).pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Graham_Hutton-Programming_in_Haskell-Cambridge_University_Press(2007).pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Hall_C-The_little_Haskeller(1993).pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Haskell - The Craft of Functional Programming, 2ed (Addison-Wesley, 1999) by Tantanoid.pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Hudak_P.-A_gentle_introduction_to_Haskell(1999).pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Hudak_P.-Haskell_vs_Ada_vs_C++_vs_Awk_vs_..._An_experiment_in_software_prototyping_productivity-Yale_University(1994).pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Jeremy_Gibbons_(editor)-Haskell’10_Proceedings_of_the_2010_ACM_SIGPLAN_Haskell_Symposium-acm_press(2010).pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Learn You a Haskell for Great Good.pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Leucker_M.-Functional_programming_languages_for_verification_tools.A_comparison_of_Standard_ML_and_Haskell.pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Page_R.-Two_dozen_short_lessons_in_Haskell-_Rex_Page(1997).pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Simon_Peyton_Jones-Haskell_98_language_and_libraries_The_revised_report-Cambridge_University_Press(2003).pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Stephanie_Weirich_Haskell’09_Program_Chair-Haskell’09_Proceedings_of_the_2009_ACM_SIGPLAN_Haskell_Symposium-acm_press(2009).pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/The Haskell Road to Logic, Maths and Programming.pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Wehr_S.-ML_modules_and_Haskell_type_classes.A_constructive_comparison.pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Why Functional Programming matters.pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/William_Jones-Warp_Speed_Haskell(2009).pdf
+~/SyncMobile/Books/Haskell/other downloaded books/Haskell/YAHT - Yet Another Haskell Tutorial.pdf
+~/SyncMobile/Books/How to Fly a Horse. The Secret History of Creation, Invention, and Discovery.2.pdf
+~/SyncMobile/Books/How to Take Smart Notes.pdf
+~/SyncMobile/Books/Ian Gorton - Foundations of Scalable Systems_ Designing Distributed.pdf
+~/SyncMobile/Books/Implementing Enterprise Observability.pdf
+~/SyncMobile/Books/James Gleick - The Information_ A History, a Theory, a Flood (2011, Pantheon) - libgen.li.pdf
+~/SyncMobile/Books/Javascript/Async Javascript.pdf
+~/SyncMobile/Books/Javascript/DOM enlightment.pdf
+~/SyncMobile/Books/Javascript/FriendsofED.Foundation.HTML5.Animation.with.JavaScript.Dec.2011.pdf
+~/SyncMobile/Books/Javascript/Jump Start CoffeeScript V413HAV.pdf
+~/SyncMobile/Books/Javascript/Michael Fogus - Functional JavaScript - 2013.pdf
+~/SyncMobile/Books/Javascript/Nicholas C. Zakas - High Performance JavaScript 2010.pdf
+~/SyncMobile/Books/Javascript/O'REILLY - Functional JavaScript [June 2013] [masum2444]/O'REILLY - Functional JavaScript.pdf
+~/SyncMobile/Books/Javascript/Oreilly.JavaScript.The.Definitive.Guide.6th.Edition.Apr.2011.pdf
+~/SyncMobile/Books/Javascript/Oreilly.JavaScript.The.Good.Parts.May.2008.pdf
+~/SyncMobile/Books/Javascript/Oreilly.Supercharged.JavaScript.Graphics.Jul.2011.pdf
+~/SyncMobile/Books/Javascript/Packtpub.Object-Oriented.JavaScript.Jul.2008.pdf
+~/SyncMobile/Books/Javascript/Powers Sh. - JavaScript.Cookbook - 2010.pdf
+~/SyncMobile/Books/Javascript/Secrets Of The JavaScript Ninja V413HAV.pdf
+~/SyncMobile/Books/Javascript/Secrets of javascript ninja.pdf
+~/SyncMobile/Books/Javascript/Stoyan Stefanov - JavaScript Patterns 2010.pdf
+~/SyncMobile/Books/Javascript/Stunning CSS3 Dec.2010.pdf
+~/SyncMobile/Books/Javascript/Ullman L. - Modern JavaScript Develop and Design - 2012.pdf
+~/SyncMobile/Books/Javascript/Wrox.Professional.JavaScript.for.Web.Developers.3rd.Edition.Jan.2012.pdf
+~/SyncMobile/Books/Javascript/Zakas N. - Maintainable JavaScript - 2012.pdf
+~/SyncMobile/Books/Javascript/data visualizations/Data Visualization with D3.js Cookbook by Nick Qi Zhu.2013.pdf
+~/SyncMobile/Books/Javascript/data visualizations/Getting.Started.with.D3.pdf
+~/SyncMobile/Books/Javascript/data visualizations/Interactive Data Visualization For The Web V413HAV.pdf
+~/SyncMobile/Books/Javascript/mostly-adequate-guide.pdf
+~/SyncMobile/Books/Javascript/ng-book.pdf
+~/SyncMobile/Books/Javascript/node/Node Security by Dominic Barnes - Oct 2013.pdf
+~/SyncMobile/Books/Javascript/node/Node.js Recipes - Cory Gackenheimer.pdf
+~/SyncMobile/Books/Javascript/node/Packt Publishing Using Node Js For Ui Testing (2013).pdf
+~/SyncMobile/Books/Javascript/node/Powers S. - Learning Node - 2012.pdf
+~/SyncMobile/Books/Javascript/node/Teixeira P. - Professional Node.js Building Javascript Based Scalable Software - 2012.pdf
+~/SyncMobile/Books/Javascript/node/Wilson J. - Node.js the Right Way (The Pragmatic Programmers) - 2013.pdf
+~/SyncMobile/Books/Job-Interview-Guide.pdf
+~/SyncMobile/Books/LLM/Alammar Jay, Grootendorst Maarten - Hands-On Large Language Models - 2024.pdf
+~/SyncMobile/Books/LLM/Amaratunga Th. - Understanding Large Language Models - 2023/Amaratunga Th. - Understanding Large Language Models - 2023.pdf
+~/SyncMobile/Books/LLM/Grigorov D. - Introduction to Python and Large Language Models - 2024/Grigorov D. - Introduction to Python and Large Language Models - 2024.pdf
+~/SyncMobile/Books/LLM/Martra P. - Large Language Models Projects - 2024.pdf
+~/SyncMobile/Books/LLM/Raschka S. - Build a Large Language Model - 2025.pdf
+~/SyncMobile/Books/LLM/Singh B. - Building Applications with Large Language Models - 2024.pdf
+~/SyncMobile/Books/LLM/Super Study Guide Transformers and LLMs.pdf
+~/SyncMobile/Books/Language Agnostic/148GTM_Joseph J. Rotman - An Introduction to the Theory of Groups (1995, 4th edition) [978-1-4612-4176-8].pdf
+~/SyncMobile/Books/Language Agnostic/Algorithms-JeffE(1).pdf
+~/SyncMobile/Books/Language Agnostic/Category theory/A Gentle Introduction to Category Theory - The Calculational Approach.pdf
+~/SyncMobile/Books/Language Agnostic/Category theory/Benjamin C. Pierce - Basic Category Theory for Computer Scientists - 1991.pdf
+~/SyncMobile/Books/Language Agnostic/Category theory/MIT18_S996S13_textbook.pdf
+~/SyncMobile/Books/Language Agnostic/Category theory/category-theory-for-programmers.pdf
+~/SyncMobile/Books/Language Agnostic/Concrete Mathematics A Foundation of Computer Science 2nd Edition.pdf
+~/SyncMobile/Books/Language Agnostic/Cracking the Coding Interview, 4 Edition - 150 Programming Interview Questions and Solutions.pdf
+~/SyncMobile/Books/Language Agnostic/David_J._Agans-Debugging-The_9_Indispensable_Rules_for_Finding_Even_the_Most_Elusive_Hardware_and_Software_Problem__2002.pdf
+~/SyncMobile/Books/Language Agnostic/Foundations of Data Science 2018.pdf
+~/SyncMobile/Books/Language Agnostic/George Polya - How to solve it.pdf
+~/SyncMobile/Books/Language Agnostic/Graph Theory/Gross J.L., Yellen J., Anderson M. - Graph Theory and Its Applications, 3rd edition - 2019.1.pdf
+~/SyncMobile/Books/Language Agnostic/How to solve it modern heuristics.1.pdf
+~/SyncMobile/Books/Language Agnostic/Introduction To Symmetry And Group Theory.pdf
+~/SyncMobile/Books/Language Agnostic/Introduction to Algorithms.pdf
+~/SyncMobile/Books/Language Agnostic/Introduction to Functional Programming. John Harrison.pdf
+~/SyncMobile/Books/Language Agnostic/Introduction to Lambda Calculus.pdf
+~/SyncMobile/Books/Language Agnostic/Knuth D.E. - The Art of Computer Programming - 1997/Knuth D.E. - The Art of Computer Programming, Vol. 1, Fundamental Algorithms, 3rd Edition - 1997.pdf
+~/SyncMobile/Books/Language Agnostic/Knuth D.E. - The Art of Computer Programming - 1997/Knuth D.E. - The Art of Computer Programming, Vol. 2, Seminumerical Algorithms, 3rd Edition - 1997.pdf
+~/SyncMobile/Books/Language Agnostic/Knuth D.E. - The Art of Computer Programming - 1997/Knuth D.E. - The Art of Computer Programming, Vol. 3, Sorting and Searching, 2nd Edition - 1997.pdf
+~/SyncMobile/Books/Language Agnostic/Knuth D.E. - The Art of Computer Programming - 1997/Knuth D.E. - The Art of Computer Programming, Vol. 4A, Combinatorial Algorithms, Part 1 - 1997.1.pdf
+~/SyncMobile/Books/Language Agnostic/Making_Sense_of_Stream_Processing_Confluent_1.pdf
+~/SyncMobile/Books/Language Agnostic/OReilly - Becoming.Functional.Jul.2014.pdf
+~/SyncMobile/Books/Language Agnostic/Okasaki - Purely Functional Data-Structures.pdf
+~/SyncMobile/Books/Language Agnostic/Phiip Wadler Propositions as Types.pdf
+~/SyncMobile/Books/Language Agnostic/Phiip Wadler Theorems for free.pdf
+~/SyncMobile/Books/Language Agnostic/Sam Newman - Building Microservices. Designing Fine-Grained Systems - 2015/Sam Newman - Building Microservices. Designing Fine-Grained Systems - 2015.pdf
+~/SyncMobile/Books/Language Agnostic/Schaum Group Theory.pdf
+~/SyncMobile/Books/Language Agnostic/Stephen Wolfram - A New Kind Of Science.pdf
+~/SyncMobile/Books/Language Agnostic/The Algorithm Design Manual Second Edition 2008.pdf
+~/SyncMobile/Books/Language Agnostic/The Passionate Programmer (2009) - (Malestrom).pdf
+~/SyncMobile/Books/Language Agnostic/The Pragmatic Programmer, From Journeyman To Master - Andrew Hunt, David Thomas - Addison Wesley - 1999.pdf
+~/SyncMobile/Books/Language Agnostic/Why Functional Programming Matters.1.pdf
+~/SyncMobile/Books/Language Agnostic/[Data.Science.for.Business(2013.7)].Foster.Provost.pdf
+~/SyncMobile/Books/Language Agnostic/aata-20160809-sage-7.3 (1).pdf
+~/SyncMobile/Books/Language Agnostic/an-introduction-to-group-theory.pdf
+~/SyncMobile/Books/Language Agnostic/mathematics for computer science.pdf
+~/SyncMobile/Books/Linux Pocket Guide Second Edition.pdf
+~/SyncMobile/Books/Lisp/Basic Lisp Techniques - David J. Cooper.pdf
+~/SyncMobile/Books/Lisp/Conrad Barski - Land of Lisp Learn to Program in Lisp, One Game at a Time - 2010.pdf
+~/SyncMobile/Books/Lisp/sicp-marginless.pdf
+~/SyncMobile/Books/Lisp/sicp.pdf
+~/SyncMobile/Books/Logic-for-Computer-Science.pdf
+~/SyncMobile/Books/Logic_for_computer_science Steve Reeves Mike Clarke.pdf
+~/SyncMobile/Books/Logic_in_computer_science__Benji_MO.pdf
+~/SyncMobile/Books/Machine Learning/Ameisen E. - Building Machine Learning Powered Applications Going From Idea to Product by Emmanuel Ameisen - 2020.pdf
+~/SyncMobile/Books/Machine Learning/Dangeti P. - Statistics for Machine Learning - 2017.pdf
+~/SyncMobile/Books/Machine Learning/Geron A. - Hands-on Machine Learning with Scikit-Learn, Keras, and TensorFlow, 2nd edition - 2019.pdf
+~/SyncMobile/Books/Martin Kleppmann - Designing Data-Intensive Applications - 2017.pdf
+~/SyncMobile/Books/Mind-Over-Machine__Dreyfus_and_Dreyfus.pdf
+~/SyncMobile/Books/Mobile/Alessandria S., Kayfitz B. - Flutter Cookbook - 2021.pdf
+~/SyncMobile/Books/Mobile/Bueno E., Palcar V. - Real-World Flutter by Tutorials (1st Edition) - 2022.pdf
+~/SyncMobile/Books/Mobile/Katz M., Moore K., Ngo V. - Flutter Apprentice (3rd Edition) - 2022.pdf
+~/SyncMobile/Books/Mobile/Managing State in Flutter Pragmatically - 2021 - Apress.pdf
+~/SyncMobile/Books/Mobile/Practical Flutter. Improve your Mobile Development with Google’s Latest Open-Source SDK - Apress - 2019.pdf
+~/SyncMobile/Books/Observability Engineering.pdf
+~/SyncMobile/Books/PLAI Version 3.2.2 electronic.pdf
+~/SyncMobile/Books/Point and Line to Plane ( PDFDrive ).pdf
+~/SyncMobile/Books/Prolog/144715486X Logic Programming with Prolog (2nd ed.) [Bramer 2013-11-07] {8EDB06BF}.1.pdf
+~/SyncMobile/Books/Prolog/An introduction to logic programming through Prolog.1.pdf
+~/SyncMobile/Books/Reversing - Secrets Of Reverse Engineering (2005).pdf
+~/SyncMobile/Books/Robert M. Sapolsky - Why Zebras Don't Get Ulcers/Robert M. Sapolsky - Why Zebras Don't Get Ulcers - 2004.pdf
+~/SyncMobile/Books/Russell S.J., Norvig P. - Artificial Intelligence. A Modern Approach, 4th Global Edition (Pearson Series In Artificial Intelligence) - 2022.pdf
+~/SyncMobile/Books/Rust/Abhishek Chanda - Network Programming with Rust - 2018/Abhishek Chanda - Network Programming with Rust - 2018.pdf
+~/SyncMobile/Books/Rust/Andrew Johnson - Hands On Functional Programming in Rust - 2018/Andrew Johnson - Hands On Functional Programming in Rust - 2018.pdf
+~/SyncMobile/Books/Rust/Blandy J., Orendorff J. - Programming Rust - 2018.pdf
+~/SyncMobile/Books/Rust/Brian L. Troutwine - Hands-On Concurrency with Rust - 2018/Brian L. Troutwine - Hands-On Concurrency with Rust - 2018.pdf
+~/SyncMobile/Books/Rust/Brian L. Troutwine - Hands-On Concurrency with Rust - 2018/Hands-OnConcurrencywithRust_Code/Software Hardware List.pdf
+~/SyncMobile/Books/Rust/Flitton Maxwell, Morton Caroline - Async Rust - 2025/Flitton Maxwell, Morton Caroline - Async Rust - 2025.pdf
+~/SyncMobile/Books/Rust/Iban Eguia Moraza - Rust High Performance - 2018/Iban Eguia Moraza - Rust High Performance - 2018.pdf
+~/SyncMobile/Books/Rust/Iban Eguia Moraza - Rust High Performance - 2018/RustHighPerformance_Code/Software and Hardware list.pdf
+~/SyncMobile/Books/Rust/Keiko Nakamura - Statistics with Rust. 50+ Statistical Techniques Put into Action - 2023.pdf
+~/SyncMobile/Books/Rust/MacLeod Dave - Learn Rust in a Month of Lunches - 2024.pdf
+~/SyncMobile/Books/Rust/Mara Lily, Holmes Joel - Refactoring to Rust - 2025.pdf
+~/SyncMobile/Books/Rust/Marshall Donis - Programming with Rust - 2024/Marshall Donis - Programming with Rust - 2024.pdf
+~/SyncMobile/Books/Rust/Matthews Brenden - Code Like a Pro in Rust - 2024.pdf
+~/SyncMobile/Books/Rust/Matthews Brenden - Idiomatic Rust. Code like a Rustacean - 2024.pdf
+~/SyncMobile/Books/Rust/Samson Carl Fredrik - Asynchronous Programming in Rust - 2024/Samson Carl Fredrik - Asynchronous Programming in Rust - 2024.pdf
+~/SyncMobile/Books/Rust/Sharma R., Kaihlavirta V. - Mastering Rust. Second Edition - 2018.pdf
+~/SyncMobile/Books/Scala/Paul Chiusano, Runar Bjarnason - Functional Programming in Scala - 2014/Paul Chiusano, Runar Bjarnason - Functional Programming in Scala - 2014.pdf
+~/SyncMobile/Books/Security/11-strategies-of-a-world-class-cybersecurity-operations-center-2022.pdf
+~/SyncMobile/Books/Security/Applied Network Security Monitoring_ Collection, Detection, and Analysis-2014.pdf
+~/SyncMobile/Books/Security/Applied Network Security Monitoring_ Collection, Detection, and Analysis.pdf
+~/SyncMobile/Books/Security/Apress Advanced API Security OAuth 2.0 and Beyond 2nd Edition-2020.pdf
+~/SyncMobile/Books/Security/BTFM Blue Team Field Manual-2017.pdf
+~/SyncMobile/Books/Security/BTFM Blue Team Field Manual.pdf
+~/SyncMobile/Books/Security/Incident Response with Threat Intelligence 2022.pdf
+~/SyncMobile/Books/Security/Learning Network Forensics.pdf
+~/SyncMobile/Books/Security/Mastering Windows Network Forensics And Investigation, Second Edition (2020-12).pdf
+~/SyncMobile/Books/Security/Networking/Lisa Bock - Learn Wireshark - Fundamentals of Wireshark - 2019.pdf
+~/SyncMobile/Books/Security/Networking/Mishra C. - Mastering Wireshark - 2016.2.pdf
+~/SyncMobile/Books/Security/Practice of Network Security Monitoring - 2013.pdf
+~/SyncMobile/Books/Security/Principles of Incident Response and Disaster Recovery 3d ed.    2021.pdf
+~/SyncMobile/Books/Security/SEC504/504.1 Combined.pdf
+~/SyncMobile/Books/Security/SEC504/504.1 Incident Response and Cyber Investigations.pdf
+~/SyncMobile/Books/Security/SEC504/504.2 Recon, Scanning, and Enumeration attacks.pdf
+~/SyncMobile/Books/Security/SEC504/504.3 Password and Access Attacks.pdf
+~/SyncMobile/Books/Security/SEC504/504.4 Public-facing and drive-by attacks.pdf
+~/SyncMobile/Books/Security/SEC504/504.5 Evasive and Post-Exploitation.pdf
+~/SyncMobile/Books/Security/SEC504/504.6 Capture the Flag Event.pdf
+~/SyncMobile/Books/Security/SEC504/Lab_Setup_Instructions_SEC504_v04.pdf
+~/SyncMobile/Books/Security/SEC504/Workbook 1-3.pdf
+~/SyncMobile/Books/Security/SEC504/Workbook 4-5.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/JQ_v1.2.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/LinuxCLI.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/LinuxCLI101.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/Metasploit Cheat Sheet.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/MultiCloudCommandLine.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/NetcatCheatSheetV1.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/NmapCheatSheetv1.1.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/Pivot Cheat Sheet.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/PowerShell-Get-WinEvent.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/PowerShell-Quick-Reference.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/PowerShellCheatSheetv4.0.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/PowerShellPrimer.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/SMB Access from Linux.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/WindowsIntrusionDiscovery3.0.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/linsacheatsheet_2.1.pdf
+~/SyncMobile/Books/Security/SEC504/cheat_sheets/tcpip.pdf
+~/SyncMobile/Books/Security/SEC504/pass-protected/504.1 Combined.pdf
+~/SyncMobile/Books/Security/SEC504/pass-protected/504.1 Incident Response and Cyber Investigations.pdf
+~/SyncMobile/Books/Security/SEC504/pass-protected/504.2 Recon, Scanning, and Enumeration attacks.pdf
+~/SyncMobile/Books/Security/SEC504/pass-protected/504.3 Password and Access Attacks.pdf
+~/SyncMobile/Books/Security/SEC504/pass-protected/504.4 Public-facing and drive-by attacks.pdf
+~/SyncMobile/Books/Security/SEC504/pass-protected/504.5 Evasive and Post-Exploitation.pdf
+~/SyncMobile/Books/Security/SEC504/pass-protected/504.6 Capture the Flag Event.pdf
+~/SyncMobile/Books/Security/SEC504/pass-protected/Workbook 1-3.pdf
+~/SyncMobile/Books/Security/SEC504/pass-protected/Workbook 4-5.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book1/Summary-IncidentResponse.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book1/Summary-LiveExamination.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book1/Summary-MalwareInvestigations.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book1/Summary-MemoryInvestigations.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book1/Summary-NetworkInvestigations.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book2/Summary-CloudScanning.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book2/Summary-DNSInterrogation.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book2/Summary-DeepBlueCLI.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book2/Summary-Nmap.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book2/Summary-OSINT.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book2/Summary-SMBAttacks.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book2/Summary-WebsiteReconnaissance.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book3/Summary-CloudStorage.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book3/Summary-DPAT.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book3/Summary-M365Attacks.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book3/Summary-Netcat.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book3/Summary-PasswordAttacks.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book3/Summary-PasswordCracking.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book3/Summary-PasswordHashes.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book4/Summary-CommandInjection.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book4/Summary-CrossSiteScripting.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book4/Summary-DriveByAttacks.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book4/Summary-MetasploitFramework.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book4/Summary-SQLInjection.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book4/Summary-ServerSideRequestForgery.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book4/Summary-SystemResourceUsageMonitor.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book5/Summary-CloudPostExploitation.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book5/Summary-DataCollection.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book5/Summary-EndpointSecurityBypass.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book5/Summary-EstablishingPersistence.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book5/Summary-HijackingAttacks.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book5/Summary-PivotingAndLateralMovement.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book5/Summary-RealIntelligenceThreatAnalytics.pdf
+~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book5/Summary-WhereToGoFromHere.pdf
+~/SyncMobile/Books/Security/Sans Institute - 5 Ways To Fire Up Your Incident Response And Forensic Environment.pdf
+~/SyncMobile/Books/Security/Syngress Publishing Applied Network Security Monitoring, Collection Detection And Analysis (2014).pdf
+~/SyncMobile/Books/Security/The Art of Memory Forensics, Detecting Malware and Threats in Windows Linux and Mac Memory - 2014.pdf
+~/SyncMobile/Books/Security/_Reverse.Engineering.12in1.AIO_._books.forensics_.-.Incident.Response.Investigating.Computer.Crime.eBook-EEn.pdf
+~/SyncMobile/Books/Security/eBook - Operator Handbook - Red Team + OSINT + Blue Team Reference-2020.pdf
+~/SyncMobile/Books/Site Reliability Engineering_How Google Runs Production Systems_2016.pdf.pdf
+~/SyncMobile/Books/System Design Interview. Second Edition.pdf
+~/SyncMobile/Books/System Design Interview. Vol2.pdf
+~/SyncMobile/Books/Systems.Performance.Enterprise.and.the.Cloud.2nd.Edition.2020.12.pdf
+~/SyncMobile/Books/Tan Zhiyong - Acing the System Design Interview - 2024.pdf
+~/SyncMobile/Books/The Food Lab Better Home Cooking Through Science.pdf
+~/SyncMobile/Books/TheArtOfMonitoring.pdf
+~/SyncMobile/Books/Tools/Apache Kafka Cookbook - Saurabh Minni/Apache Kafka Cookbook - Saurabh Minni.pdf
+~/SyncMobile/Books/Tools/Bejeck Bill - Kafka Streams in Action, 2nd Edition - 2024.pdf
+~/SyncMobile/Books/Tools/DeJonghe Derek - NGINX Cookbook, 3rd Edition - 2024.pdf
+~/SyncMobile/Books/Tools/Dixit B., Kuc R., Rogozinski M., Chhajed S. - Elasticsearch. A Complete Guide - 2017.PDF
+~/SyncMobile/Books/Tools/Git/Loeliger J., McCullough M. - Version Control with Git, 2nd Edition - 2012.pdf
+~/SyncMobile/Books/Tools/Learning Apache Kafka, 2nd Edition-Ascetic_trip.pdf
+~/SyncMobile/Books/Tools/Linux Bible - 9th Edition (2015) (Pdf, Epub & Mobi) Gooner/Linux Bible 9th Ed (2015).pdf
+~/SyncMobile/Books/Tools/Practical Vim V413HAV.pdf
+~/SyncMobile/Books/Tools/Pragmatic - tmux, Productive Mouse-Free Development (2012).pdf
+~/SyncMobile/Books/Tools/Schönig Hans-Jürgen - Mastering PostgreSQL 15, 5th Edition - 2023.pdf
+~/SyncMobile/Books/Tools/gawk.pdf
+~/SyncMobile/Books/Tools/postgres/Kaur M., Shaik B. - PostgreSQL Development Essentials - 2016.PDF
+~/SyncMobile/Books/Type Theory/Pierce B.C. - Advanced Topics in Types and Programming Languages - 2004.pdf
+~/SyncMobile/Books/Type Theory/Pierce B.C. - Types and Programming Languages - 2002.pdf
+~/SyncMobile/Books/Type Theory/ttfp (3)-annotations.pdf
+~/SyncMobile/Books/Type Theory/ttfp (3).pdf
+~/SyncMobile/Books/Understanding Distributed Systems.pdf
+~/SyncMobile/Books/VM and Containerization/Denniss William - Kubernetes for Developers - 2024.pdf
+~/SyncMobile/Books/VM and Containerization/Gkatziouras Emmanouil, Adams Rom, Xi Chen - Kubernetes Secrets Handbook - 2024.pdf
+~/SyncMobile/Books/VM and Containerization/Muschko Benjamin - Certified Kubernetes Application Developer (CKAD) Study Guide, 2nd Edition - 2024.pdf
+~/SyncMobile/Books/VM and Containerization/Naik Sameer and others - Kubernetes Cookbook, 2nd Edition - 2024.pdf
+~/SyncMobile/Books/VM and Containerization/Poulton Nigel - The Kubernetes Book 2024 Edition - 2024.pdf
+~/SyncMobile/Books/VM and Containerization/Vinto Natale, Bueno Alex Soto - GitOps Cookbook. Kubernetes Automation in Practice - 2023.pdf
+~/SyncMobile/Books/Why-We-Sleep-Unlocking-the-Power-of-Sleep.pdf
+~/SyncMobile/Books/Zinsser, William - On Writing Well, The Classic Guide to Writing Nonfiction, 6e (2002).pdf
+~/SyncMobile/Books/demonic-males-apes-and-the-origins-of-human-violence.pdf
+~/SyncMobile/Books/rmdb-codd_EFCodd_Relational_model_for_database_management_v2.pdf
+~/SyncMobile/Books/thediyhandbook.pdf
+~/SyncMobile/Books/writers-handbook.pdf
+~/SyncMobile/Papers/1976-09-03__Boyd_John_R__Destruction_and_Creation.pdf
+~/SyncMobile/Papers/2003_Schacter_SevenSinsSelf.pdf
+~/SyncMobile/Papers/2008 Self and Other Pronin-Copy.pdf
+~/SyncMobile/Papers/2017saner-eventsourcing.pdf
+~/SyncMobile/Papers/2018-03__Boyd_John_R__edited_Hammond_Grant_T__A_Discourse_on_Winning_and_Losing.pdf
+~/SyncMobile/Papers/83-Article Text-110-1-10-20191031.pdf
+~/SyncMobile/Papers/Academia-Letters-Number-498-Rapid_Loss_of_Habitat_for_Homo_sapiens.pdf
+~/SyncMobile/Papers/Aligment of Paragraphs in Bilingual Texts.pdf
+~/SyncMobile/Papers/All Else Being Equal Be Empowered.pdf
+~/SyncMobile/Papers/Applicative.pdf
+~/SyncMobile/Papers/Backus-CanProgrammingBeLiberated.pdf
+~/SyncMobile/Papers/BasicTypechecking (1).pdf
+~/SyncMobile/Papers/Byrd_indiana_0093A_10344__minikanren.pdf
+~/SyncMobile/Papers/CMU-CS-95-113.pdf
+~/SyncMobile/Papers/Endsley_1995a.pdf
+~/SyncMobile/Papers/Eugenio Moggi - Notions of computation and monads.pdf
+~/SyncMobile/Papers/Fast and Loose Reasoning is Morally Correct.pdf
+~/SyncMobile/Papers/FunctionalProgramming-p359-hudak.pdf
+~/SyncMobile/Papers/Give Some Ideas to your legs. The positive effect of walking.pdf
+~/SyncMobile/Papers/Hoare78.pdf
+~/SyncMobile/Papers/Mathematics for Computer science.pdf
+~/SyncMobile/Papers/MonadTransformers.pdf
+~/SyncMobile/Papers/Multi-core_parallelization_in_Clojure_a_case_study.pdf
+~/SyncMobile/Papers/NIST.SP.800-61r2.pdf
+~/SyncMobile/Papers/Neuroception.pdf
+~/SyncMobile/Papers/No_Silver_Bullet_Essence_and_Accidents_of_Software.pdf
+~/SyncMobile/Papers/Out-of-the-tar-pit_Ben-Moseley_2006.pdf
+~/SyncMobile/Papers/Parsing-with-derivatives.pdf
+~/SyncMobile/Papers/Seven Sketches in Compositionality - An Invitation to Applied Category Theory.pdf
+~/SyncMobile/Papers/Teaching Programming Languages in a Post-Linnaean Age.pdf
+~/SyncMobile/Papers/Tutorial Introduction to Lambda Calculus.pdf
+~/SyncMobile/Papers/VanRoyChapter.pdf
+~/SyncMobile/Papers/WebAssembly-spec-Draft.pdf
+~/SyncMobile/Papers/What We Talk About When We alk about mathematics.pdf
+~/SyncMobile/Papers/When is one thing equal to some other thing.pdf
+~/SyncMobile/Papers/aata-20180801.pdf
+~/SyncMobile/Papers/aligning_sentences_in_bilingual_corpora_gale_church.pdf
+~/SyncMobile/Papers/armstrong_thesis_2003.pdf
+~/SyncMobile/Papers/bornstein1989.pdf
+~/SyncMobile/Papers/category_theory_in_context.pdf
+~/SyncMobile/Papers/committees.pdf
+~/SyncMobile/Papers/dean_2013.pdf
+~/SyncMobile/Papers/denotational_design_with_type_class_morphisms-long.pdf
+~/SyncMobile/Papers/empirical analysis of programming language popularity.pdf
+~/SyncMobile/Papers/fpio - functional programming and IO - Gordon 1994.pdf
+~/SyncMobile/Papers/haas17_bring_webas.pdf
+~/SyncMobile/Papers/hoare81emperor.pdf
+~/SyncMobile/Papers/hopl-4-emacs-lisp.pdf
+~/SyncMobile/Papers/huet-zipper.pdf
+~/SyncMobile/Papers/mesos_tech_report.pdf
+~/SyncMobile/Papers/mud.pdf
+~/SyncMobile/Papers/paper-reading.pdf
+~/SyncMobile/Papers/periodictabledatastructures.pdf
+~/SyncMobile/Papers/probabilistic_programming.pdf
+~/SyncMobile/Papers/recursive.pdf
+~/SyncMobile/Papers/relational_programming_in_minikanren.pdf
+~/SyncMobile/Papers/report-on-a-knowledge-based-software-assistant.pdf
+~/SyncMobile/Papers/rosetta-stone.pdf
+~/SyncMobile/Papers/safety in programming languages.pdf
+~/SyncMobile/Papers/testing_and_staying_sane.pdf
+~/SyncMobile/Papers/unusual effectiveness of logic in computer science.pdf
+~/SyncMobile/Papers/wad95_monads for functional programming.pdf
+~/SyncMobile/Papers/wadler88-adhoc polymorphism.pdf
