@@ -167,6 +167,7 @@ character heuristics."
   synth                                 ; characters the extractor invented
   lead-font                             ; first inked run's font name, or nil
   lead-bold                             ; first inked run's weight
+  rotated                               ; set across the page, not along it
   claimed)                              ; owned by a lane region; zones keep out
 
 (defvar pdf-text-script-size 0.78
@@ -285,9 +286,12 @@ every glyph.")
 
 (defconst pdf-text--walker-source "\
 // Emitted by pdf-text.el; edit there.  One elisp form per stext line:
-// (PAGE X0 TOP X1 BOT HEIGHT SPACE CV FIRST-WIDTH SYNTH RUNS \"TEXT\")
+// (PAGE X0 TOP X1 BOT HEIGHT SPACE CV FIRST-WIDTH SYNTH RUNS \"TEXT\" ROT)
 // with RUNS a list of (OFFSET LENGTH X0 X1 OY QH SIZE BOLD ITALIC \"FONT\"),
-// one per stretch of chars agreeing on font, size and descent line.
+// one per stretch of chars agreeing on font, size and descent line, and
+// ROT t for a line the page sets down its side rather than across it -
+// a margin stamp turned on end, whose horizontal box is a fiction the
+// coordinates alone cannot expose.
 // Coordinates are page fractions; offsets count characters, not UTF-16
 // units, so they index elisp strings directly.
 // mutool run WALKER FILE [FIRST [LAST]] < /dev/null
@@ -682,11 +686,23 @@ var line = null;
 var pageno = 0, PX = 0, PY = 0, PW = 1, PH = 1;
 
 var walker = {
-	beginLine: function () {
+	beginLine: function (bbox, wmode, dir) {
+		// the direction is the only honest witness of a turned line:
+		// its quads project onto a horizontal box that lies about
+		// both the ink width and the character density.  Turned
+		// means running down the page rather than across it - a
+		// workbook sets its decorative captions at a few degrees of
+		// tilt and their boxes still fit the ink, so only a line
+		// whose vertical component beats its horizontal one counts.
+		// Absent arguments read as horizontal, never the other way
+		// round.
+		var rot = 0;
+		if (dir && Math.abs(dir[1]) > Math.abs(dir[0])) rot = 1;
+		if (wmode) rot = 1;
 		line = { text: '', off: 0, runs: [],
 			 x0: null, x1: null, top: null, bot: null,
 			 spaces: [], advances: [],
-			 synth: 0, sawInk: false,
+			 synth: 0, sawInk: false, rot: rot,
 			 openX: null, fwX: null, lastInkX1: null, prevX: null };
 	},
 	onChar: function (c, origin, font, size, quad, color, flags) {
@@ -805,7 +821,8 @@ var walker = {
 			 + ' ' + hy(height)
 			 + ' ' + wx(median(L.spaces)) + ' ' + num(cv)
 			 + ' ' + wx(fw) + ' ' + L.synth + ' ' + rs
-			 + ' \"' + esc(L.text) + '\")');
+			 + ' \"' + esc(L.text) + '\" ' + (L.rot ? 't' : 'nil')
+			 + ')');
 		line = null;
 	}
 };
@@ -1108,11 +1125,15 @@ offset from the line's baseline; the dominant run by ink names the
 line's font.  A line with no ink keeps only its text, like the
 text-only fallback records."
   (pcase-let* ((`(,_page ,x0 ,top ,x1 ,bot ,height ,space ,cv ,fw ,synth
-                  ,runs ,text)
+                  ,runs ,text . ,_)
                 form)
+               ;; a form from before the walker read line directions
+               ;; carries no flag and reads as horizontal
+               (rotated (and (nth 12 form) t))
                (ink (seq-filter (lambda (r) (nth 4 r)) runs)))
     (if (null ink)
         (pdf-text-line-create
+         :rotated rotated
          :text (pdf-text--escape-emphasis
                 (pdf-text--strip-unprinted (pdf-text--escape-literals text))))
       (let* ((ref (pdf-text--run-baseline runs))
@@ -1152,7 +1173,7 @@ text-only fallback records."
          :height height :space space :cv cv :first-width fw
          :font (nth 9 dominant) :size (nth 6 dominant)
          :bold (nth 7 dominant) :italic (nth 8 dominant)
-         :synth synth
+         :synth synth :rotated rotated
          ;; the dominant run by ink can hand the record another face
          ;; than the one the line opens in - a sans identifier inside a
          ;; bold heading - and the opening face is what heading rules
@@ -2009,6 +2030,55 @@ reflow as a table."
     (or (and all (< (/ (length all) 2) named))
         (and cells (< (/ (length cells) 2) mono)))))
 
+(defconst pdf-text-cell-enumerator-re
+  "\\`(?[0-9]+\\(?:\\.[0-9]+\\)*[.)]\\'\\|\\`[0-9]+\\(?:\\.[0-9]+\\)+\\'"
+  "A cell holding nothing but the number the page sets its row under.
+\"1.\", \"1.1\", \"(3)\" - a step, a sub-step, a numbered row.  A
+bare number without a dot or a parenthesis stays out: that is the
+folio column of a table of contents, which pairs with its entry
+rather than opening a row.")
+
+(defvar pdf-text-lane-operator-re
+  "\\`\\(?:::=\\|::\\|=>\\|==\\|=\\|->\\|<-\\|→\\|←\\|⇒\\|⇐\\||\\)\\(?:[ \t]\\|\\'\\)"
+  "Operators a code cell opens with where the page aligns on them.
+A definition, a type signature and a guard all set their operator at
+one column and the reader follows that column down; a table aligns on
+nothing its cells spell out.")
+
+(defun pdf-text--lane-code-p (region spans profile)
+  "Whether REGION is code the page aligned, not a table.
+Two things say so together, and neither alone: every cell is set in
+one face PROFILE's body never uses, and a lane past the first opens
+on an operator in most of its rows.  The monospace name cannot see
+this class - TeX sets Haskell in CMTI10, its text italic - and the
+advance variation reads a proportional font, so the alignment and the
+face are what is left.  SPANS name the lanes."
+  (let* ((cells (pdf-text--lane-region-cells region))
+         (fonts (delq nil (mapcar (lambda (line)
+                                    (when-let* ((font (pdf-text-line-font line)))
+                                      (pdf-text--base-font-name font)))
+                                  cells)))
+         (face (car fonts)))
+    (and cells face
+         (eql (length fonts) (length cells))
+         (cl-every (lambda (font) (equal font face)) fonts)
+         (pdf-text--non-body-font-p face profile)
+         (cl-loop for lane from 1 below (length spans)
+                  thereis
+                  (let ((in-lane (cl-remove-if-not
+                                  (lambda (line)
+                                    (eql lane (pdf-text--lane-of line spans)))
+                                  cells)))
+                    (and in-lane
+                         (< (length in-lane)
+                            (* 2 (cl-count-if
+                                  (lambda (line)
+                                    (string-match-p
+                                     pdf-text-lane-operator-re
+                                     (string-trim
+                                      (pdf-text-line-text line))))
+                                  in-lane)))))))))
+
 (defun pdf-text--lane-column-served-p (region spans)
   "Whether poppler served REGION lane by lane rather than row by row.
 Measured as the fraction of consecutive stream records that stay in
@@ -2166,16 +2236,26 @@ A continuation cell leads with the whitespace its page indented it by,
 or sits in from the left edge REFS records for its lane of SPANS.
 Every cell must read so - a row mixing fresh cells with indented ones
 is a new row whose lanes happen to differ.  PROFILE's space width is
-the indent tolerance."
+the indent tolerance.
+
+A cell that is nothing but its own number starts a row however deep
+it is set: a checklist indents its sub-steps under the step they
+belong to, and read as continuations they weld five rows of the table
+into one cell."
   (let ((space (or (plist-get profile :space) 0.005)))
-    (cl-every
-     (lambda (cell)
-       (let ((line (cdr cell)))
-         (or (string-match-p "\\`[ \t]" (pdf-text-line-text line))
-             (when-let* ((lane (pdf-text--lane-of line spans))
-                         (ref (aref refs lane)))
-               (< (+ ref space) (pdf-text-line-x0 line))))))
-     (cdr row))))
+    (and (cl-notany (lambda (cell)
+                      (string-match-p pdf-text-cell-enumerator-re
+                                      (string-trim
+                                       (pdf-text-line-text (cdr cell)))))
+                    (cdr row))
+         (cl-every
+          (lambda (cell)
+            (let ((line (cdr cell)))
+              (or (string-match-p "\\`[ \t]" (pdf-text-line-text line))
+                  (when-let* ((lane (pdf-text--lane-of line spans))
+                              (ref (aref refs lane)))
+                    (< (+ ref space) (pdf-text-line-x0 line))))))
+          (cdr row)))))
 
 (defun pdf-text--lane-append-cell (cells lane text)
   "Join TEXT onto the LANE cell of CELLS, a vector of strings."
@@ -2262,6 +2342,38 @@ SPANS name the lanes and PROFILE the measures."
          record))
      rows)))
 
+(defun pdf-text--lane-code-lines (region spans profile)
+  "REGION rendered as the aligned source it is, one record per row.
+The cells keep the columns the page set them in - padded to the
+lane's widest entry, the way `pdf-text--lane-table' pads its own -
+and the rows come back tagged `mono', so they render verbatim: no
+reflow, no bars, and no emphasis markers inside identifiers a text
+italic face would otherwise carry.  SPANS name the lanes and PROFILE
+the measures."
+  (let* ((refs (make-vector (length spans) nil))
+         (rows (pdf-text--lane-row-records region spans refs profile))
+         (widths (make-vector (length spans) 0)))
+    (dolist (row rows)
+      (dotimes (lane (length spans))
+        (when-let* ((text (aref (car row) lane)))
+          (aset widths lane (max (aref widths lane) (string-width text))))))
+    (mapcar
+     (lambda (row)
+       (let* ((cells (cl-loop for lane from 0 below (length spans)
+                              for text = (or (aref (car row) lane) "")
+                              collect (concat text
+                                              (make-string
+                                               (- (aref widths lane)
+                                                  (string-width text))
+                                               ?\s))))
+              (record (pdf-text--merge-records
+                       (cdr row)
+                       (string-trim-right (mapconcat #'identity cells " ")))))
+         (setf (pdf-text-line-kind record) 'mono)
+         (setf (pdf-text-line-claimed record) t)
+         record))
+     rows)))
+
 (defun pdf-text--lane-adopt (rows spans regions profile min-width)
   "Stray ROWS that fit the lanes a numeric-lane region establishes.
 A table of contents runs its entries in blocks; a pair cut off from
@@ -2314,8 +2426,21 @@ the paragraph gap, set that much smaller, leaves the region and stays
 in the stream - which serves it where the page reads it, after the
 columns.  Returns nil when the surgery leaves fewer than
 `pdf-text-lane-min-rows' clean rows; PROFILE gives the body height
-and the leading, MIN-WIDTH the gutter measure."
-  (let* ((height (plist-get profile :height))
+and the leading, MIN-WIDTH the gutter measure.
+
+Smaller than the region's own cells, not than the page's body: a
+table set whole in a face under the body size - the NIST checklist in
+Arial on a Times page - is small type from end to end, and measured
+against the body every cell of it reads as a foot block.  Its
+step-number lane resumes after every wrapped row, so the numbers
+evict one by one and render as bare lines under the table."
+  (let* ((height (let ((body (plist-get profile :height))
+                       (own (pdf-text--quantile
+                             (delq nil (mapcar #'pdf-text-line-height
+                                               (pdf-text--lane-region-cells
+                                                region)))
+                             0.5)))
+                   (if (and body own) (min body own) (or body own))))
          (leading (or (plist-get profile :leading) 0.02))
          (gap (* pdf-text-gap-factor leading))
          (spans (pdf-text--lane-spans region profile))
@@ -2430,15 +2555,17 @@ PROFILE gives the column and the measures."
                                     (pdf-text--lane-spans region profile)))
                             regions)))
         (dolist (region regions)
-          (plist-put region :class
-                     (pdf-text--lane-classify region (cdr (assq region spans))
-                                              profile)))
+          (let ((rs (cdr (assq region spans))))
+            (plist-put region :class
+                       (if (pdf-text--lane-code-p region rs profile)
+                           'code
+                         (pdf-text--lane-classify region rs profile)))))
         (setq regions
               (cl-remove-if (lambda (region)
                               (pcase (plist-get region :class)
                                 ('flows (< (plist-get region :clean)
                                            pdf-text-lane-flows-min-rows))
-                                ('rows nil)
+                                ((or 'rows 'code) nil)
                                 (_ t)))
                             regions))
         (setq regions
@@ -2466,6 +2593,10 @@ PROFILE gives the column and the measures."
                 (pcase (plist-get region :class)
                   ('rows
                    (let ((records (pdf-text--lane-table region rs profile)))
+                     (dolist (line members) (puthash line t skip))
+                     (puthash first records replacement)))
+                  ('code
+                   (let ((records (pdf-text--lane-code-lines region rs profile)))
                      (dolist (line members) (puthash line t skip))
                      (puthash first records replacement)))
                   ('flows
@@ -3437,10 +3568,20 @@ is body text that happens to be small, and dimming it would paint
 the whole page.")
 
 (defconst pdf-text-footnote-symbols
-  '((?* . "star") (?† . "dagger") (?‡ . "ddagger") (?§ . "sect") (?¶ . "par"))
+  '((?* . "star") (?∗ . "star") (?† . "dagger") (?‡ . "ddagger")
+    (?§ . "sect") (?¶ . "par"))
   "Footnote marker symbols and the org label names they take.
 An org footnote label is word characters, hyphens and underscores
-only, so the symbol itself cannot serve.")
+only, so the symbol itself cannot serve.  TeX sets its first footnote
+mark from a math font, so the star arrives as U+2217 ASTERISK
+OPERATOR as often as the typewriter asterisk; both name the same
+note, and a page mixing the two would need them to.")
+
+(defconst pdf-text-footnote-symbol-re
+  (concat "[" (mapconcat (lambda (entry) (string (car entry)))
+                         pdf-text-footnote-symbols "")
+          "]")
+  "Character class matching any `pdf-text-footnote-symbols' marker.")
 
 (defun pdf-text--footnote-open (text)
   "The footnote marker TEXT opens with, as (TOKEN . BODY-START), or nil.
@@ -3453,10 +3594,13 @@ text, not stand alone.  BODY-START is where the note's own words
 begin."
   (let ((case-fold-search nil))
     (cond
-     ((string-match "\\`\\^{\\([*†‡§¶]\\|[0-9]\\{1,2\\}\\)}[ \t]*\\([^ \t\n]\\)"
+     ((string-match (concat "\\`\\^{\\(" pdf-text-footnote-symbol-re
+                            "\\|[0-9]\\{1,2\\}\\)}[ \t]*\\([^ \t\n]\\)")
                     text)
       (cons (match-string 1 text) (match-beginning 2)))
-     ((string-match "\\`\\([*†‡§¶]\\)[ \t]*\\([[:alpha:]“”\"‘’']\\)" text)
+     ((string-match (concat "\\`\\(" pdf-text-footnote-symbol-re
+                            "\\)[ \t]*\\([[:alpha:]“”\"‘’']\\)")
+                    text)
       (cons (match-string 1 text) (match-beginning 2)))
      ((string-match "\\`\\([0-9]\\{1,2\\}\\)[.)][ \t]+\\([^ \t\n]\\)" text)
       (cons (match-string 1 text) (match-beginning 2))))))
@@ -3882,11 +4026,26 @@ anything but the artifact."
         (replace-regexp-in-string "\\b\\([A-Z]\\) \\([A-Z]+\\)\\b" "\\1\\2" line)
       line)))
 
+(defun pdf-text--drop-rotated (lines)
+  "LINES without the ones the page sets down its side.
+An arXiv stamp up the left margin, a copyright notice turned into the
+gutter: the extractor projects a turned line onto a horizontal box,
+so it arrives claiming a width its glyph count cannot fit and every
+rule downstream believes the box.  The page's direction is the
+majority one, so a page turned as a whole - a landscape table, a
+vertical script - keeps every line it has.  A caption set at a few
+degrees of tilt is not turned: its box still fits its ink, and a
+workbook full of them would lose real text."
+  (if (cl-some (lambda (line) (not (pdf-text-line-rotated line))) lines)
+      (cl-remove-if #'pdf-text-line-rotated lines)
+    lines))
+
 (defun pdf-text-clean-pages (pages)
   "PAGES of line records with paint artifacts and small-caps gaps gone."
   (mapcar (lambda (lines)
             (let ((kept (pdf-text--drop-split-echoes
-                         (pdf-text--dedup-adjacent lines))))
+                         (pdf-text--dedup-adjacent
+                          (pdf-text--drop-rotated lines)))))
               (dolist (line kept kept)
                 (setf (pdf-text-line-text line)
                       (pdf-text-join-small-caps (pdf-text-line-text line))))))
@@ -5034,7 +5193,13 @@ A running head that slipped the marginal rules - detached a hair
 under the threshold, its base a hair past the band - must not come
 back as a heading."
   (when-let* ((line (car (pdf-text-block-lines block)))
-              (top (pdf-text-line-top line)))
+              (top (pdf-text-line-top line))
+              ;; a lane reorder rewrites the records it moves onto the
+              ;; frame of the column before them, so a facing column's
+              ;; head lands wherever that column ended - the band says
+              ;; nothing about a record whose coordinates the unfold
+              ;; invented
+              ((not (pdf-text-line-claimed line))))
     (or (< top pdf-text-margin-band)
         (< (- 1.0 pdf-text-margin-band) top))))
 
@@ -5047,14 +5212,21 @@ short of the column's right edge, where a full line is prose.  A
 BOLD line clears the gate at `pdf-text-synth-bold-min' instead, the
 same floor the sized rules give bold: LNCS sets its numbered
 subsection heads bold a shade under the body, and their dot count is
-their depth."
+their depth.
+
+The edge is the one the line ends against, not the modal column's: a
+two-column paper measures its profile on one column, and every head
+in the facing column ends past that edge however short it is set."
   (when-let* ((level (pdf-text--dotted-number-level text))
               (body (plist-get profile :height))
               (right (plist-get profile :right)))
     (and height
          (or (<= (* pdf-text-synth-number-min body) height)
              (and bold (<= (* pdf-text-synth-bold-min body) height)))
-         x1 (< x1 (- right 0.02))
+         x1 (< x1 (- (if (< (+ right 0.02) x1)
+                         (or (plist-get profile :text-right) right)
+                       right)
+                     0.02))
          level)))
 
 (defun pdf-text--synth-tuple (blocks text height x1 profile &optional bold-ok)
@@ -5574,7 +5746,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 25
+(defconst pdf-text-render-version 26
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

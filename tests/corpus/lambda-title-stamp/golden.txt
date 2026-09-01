@@ -1,0 +1,17 @@
+A Tutorial Introduction to the Lambda
+
+Calculus
+
+Raul Rojas[fn:1-star]
+
+  Freie Universit¨at Berlin Version 2.0, 2015
+
+Abstract
+
+This paper is a concise and painless introduction to the /λ/-calculus. This formalism was developed by Alonzo Church as a tool for studying the mathematical properties of effectively computable functions. The formalism became popular and has provided a strong theoretical foundation for the family of functional programming languages. This tutorial shows how to perform arithmetical and logical computations using the /λ/-calculus and how to define recursive functions, even though /λ/-calculus functions are unnamed and thus cannot refer explicitly to themselves.
+
+* 1 Definition
+
+The /λ/-calculus can be called the /smallest universal programming language in the world/. The /λ/-calculus consists of a single transformation rule (variable substitution, also called /β/-conversion) and a single function definition
+
+[fn:1-star] Send corrections or suggestions to rojas@inf.fu-berlin.de

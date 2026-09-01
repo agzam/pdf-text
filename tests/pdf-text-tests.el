@@ -63,9 +63,9 @@ HEADINGS are the org heading lines the outline puts on that page."
 (cl-defun pdf-text-tests--form (text runs &key (page 1) (x0 0.10) (top 0.3266)
                                      (x1 0.90) (bot 0.3400) (height 0.0134)
                                      (space 0.005) (cv 0.3) (fw 0.02)
-                                     (synth 0))
+                                     (synth 0) rotated)
   "A walker line form carrying TEXT and its font RUNS."
-  (list page x0 top x1 bot height space cv fw synth runs text))
+  (list page x0 top x1 bot height space cv fw synth runs text rotated))
 
 ;;; Charlayout off the wire
 
@@ -1303,6 +1303,31 @@ HEADINGS are the org heading lines the outline puts on that page."
   (it "reads an empty output as empty pages"
     (expect (pdf-text--mupdf-parse "" 1 2) :to-equal '(nil nil)))
 
+  (it "carries the walker's direction flag onto the record"
+    (let ((pages (pdf-text--mupdf-parse
+                  (concat (format "%S\n" (pdf-text-tests--form
+                                          "body line"
+                                          (list (pdf-text-tests--run 0 9))))
+                          (format "%S\n" (pdf-text-tests--form
+                                          "arXiv:1503.09060v1 [cs.LO]"
+                                          (list (pdf-text-tests--run 0 26))
+                                          :rotated t)))
+                  1 1)))
+      (expect (pdf-text-line-rotated (nth 0 (car pages))) :to-be nil)
+      (expect (pdf-text-line-rotated (nth 1 (car pages))) :to-be t)))
+
+  (it "reads a form from before the flag as horizontal"
+    ;; the walker and the reader ship together, but a stored capture
+    ;; predates the field and must not turn every line sideways
+    (let ((page (car (pdf-text--mupdf-parse
+                      (format "%S\n" (list 1 0.10 0.32 0.90 0.34 0.0134
+                                           0.005 0.3 0.02 0
+                                           (list (pdf-text-tests--run 0 4))
+                                           "text"))
+                      1 1))))
+      (expect (pdf-text-line-rotated (car page)) :to-be nil)
+      (expect (pdf-text-line-text (car page)) :to-equal "text")))
+
   ;; the document-wide Type 3 detection: modal em size orders of
   ;; magnitude under modal glyph height marks the class, and the
   ;; records build with the height standing in for the garbage em
@@ -1333,6 +1358,37 @@ HEADINGS are the org heading lines the outline puts on that page."
                                          :font "CMMI12"))))
                   1 1)))
       (expect (pdf-text-line-text (car (nth 0 pages))) :to-equal "∗ y"))))
+
+(describe "pdf-text--drop-rotated"
+  ;; the lambda tutorial's arXiv stamp: 40 characters in x 0.018-0.061,
+  ;; a density no type can set, because the box is the projection of a
+  ;; line the page turned on its side
+  (it "drops a turned line from a page the printer set straight"
+    (let* ((stamp (pdf-text-line-create
+                   :text "arXiv:1503.09060v1 [cs.LO] 28 Mar 2015"
+                   :x0 0.0179 :x1 0.0615 :base 0.7071 :height 0.0126
+                   :rotated t))
+           (body (pdf-text-line-create :text "Raul Rojas" :x0 0.44 :x1 0.56
+                                       :base 0.3347 :height 0.0161))
+           (kept (pdf-text--drop-rotated (list body stamp))))
+      (expect (mapcar #'pdf-text-line-text kept) :to-equal '("Raul Rojas"))))
+
+  (it "keeps every line of a page turned as a whole"
+    (let ((lines (list (pdf-text-line-create :text "one" :rotated t)
+                       (pdf-text-line-create :text "two" :rotated t))))
+      (expect (mapcar #'pdf-text-line-text (pdf-text--drop-rotated lines))
+              :to-equal '("one" "two"))))
+
+  (it "takes the stamp out before any page measure reads it"
+    (let* ((stamp (pdf-text-line-create :text "arXiv:1503.09060v1"
+                                        :x0 0.0179 :x1 0.0615 :top 0.2638
+                                        :bot 0.7071 :base 0.7071
+                                        :height 0.0126 :rotated t))
+           (body (pdf-text-line-create :text "prose" :x0 0.23 :x1 0.76
+                                       :top 0.31 :bot 0.33 :base 0.3300
+                                       :height 0.0134))
+           (cleaned (car (pdf-text-clean-pages (list (list body stamp))))))
+      (expect (mapcar #'pdf-text-line-text cleaned) :to-equal '("prose")))))
 
 (describe "pdf-text--mupdf-output pool"
   (it "fans a large range over workers and reassembles every page"
@@ -1782,6 +1838,99 @@ HEADINGS are the org heading lines the outline puts on that page."
                          (string-prefix-p "|" (pdf-text-line-text line)))
                        out)
               :not :to-be-truthy)))
+
+  (it "reads a lane region of one non-body face aligned on operators as code"
+    ;; MonadTransformers p3: Haskell set in CMTI10, TeX's text italic,
+    ;; over a clean gutter - no monospace name to read, a proportional
+    ;; font's advance variation, and the page aligns on `::' and `='
+    (let ((out (pdf-text-tests--lanes
+                (append '(("a first line of prose pins the leading and column"
+                           :base 0.12 :font "CMR10")
+                          ("a second line of prose pins them too"
+                           :base 0.14 :font "CMR10"))
+                        '(("eval0" :x0 0.165 :x1 0.205 :base 0.18
+                           :font "EGVBWG+CMTI10")
+                          (":: Env -> Exp -> Value" :x0 0.355 :x1 0.538 :gap 0
+                           :font "EGVBWG+CMTI10")
+                          ("eval0 env (Lit i)" :x0 0.165 :x1 0.299
+                           :font "EGVBWG+CMTI10")
+                          ("= IntVal i" :x0 0.353 :x1 0.435 :gap 0
+                           :font "EGVBWG+CMTI10")
+                          ("eval0 env (Var n)" :x0 0.165 :x1 0.309
+                           :font "EGVBWG+CMTI10")
+                          ("= fromJust (Map.lookup n env)" :x0 0.353 :x1 0.607
+                           :gap 0 :font "EGVBWG+CMTI10")
+                          ("prose resumes at the full measure after this"
+                           :base 0.30)))))
+          (code (lambda (line) (eq 'mono (pdf-text-line-kind line)))))
+      (expect (mapcar #'pdf-text-line-text (cl-remove-if-not code out))
+              :to-equal '("eval0             :: Env -> Exp -> Value"
+                          "eval0 env (Lit i) = IntVal i"
+                          "eval0 env (Var n) = fromJust (Map.lookup n env)"))
+      (expect (cl-some (lambda (line)
+                         (string-prefix-p "|" (pdf-text-line-text line)))
+                       out)
+              :not :to-be-truthy)))
+
+  (it "keeps a table in the body's own face a table"
+    ;; the code reading needs both halves: one stray face AND an
+    ;; operator lane.  A table set in the body face is neither
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("alpha" :x0 0.10 :x1 0.20 :base 0.18 :font "Body")
+                          ("= small" :x0 0.35 :x1 0.47 :gap 0 :font "Body")
+                          ("beta" :x0 0.10 :x1 0.18 :font "Body")
+                          ("= large" :x0 0.35 :x1 0.47 :gap 0 :font "Body")
+                          ("gamma" :x0 0.10 :x1 0.21 :font "Body")
+                          ("= mid" :x0 0.35 :x1 0.44 :gap 0 :font "Body")
+                          ("prose resumes at the full measure after this"
+                           :base 0.30))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-contain "| alpha | = small |")))
+
+  (it "keeps a stray-face table whose lanes spell words a table"
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("alpha" :x0 0.10 :x1 0.20 :base 0.18 :font "Face")
+                          ("small one" :x0 0.35 :x1 0.50 :gap 0 :font "Face")
+                          ("beta" :x0 0.10 :x1 0.18 :font "Face")
+                          ("large one" :x0 0.35 :x1 0.50 :gap 0 :font "Face")
+                          ("gamma" :x0 0.10 :x1 0.21 :font "Face")
+                          ("middle one" :x0 0.35 :x1 0.52 :gap 0 :font "Face")
+                          ("prose resumes at the full measure after this"
+                           :base 0.30))))))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-contain "| alpha | small one  |")))
+
+  (it "keeps a table set whole under the body size, numbers and all"
+    ;; NIST SP.800-61r2 p51: the checklist runs in Arial on a Times
+    ;; page, so every cell is small type and the eviction read the
+    ;; step-number lane - which resumes after each wrapped row - as
+    ;; foot blocks, one number at a time
+    (let ((out (pdf-text-tests--lanes
+                (append pdf-text-tests--lane-prose
+                        '(("1." :x0 0.118 :x1 0.130 :base 0.18 :height 0.0127)
+                          ("Determine whether an incident has occurred"
+                           :x0 0.171 :x1 0.459 :gap 0 :height 0.0127)
+                          ("1.1" :x0 0.133 :x1 0.153 :height 0.0127)
+                          ("Analyze the precursors and indicators"
+                           :x0 0.212 :x1 0.458 :gap 0 :height 0.0127)
+                          ("as soon as the handler believes an incident"
+                           :x0 0.212 :x1 0.716 :height 0.0127)
+                          ("2." :x0 0.118 :x1 0.130 :height 0.0127)
+                          ("Prioritize handling the incident"
+                           :x0 0.171 :x1 0.761 :gap 0 :height 0.0127)
+                          ("3." :x0 0.118 :x1 0.130 :height 0.0127)
+                          ("Report the incident to the personnel"
+                           :x0 0.171 :x1 0.711 :gap 0 :height 0.0127)
+                          ("prose resumes at the full measure after this"
+                           :base 0.34))))))
+      (expect (mapconcat #'pdf-text-line-text out "\n")
+              :to-match "| 2\\.  | Prioritize handling the incident ")
+      ;; the sub-step is a row of its own, not a wrap of the step above
+      (expect (mapconcat #'pdf-text-line-text out "\n")
+              :to-match
+              "| 1\\.1 | Analyze the precursors and indicators as soon as the handler believes an incident |")))
 
   (it "joins a wrapped cell into its row"
     (let ((out (pdf-text-tests--lanes
@@ -3329,6 +3478,14 @@ HEADINGS are the org heading lines the outline puts on that page."
     (expect (pdf-text--footnote-open "^{*}A word on notation")
             :to-equal '("*" . 4)))
 
+  (it "reads TeX's math star, the mark its footnote font actually sets"
+    ;; the lambda tutorial's title page: "Raul Rojas^{∗}" over
+    ;; "^{∗}Send corrections..." - both stars U+2217, not U+002A
+    (expect (pdf-text--footnote-open "^{∗}Send corrections or suggestions")
+            :to-equal '("∗" . 4))
+    (expect (pdf-text--footnote-label 1 "∗") :to-equal "1-star")
+    (expect "Raul Rojas^{∗}" :to-match (pdf-text--footnote-marker-re "∗")))
+
   (it "tells the note's own words from the marker"
     (expect (cdr (pdf-text--footnote-open "1. Of course")) :to-equal 3)
     (expect (cdr (pdf-text--footnote-open "*A word")) :to-equal 1))
@@ -4045,6 +4202,19 @@ HEADINGS are the org heading lines the outline puts on that page."
                           (pdf-text--hyphenated-words (list lines))))
                 :to-be-truthy))))
 
+  (it "reads a facing column's head against its own right edge"
+    ;; mesos p4: the profile of a two-column paper is one of its
+    ;; columns, so "3.4 Isolation" in the other column ends past that
+    ;; edge however short it is set, and the dotted gate read it as a
+    ;; full line of prose
+    (let ((profile '(:height 0.01125 :leading 0.016 :left 0.12 :right 0.485
+                     :text-left 0.12 :text-right 0.88 :space 0.004)))
+      (expect (pdf-text--synth-dotted "3.4 Isolation" 0.0113 0.612 profile t)
+              :to-be 2)
+      ;; the modal column still bounds a line that ends inside it
+      (expect (pdf-text--synth-dotted "3.4 Isolation" 0.0113 0.470 profile t)
+              :to-be nil)))
+
   (it "keeps reading dotted candidates where no contents run stands"
     (let* ((lines (pdf-text-tests--page
                    '(("2.1 Functional models" :height 0.020 :x1 0.45
@@ -4058,6 +4228,29 @@ HEADINGS are the org heading lines the outline puts on that page."
                         (pdf-text--blocks lines page) page
                         (pdf-text--hyphenated-words (list lines))))
               :to-be-truthy))))
+
+(describe "pdf-text--synth-banded-p"
+  (it "refuses a block opening in the margin band"
+    (let ((block (pdf-text--blocks
+                  (list (pdf-text-tests--line "A Slipped Running Head"
+                                              :base 0.06))
+                  '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
+                    :space 0.005))))
+      (expect (pdf-text--synth-banded-p (car block)) :to-be-truthy)))
+
+  (it "says nothing about a record the lane unfold moved"
+    ;; mesos p4: the unfold stacks the facing column below the one
+    ;; before it, so a head a third of the way down that column lands
+    ;; past the page's foot in the new frame - a coordinate the
+    ;; reorder invented, not a margin the printer set
+    (let* ((line (pdf-text-tests--line "3.4 Isolation" :base 0.97))
+           (block (car (pdf-text--blocks
+                        (list line)
+                        '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
+                          :space 0.005)))))
+      (expect (pdf-text--synth-banded-p block) :to-be-truthy)
+      (setf (pdf-text-line-claimed line) t)
+      (expect (pdf-text--synth-banded-p block) :to-be nil))))
 
 (describe "pdf-text--heading-clusters"
   (it "keeps styles heading enough distinct pages, tallest first"

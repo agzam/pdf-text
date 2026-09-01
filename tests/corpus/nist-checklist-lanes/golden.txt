@@ -1,0 +1,37 @@
+ *Cost.* Original hardware (e.g., hard drives, compromised systems) that is stored as evidence, as well as hard drives and removable media that are used to hold disk images, are generally individually inexpensive. However, if an organization stores many such components for years, the cost can be substantial. The organization also must retain functional computers that can use the stored hardware and media.
+
+** 3.5 Incident Handling Checklist
+
+The checklist in Table 3-5 provides the major steps to be performed in the handling of an incident. Note that the actual steps performed may vary based on the type of incident and the nature of individual incidents. For example, if the handler knows exactly what has happened based on analysis of indicators (Step 1.1), there may be no need to perform Steps 1.2 or 1.3 to further research the activity. The checklist provides guidelines to handlers on the major steps that should be performed; it does not dictate the exact sequence of steps that should always be followed.
+
+Table 3-5. Incident Handling Checklist
+
+Action
+Completed
+
+Detection and Analysis
+
+| 1.  | Determine whether an incident has occurred                                                                                                                                                                              |
+| 1.1 | Analyze the precursors and indicators                                                                                                                                                                                   |
+| 1.2 | Look for correlating information                                                                                                                                                                                        |
+| 1.3 | Perform research (e.g., search engines, knowledge base)                                                                                                                                                                 |
+| 1.4 | As soon as the handler believes an incident has occurred, begin documenting the investigation and gathering evidence                                                                                                    |
+| 2.  | Prioritize handling the incident based on the relevant factors (functional impact, information                                                                                                                          |
+|     | impact, recoverability effort, etc.)                                                                                                                                                                                    |
+| 3.  | Report the incident to the appropriate internal personnel and external organizations *Containment, Eradication, and Recovery*                                                                                             |
+| 4.  | Acquire, preserve, secure, and document evidence                                                                                                                                                                        |
+| 5.  | Contain the incident                                                                                                                                                                                                    |
+| 6.  | Eradicate the incident                                                                                                                                                                                                  |
+| 6.1 | Identify and mitigate all vulnerabilities that were exploited                                                                                                                                                           |
+| 6.2 | Remove malware, inappropriate materials, and other components                                                                                                                                                           |
+| 6.3 | If more affected hosts are discovered (e.g., new malware infections), repeat the Detection and Analysis steps (1.1, 1.2) to identify all other affected hosts, then contain (5) and eradicate (6) the incident for them |
+| 7.  | Recover from the incident                                                                                                                                                                                               |
+| 7.1 | Return affected systems to an operationally ready state                                                                                                                                                                 |
+| 7.2 | Confirm that the affected systems are functioning normally                                                                                                                                                              |
+| 7.3 | If necessary, implement additional monitoring to look for future related activity *Post-Incident Activity*                                                                                                                |
+| 8.  | Create a follow-up report                                                                                                                                                                                               |
+| 9.  | Hold a lessons learned meeting (mandatory for major incidents, optional otherwise)                                                                                                                                      |
+
+** 3.6 Recommendations
+
+The key recommendations presented in this section for handling incidents are summarized below.

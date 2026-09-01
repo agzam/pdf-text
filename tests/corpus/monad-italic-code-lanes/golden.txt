@@ -1,0 +1,35 @@
+Since the example for using monad transformers will be an interpreter for the little language defined above, we start by defining an evaluation function. This function is not monadic and will serve as a kind of “reference implementation”. The definition of the interpreter function, called /eval0/, is straightforward.
+
+  eval0             :: Env → Exp → Value
+  eval0 env (Lit i) = IntVal i
+  eval0 env (Var n) = fromJust (Map.lookup n env)
+
+  /eval0 env/ (/Plus e1 e2/) = *let* /IntVal i1/ = /eval0 env e1 IntVal i2/ = /eval0 env e2/
+
+  in IntVal (i1 + i2)
+
+  /eval0 env/ (/Abs n e/) = /FunVal env n e eval0 env/ (/App e1 e2/) = *let* /val1/ = /eval0 env e1 val2/ = /eval0 env e2/
+
+*in case* /val1/ *of*
+FunVal env^{′} /n body → eval0/ (Map.insert n val2 env^{′}) /body/
+
+Integer literals simply evaluate to themselves (packaged up in the /Value/ data type), variables evaluate to the values to which they are bound in the environment. The use of the /fromJust/[fn:3-3] function is necessary because the /Map.lookup/ function returns a /Maybe/ value. Note that the use of this function introduces an error condition: when a variable is used which is not bound anywhere using a /λ/ expression, the program will halt with an error message. Addition is implemented by simply evaluating both operands and returning their sum. Whenever one of the addition operands evaluates to a non-number, the pattern matching in the *let* expression will fail, also terminating the program with an error message. Abstractions simply evaluate to functional values, which capture the environment in which they are evaluated. Function application proceeds similar to addition, by first evaluating the function and the argument. The first expression must evaluate to a functional value, whose body is then evaluated in the captured environment, extended with the binding of the function parameter to the argument value. The *case* expression used here to deconstruct the functional value introduces another error possibility. In later sections of this text, we will handle these error cases using an error monad, which gives us more control over their handling.
+
+The definition of /eval0/ could be shortened a little bit, for example, the *let* expression in the /App/ case seems superfluous. Nevertheless, the definition given here will make it easier to relate it to the monadic versions defined below.
+The following example expression,
+
+  12 + ((λx → x)(4 + 2))
+
+can be used to test this interpreter and all of the others we will define shortly.
+
+/exampleExp/ = /Lit/ 12 ‘Plus‘ (/App/ (/Abs/ "x" (/Var/ "x")) (/Lit/ 4 ‘Plus‘ /Lit/ 2))
+
+For example, entering
+
+  eval0 Map.empty exampleExp
+
+in ghci will give the answer
+
+  IntVal 18
+
+[fn:3-3] /fromJust/ has the type /Maybe α → α/

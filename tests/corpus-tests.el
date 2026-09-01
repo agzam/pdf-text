@@ -283,6 +283,13 @@ that moved; this reports the line and its number."
   (it "does not read a display interrupting its sentence as a break"
     (expect (pdf-corpus-mid-sentence-breaks
              "the final set of rewrite rules are\n  x ∗ i(x) → e\nwhere e is the identity element of the group")
+            :to-be nil))
+
+  (it "leaves generated table rows out"
+    ;; a cell wraps where its column ends, so a grammar's tables would
+    ;; otherwise read as thousands of broken sentences
+    (expect (pdf-corpus-mid-sentence-breaks
+             "| con tuteo | en todos los tiempos |\n| | y el imperativo |")
             :to-be nil)))
 
 (describe "pdf-corpus-glued-tokens"
@@ -347,7 +354,17 @@ that moved; this reports the line and its number."
   (it "matches through case and typography"
     (expect (pdf-corpus-outline-placements '("Sections and Notation")
                                            "** SECTIONS AND NOTATION")
-            :to-be nil)))
+            :to-be nil))
+
+  (it "matches an outline that numbers its own titles"
+    ;; the lambda tutorial: the outline says "1 Definition" and so does
+    ;; the page, and the number has to come off both or neither
+    (expect (pdf-corpus-outline-placements '("1 Definition")
+                                           "* 1 Definition\n\nthe body")
+            :to-be nil)
+    (expect (pdf-corpus-outline-placements
+             '("2.1 Addition") "prose about addition")
+            :to-equal '(("2.1 Addition" . 0)))))
 
 (describe "pdf-corpus-empty-headings"
   (it "reports a heading with nothing between it and the next"

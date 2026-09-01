@@ -6,6 +6,11 @@
 ;;   ~/SyncMobile/Books/Haskell/other downloaded books/Haskell/William_Jones-Warp_Speed_Haskell(2009).pdf
 ;;     (found by the first full run: it took the server down and the
 ;;      311 books after it went unmeasured - the same cascade)
+;; Excluded as encrypted (epdfinfo cannot open them, and the refusal
+;; takes the server with it): the nine PDFs under
+;; Books/Security/SEC504, in the directory named for their password.
+;;     (the Round 14 library run died on the first of them and the 146
+;;      books after it went unmeasured - the same cascade again)
 ~/SyncMobile/Books/A Mind for Numbers - How to Excel at Math and Science.pdf
 ~/SyncMobile/Books/A Short History of Nearly Everything by Bill Bryson.pdf
 ~/SyncMobile/Books/ANAYA_Gramatica_B1.pdf
@@ -251,15 +256,6 @@
 ~/SyncMobile/Books/Security/SEC504/cheat_sheets/WindowsIntrusionDiscovery3.0.pdf
 ~/SyncMobile/Books/Security/SEC504/cheat_sheets/linsacheatsheet_2.1.pdf
 ~/SyncMobile/Books/Security/SEC504/cheat_sheets/tcpip.pdf
-~/SyncMobile/Books/Security/SEC504/pass-protected/504.1 Combined.pdf
-~/SyncMobile/Books/Security/SEC504/pass-protected/504.1 Incident Response and Cyber Investigations.pdf
-~/SyncMobile/Books/Security/SEC504/pass-protected/504.2 Recon, Scanning, and Enumeration attacks.pdf
-~/SyncMobile/Books/Security/SEC504/pass-protected/504.3 Password and Access Attacks.pdf
-~/SyncMobile/Books/Security/SEC504/pass-protected/504.4 Public-facing and drive-by attacks.pdf
-~/SyncMobile/Books/Security/SEC504/pass-protected/504.5 Evasive and Post-Exploitation.pdf
-~/SyncMobile/Books/Security/SEC504/pass-protected/504.6 Capture the Flag Event.pdf
-~/SyncMobile/Books/Security/SEC504/pass-protected/Workbook 1-3.pdf
-~/SyncMobile/Books/Security/SEC504/pass-protected/Workbook 4-5.pdf
 ~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book1/Summary-IncidentResponse.pdf
 ~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book1/Summary-LiveExamination.pdf
 ~/SyncMobile/Books/Security/SEC504/visual_association_maps/Book1/Summary-MalwareInvestigations.pdf

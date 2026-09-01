@@ -66,14 +66,15 @@ into the second.  The font fields arrived with the MuPDF input;
 records captured before it carry none and read as nil."
   (cl-destructuring-bind (text x0 x1 top bot base height space cv first-width
                           &optional font size bold italic synth
-                          lead-font lead-bold)
+                          lead-font lead-bold rotated)
       record
     (pdf-text-line-create :text text :x0 x0 :x1 x1 :top top :bot bot
                           :base base :height height :space space :cv cv
                           :first-width first-width
                           :font font :size size :bold bold :italic italic
                           :synth synth
-                          :lead-font lead-font :lead-bold lead-bold)))
+                          :lead-font lead-font :lead-bold lead-bold
+                          :rotated rotated)))
 
 (defun pdf-corpus--print-record (line)
   "LINE as one line of a case file.
@@ -85,7 +86,7 @@ leading measured to the full float (the fast-and-loose refusal: a
 0.00005 rounding split a run-in head from its own line).  The
 advance variation, first-word width and em size keep four decimals -
 their comparisons are ratios with room."
-  (format "  (%s %s %s %s %s %s %s %s %s %s %s)"
+  (format "  (%s %s %s %s %s %s %s %s %s %s %s%s)"
           (prin1-to-string (pdf-text-line-text line))
           (mapconcat #'pdf-corpus--exact
                      (seq-take (cdr (pdf-corpus-record line)) 6) " ")
@@ -100,7 +101,11 @@ their comparisons are ratios with room."
           (if (pdf-text-line-italic line) "t" "nil")
           (or (pdf-text-line-synth line) "nil")
           (prin1-to-string (pdf-text-line-lead-font line))
-          (if (pdf-text-line-lead-bold line) "t" "nil")))
+          (if (pdf-text-line-lead-bold line) "t" "nil")
+          ;; the direction flag arrived with the rotated-stamp drop;
+          ;; a record captured before it reads as horizontal, and only
+          ;; a turned line spends the bytes
+          (if (pdf-text-line-rotated line) " t" "")))
 
 (defun pdf-corpus--print-profile (profile)
   "PROFILE, a `pdf-text--profile' plist, stored exact.
@@ -393,10 +398,18 @@ A line closing on a lowercase word or a comma, and the next opening
 lowercase, is a paragraph the reflow broke - or display maths and code
 inside prose, which is why cases carry a budget.  A pair whose either
 side reads as mathematics is the page interrupting its own sentence
-with a display, which is the correct rendering, not a break."
+with a display, which is the correct rendering, not a break.
+
+Generated table rows stay out, as they do in the glued count: a
+table's cells wrap where its columns end, so every wrapped cell would
+read as a broken sentence and a page of them would drown the measure
+in rows that are exactly what the page set."
   (let ((case-fold-search nil)          ; batch defaults to t, where
         (lines (mapcar #'string-trim    ; [[:lower:]] matches capitals
-                       (seq-remove #'string-blank-p (split-string text "\n"))))
+                       (seq-remove (lambda (line)
+                                     (or (string-blank-p line)
+                                         (string-match-p "\\`[ \t]*|" line)))
+                                   (split-string text "\n"))))
         breaks)
     (cl-loop for (this next) on lines while next
              do (when (and (string-match-p "[[:lower:],;]\\'" this)
@@ -499,7 +512,12 @@ the org markers and the section number the page sets in front of it
 come off.  Counting the title's letters wherever they occur was the
 first measure and it read a page's own prose as misplacement: a
 child's title contains its parent's, and a page saying \"complex,
-heterogeneous attributes\" says its own heading twice."
+heterogeneous attributes\" says its own heading twice.
+
+The number comes off both sides or neither: an outline that names its
+sections \"1 Definition\", as a paper's does, would otherwise never
+match the line it names, and every such title would read as missing
+however exactly the render places it."
   (let ((lines (mapcar (lambda (line)
                          (pdf-corpus-stream
                           (pdf-text--unnumbered-title
@@ -507,8 +525,10 @@ heterogeneous attributes\" says its own heading twice."
                        (split-string text "\n"))))
     (seq-remove (lambda (found) (eql 1 (cdr found)))
                 (mapcar (lambda (title)
-                          (cons title (cl-count (pdf-corpus-stream title) lines
-                                                :test #'equal)))
+                          (cons title
+                                (cl-count (pdf-corpus-stream
+                                           (pdf-text--unnumbered-title title))
+                                          lines :test #'equal)))
                         titles))))
 
 (cl-defun pdf-corpus-violations (&key source reflowed headed titles drops budget
