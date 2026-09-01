@@ -1,6 +1,6 @@
 lems, example project instructions based on the frameworks from the book, exam questions, and more to come.
 
-  We keep an up-to-date list of known adoptees on the book’s website. Click Who’s Using It at the top.
+  We keep an up-to-date list of known adoptees on the book’s website. Click /Who’s Using It/ at the top.
 
 ** Other Skills and Concepts
 

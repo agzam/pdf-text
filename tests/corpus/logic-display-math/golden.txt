@@ -1,25 +1,25 @@
-The soundness of an inference system comes from the soundness of all the inference rules. In general, we require all inference rules be sound to preserves truth of all the derived formulas. For a sound inference system S, every derived formula B ∈T (A). If A is a set of tautologies, then B is a tautology, too.
+The soundness of an inference system comes from the soundness of all the inference rules. In general, we require all inference rules be sound to preserves truth of all the derived formulas. For a sound inference system /S/, every derived formula /B ∈T/ (/A/). If /A/ is a set of tautologies, then /B/ is a tautology, too.
 
-Theorem 3.2.2. If an inference system S is sound and A ⊢_{S} B, then A ​|= B.
+*Theorem 3.2.2.* If an inference system S is sound and A ⊢_{S} B, then A ​|= /B./
 
-Proof. A ⊢_{S} B means there is a proof of B in S. Suppose the proof is F_{1}, F_{2}, ..., F_{n} = B. By induction on n, we show that A ​|= F_{i} for all i = 1, ..., n. If F_{i} is in A, then A ​|= F_{i}. If F_{i} is derived from an inference rule P_{1}, P_{2}, ..., P_{m} ⊢ C, using F_{j}_{1}, F_{j}_{2}, ..., F_{j}_{m} as premises, by induction hypotheses, A ​|= F_{j}_{k}, because j_{k} < i, for all 1 ≤ k ≤ m. That is, A ​|= ∧^{m}_{k}_{=1}F_{j}_{k}.
+/Proof/. A ⊢_{S} /B/ means there is a proof of /B/ in /S/. Suppose the proof is F_{1}, F_{2}, ..., F_{n} = /B/. By induction on /n/, we show that A ​|= F_{i} for all /i/ = 1, ..., n. If F_{i} is in /A/, then A ​|= F_{i}. If F_{i} is derived from an inference rule P_{1}, P_{2}, ..., P_{m} /⊢ C/, using F_{j}_{1}, F_{j}_{2}, ..., F_{j}_{m} as premises, by induction hypotheses, A ​|= F_{j}_{k}, because j_{k} /< i/, for all 1 /≤ k ≤ m/. That is, A ​|= ∧^{m}_{k}_{=1}F_{j}_{k}.
 
-Since the inference rule is sound, ∧^{m}_{k}_{=1}P_{k} ​|= C. Applying the substitution theorem, ∧^{m}_{k}_{=1}F_{j}_{k} ​|= F_{i}. Because ​|= is transitive, A ​|= F_{i}.
+Since the inference rule is sound, ∧^{m}_{k}_{​=1}P_{k} ​|= /C/. Applying the substitution theorem, ∧^{m}_{k}_{​=1}F_{j}_{k} ​|= F_{i}. Because ​|= is transitive, A ​|= F_{i}.
 
 Different inference systems are obtained by changing the axioms or the inference rules. In propositional logic, all these systems are equivalent in the sense that they are sound and complete.
 
 *** 3.2.2 Hilbert Systems
-Hilbert systems, sometimes called Hilbert calculus, or Hilbert-style inference
+/Hilbert systems/, sometimes called Hilbert calculus, or Hilbert-style inference
 
 systems, are a type of deduction system attributed to Gottlob Frege and David Hilbert. Variants of Hilbert systems for propositional logic exist and these deductive systems are extended to first-order logic and other logics.
 
-Definition 3.2.3. The Hilbert system H contains three axiom rules plus MP (modus ponens):
+*Definition 3.2.3.* /The Hilbert system H contains three axiom rules plus MP (modus ponens):/
 
    H_{1} : ⊢ (A → (B → A)),
    H_{2} : ⊢ (A → (B → C)) → ((A → B) → (A → C)),
    H_{3} : ⊢ (¬B →¬A) → (A → B),
   MP : A, A → B ⊢ B.
 
-The axiom rule H_{3} is not needed if → is the only operator in all formulas. Other logical operators can be defined using either → and ¬. For example, A∧B ≡ ¬(A →¬B) and A ∨ B ≡¬A ∨ B. ¬A can be replaced by A →⊥ in H_{3}. It will turn out that all tautologies are derivable from the three formulas H_{1}, H_{2}, and H_{3}.
+The axiom rule H_{3} is not needed if /→/ is the only operator in all formulas. Other logical operators can be defined using either /→/ and /¬/. For example, A∧B ≡ ¬(/A →¬B/) and /A ∨ B ≡¬A ∨ B/. /¬A/ can be replaced by /A →⊥/ in H_{3}. It will turn out that all tautologies are derivable from the three formulas H_{1}, H_{2}, and H_{3}.
 
-Example 3.2.4. Assume A = ∅, to show that A ⊢_{H} (p → p), we have the following
+*Example 3.2.4.* Assume /A/ = /∅/, to show that A ⊢_{H} (/p → p/), we have the following

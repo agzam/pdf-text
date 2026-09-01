@@ -1,34 +1,34 @@
-(b)  before plural nouns, ‘some’ or ‘a few’, or sometimes ‘a set of’:
+(*b*)  before plural nouns, ‘some’ or ‘a few’, or sometimes ‘a set of’:
 
-| De momento no, pero si me invitas a unas copitas a lo mejor me lo pienso (CORPES, Arg.)            | Not right now, but if you buy me a couple of drinks, maybe I’ll think about it |
-| Todavía tenía unos restos de fe                                                                    | (S)he still had some vestiges of faith                                         |
-| Sonreí . . . pero fue peor: unos dientes amarillos aparecieron (CRG, Sp.)                          | I smiled, but it was worse: a set of yellow teeth appeared                     |
-| La compañía anunció unos resultados mucho peores de lo que esperaban los inversores (El País, Sp.) | The company announced a set of results much worse than investors expected      |
-| Está a unas calles de sus casas (La Jornada, Mex.)                                                 | It’s a few streets away from their houses                                      |
+| /De momento no, pero si me invitas a unas copitas a lo mejor me lo pienso/ (/CORPES/, Arg.)            | Not right now, but if you buy me a couple of drinks, maybe I’ll think about it |
+| /Todavía tenía unos restos de fe/                                                                    | (S)he still had some vestiges of faith                                         |
+| /Sonreí . . . pero fue peor: unos dientes amarillos aparecieron/ (CRG, Sp.)                          | I smiled, but it was worse: a set of yellow teeth appeared                     |
+| /La compañía anunció unos resultados mucho peores de lo que esperaban los inversores/ (/El País/, Sp.) | The company announced a set of results much worse than investors expected      |
+| /Está a unas calles de sus casas/ (/La Jornada/, Mex.)                                                 | It’s a few streets away from their houses                                      |
 
 When used thus it may simply moderate the force of a following noun. It can therefore add a modest note:
 
-| Mira estas fotos—son unas vistas tomadas en Guadalajara                                                      | Look at these photos – they’re a couple of shots taken in Guadalajara                              |
-| Se sintió viejo, triste, inútil, y con unos deseos de llorar tan urgentes que no pudo hablar más (GGM, Col.) | He felt old, sad, useless, and with an urge to weep that was so urgent that he could speak no more |
+| /Mira estas fotos—son unas vistas tomadas en Guadalajara/                                                      | Look at these photos – they’re a couple of shots taken in Guadalajara                              |
+| /Se sintió viejo, triste, inútil, y con unos deseos de llorar tan urgentes que no pudo hablar más/ (GGM, Col.) | He felt old, sad, useless, and with an urge to weep that was so urgent that he could speak no more |
 
-(c)  Before nouns that appear in the plural, unos shows that only one is meant. If the noun denotes symmetrical objects like trousers, binoculars, scissors, or before pairs of articles like gloves, shoes, unos/unas means ‘a pair of’:
+(*c*)  Before nouns that appear in the plural, /unos/ shows that only one is meant. If the noun denotes symmetrical objects like trousers, binoculars, scissors, or before pairs of articles like gloves, shoes, /unos/unas/ means ‘a pair of’:
 
-| Me caí por unas escaleras/por una escalera | I fell down some stairs                        |
-| Voy a tomarme unas vacaciones              | I’m going to have a holiday/vacation           |
-| unos pantalones/unas gafas/unas cortinas   | a pair of trousers (US pants)/glasses/curtains |
-| Llevaba unas botas de ante azul (ES, Mex.) | She was wearing a pair of blue suede boots     |
+| /Me caí por unas escaleras/por una escalera/ | I fell down some stairs                        |
+| /Voy a tomarme unas vacaciones/              | I’m going to have a holiday/vacation           |
+| /unos pantalones/unas gafas/unas cortinas/   | a pair of trousers (US pants)/glasses/curtains |
+| /Llevaba unas botas de ante azul/ (ES, Mex.) | She was wearing a pair of blue suede boots     |
 
-(d)  Use of unos/unas may show that the plural noun following is not being used generically:
+(*d*)  Use of /unos/unas/ may show that the plural noun following is not being used generically:
 
-| Son payasos      | They’re (circus) clowns           |
-| Son unos payasos | They’re (acting like) clowns      |
-| Son zorros       | They’re foxes (species)           |
-| Son unos zorros  | They’re really cunning/like foxes |
+| /Son payasos/      | They’re (circus) clowns           |
+| /Son unos payasos/ | They’re (acting like) clowns      |
+| /Son zorros/       | They’re foxes (species)           |
+| /Son unos zorros/  | They’re really cunning/like foxes |
 
-(e)  Unos/unas may be needed to show that the following noun is a noun and not an adjective or noun used as an adjective, as in son místicos ‘they’re mystic(al)’, son unos místicos ‘they’re mystics/ day-dreamers’. See 4.1.11 for examples.
+(*e*)  /Unos/unas/ may be needed to show that the following noun is a noun and not an adjective or noun used as an adjective, as in /son místicos/ ‘they’re mystic(al)’, /son unos místicos/ ‘they’re mystics/ day-dreamers’. See 4.1.11 for examples.
 
-(1)  Sometimes use of unos makes little difference: el pacifismo debería traducirse en unos comportamientos políticos que no tuviesen ninguna indulgencia con los violentos (La Vanguardia, Sp., unos optional) ‘pacifism ought to be translated into (a set of) patterns of political behaviour which show no indulgence towards the violent’.
+*(1)*  Sometimes use of /unos/ makes little difference: /el pacifismo debería traducirse en unos comportamientos políticos que no tuviesen ninguna indulgencia con los violentos/ (/La Vanguardia/, Sp., /unos/ optional) ‘pacifism ought to be translated into (a set of) patterns of political behaviour which show no indulgence towards the violent’.
 
-(2)  Unos cannot be used to answer ¿cuántos? ‘how many?’ The NGLE 20.3u notes that to the question ¿cuántos estudiantes había? one can reply algunos, pocos, unos cuantos, varios (‘several’) or with a number, but not *unos, just as one would probably not reply ‘some’ in English.
+*(2)*  /Unos/ cannot be used to answer /¿cuántos?/ ‘how many?’ The /NGLE/ 20.3u notes that to the question /¿cuántos estudiantes había?/ one can reply /algunos/, /pocos/, /unos cuantos/, /varios/ (‘several’) or with a number, but not *unos, just as one would probably not reply ‘some’ in English.
 
-(3)  Unos cuantos/unas cuantas may be used to mean ‘a few’, ‘couple of’: si un mesero tardaba demasiado en traernos la cuenta daba unos cuantos gritos en francés (ES, Mex., dialogue; mesero = camarero
+*(3)*  /Unos cuantos/unas cuantas/ may be used to mean ‘a few’, ‘couple of’: /si un mesero tardaba demasiado en traernos la cuenta daba unos cuantos gritos en francés/ (ES, Mex., dialogue; /mesero/ = /camarero/

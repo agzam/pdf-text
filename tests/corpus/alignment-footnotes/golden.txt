@@ -3,7 +3,7 @@ J.F. Martínez-Trinidad et al. (Eds.): CIARP 2006, LNCS 4225, pp. 824 – 833, 2
 
 Alignment of Paragraphs in Bilingual Texts
 
-Using Bilingual Dictionaries and Dynamic Programming[fn:1-star]
+*Using Bilingual Dictionaries and Dynamic Programming*[fn:1-star]
 
 Alexander Gelbukh and Grigori Sidorov
 
@@ -12,7 +12,7 @@ Alexander Gelbukh and Grigori Sidorov
   sidorov@cic.ipn.mx
     www.Gelbukh.com
 
-  Abstract. Parallel text alignment is a special type of pattern recognition task aimed to discover the similarity between two sequences of symbols. Given the same text in two different languages, the task is to decide which elements—paragraphs in case of paragraph alignment—in one text are translations of which elements of the other text. One of the applications is training training statistical machine translation algorithms. The task is not trivial unless detailed text understanding can be afforded. In our previous work we have presented a simple technique that relied on bilingual dictionaries but does not perform any syntactic analysis of the texts. In this paper we give a formal definition of the task and present an exact optimization algorithm for finding the best alignment.
+  *Abstract.* Parallel text alignment is a special type of pattern recognition task aimed to discover the similarity between two sequences of symbols. Given the same text in two different languages, the task is to decide which elements—paragraphs in case of paragraph alignment—in one text are translations of which elements of the other text. One of the applications is training training statistical machine translation algorithms. The task is not trivial unless detailed text understanding can be afforded. In our previous work we have presented a simple technique that relied on bilingual dictionaries but does not perform any syntactic analysis of the texts. In this paper we give a formal definition of the task and present an exact optimization algorithm for finding the best alignment.
 
 * 1 Introduction
 
@@ -22,4 +22,4 @@ Various researchers have tried different approaches to text alignment, usually a
 
 [fn:1-star] Work done under partial support of Mexican Government (CONACyT, SNI) and National Polytechnic Institute, Mexico (CGPI, COFAA). We thank an anonymous reviewer for attracting our attention to valuable resources and publications.
 
-[fn:1-1] Bilingual Sentence Aligner by Robert C. Moore, research.microsoft.com/research/downloads/ default.aspx; Geometric Mapping and Alignment (GMA) by Dan Melamed, nlp.cs.nyu.edu/ GMA/; Champollion Toolkit by LDC, champollion.sourceforge.net/; an on-line sentence aligner, 143.107.183.175/site2001/projetos/pesa.htm.
+[fn:1-1] /Bilingual Sentence Aligner/ by Robert C. Moore, research.microsoft.com/research/downloads/ default.aspx; /Geometric Mapping and Alignment/ (GMA) by Dan Melamed, nlp.cs.nyu.edu/ GMA/; /Champollion Toolkit/ by LDC, champollion.sourceforge.net/; an on-line sentence aligner, 143.107.183.175/site2001/projetos/pesa.htm.

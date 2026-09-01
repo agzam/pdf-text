@@ -4,7 +4,7 @@ To assign the weight to a hyperarc as described in Section 0 above, we need to c
 
 ** 3.1 Baseline Distance Measure
 
-Common sense suggests that the corresponding pieces of texts are located at approximately the relative same distance from the beginning of the whole text. We define the baseline distance between two pieces of text, T_{A} in the language A and T_{B} in the language B, as follows:
+Common sense suggests that the corresponding pieces of texts are located at approximately the relative same distance from the beginning of the whole text. We define the baseline distance between two pieces of text, T_{A} in the language /A/ and T_{B} in the language /B/, as follows:
 
   Distance(T_{A}, T_{B}) = |start(T_{A}) – start(T_{B})| + |end(T_{A}) – end(T_{B})|,
 
@@ -18,12 +18,12 @@ We define the similarity between two texts in different languages as the number 
 
 1. Set T_{X}, := the shortest one of T_{A} and T_{B}; T_{Y} := the longest
 2. Set translations := 0
-3. for each word token w in T_{X} 4.
+3. for each word token /w/ in T_{X} 4.
 
-  if any of its translations D_{XY} (w) is found in T_{Y} 5.
+  if any of its translations D_{XY} (/w/) is found in T_{Y} 5.
 increase translations by 1
 
-where D_{XY} (w) is a function returning a set of the dictionary translations of the word w. Then the number of word tokens without translation in both paragraphs, under the hypothesis that these two paragraphs correspond to each other, is:
+where D_{XY} (/w/) is a function returning a set of the dictionary translations of the word /w/. Then the number of word tokens without translation in both paragraphs, under the hypothesis that these two paragraphs correspond to each other, is:
 
   Distance(T_{A}, T_{B}) = | T_{A} ​| + | T_{B} ​| – 2 × translations.
 

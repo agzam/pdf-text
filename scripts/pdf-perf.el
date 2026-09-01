@@ -163,9 +163,10 @@ what the reader pays."
                        for hs = heads then (cdr hs)
                        for assigned = assignments then (cdr assigned)
                        collect (pdf-text--escape-org-lines
-                                (pdf-text--render-blocks
-                                 page-blocks page-profile vocabulary (car hs)
-                                 number (caar assigned) (cdar assigned))
+                                (pdf-text--emphasize
+                                 (pdf-text--render-blocks
+                                  page-blocks page-profile vocabulary (car hs)
+                                  number (caar assigned) (cdar assigned)))
                                 (append (mapcar #'cadr (caar assigned))
                                         (car hs)))))))
     (setq composed (pdf-perf--stage "interleave outline"

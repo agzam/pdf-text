@@ -956,7 +956,43 @@ HEADINGS are the org heading lines the outline puts on that page."
                                                  :size 0.0003 :font "T31")))
               :to-equal "Vol II"))))
 
+(describe "pdf-text--escape-emphasis"
+  (it "breaks a literal pair org would parse as emphasis"
+    (expect (pdf-text--escape-emphasis "either /this/ way")
+            :to-equal "either \u200B/this/ way")
+    (expect (pdf-text--escape-emphasis "a *bold* claim")
+            :to-equal "a \u200B*bold* claim")
+    (expect (pdf-text--escape-emphasis "set =flag= now")
+            :to-equal "set \u200B=flag= now"))
+
+  (it "breaks a pair opening the line"
+    (expect (pdf-text--escape-emphasis "*emphasis* opens")
+            :to-equal "\u200B*emphasis* opens"))
+
+  (it "breaks every pair on the line"
+    (expect (pdf-text--escape-emphasis "see /this/ and /that/ now")
+            :to-equal "see \u200B/this/ and \u200B/that/ now"))
+
+  (it "leaves markers org would not pair"
+    (expect (pdf-text--escape-emphasis "and/or the /usr/bin path")
+            :to-equal "and/or the /usr/bin path")
+    (expect (pdf-text--escape-emphasis "int *x = n*(m-1)*k")
+            :to-equal "int *x = n*(m-1)*k")
+    (expect (pdf-text--escape-emphasis "2 + 2 = 4 + 1")
+            :to-equal "2 + 2 = 4 + 1"))
+
+  (it "leaves generated script markup alone"
+    (expect (pdf-text--escape-emphasis "word^{2} and x_{i} stay")
+            :to-equal "word^{2} and x_{i} stay")))
+
 (describe "pdf-text--mupdf-record literals"
+  (it "breaks a literal emphasis pair at record birth"
+    (expect (pdf-text-line-text
+             (pdf-text--mupdf-record
+              (pdf-text-tests--form "read /Moby Dick/ twice"
+                                    (list (pdf-text-tests--run 0 22)))))
+            :to-equal "read \u200B/Moby Dick/ twice"))
+
   (it "breaks a literal script pair so org will not parse it"
     (expect (pdf-text-line-text
              (pdf-text--mupdf-record
@@ -971,6 +1007,179 @@ HEADINGS are the org heading lines the outline puts on that page."
                                     (list (pdf-text-tests--run 0 3 :oy 0.3424
                                                                :qh 0.0089)))))
             :to-equal "k=1")))
+
+(describe "pdf-text--mupdf-record emphasis property"
+  ;; the walker's per-run weight and slant survive to the record as a
+  ;; text property, so the render can write org emphasis where the
+  ;; page set a face - an index-based span would die at the first
+  ;; substring, a property rides every join
+  (cl-flet ((spans (text runs)
+              (let* ((out (pdf-text-line-text
+                           (pdf-text--mupdf-record
+                            (pdf-text-tests--form text runs))))
+                     (pos 0) result)
+                (while (< pos (length out))
+                  (let ((next (or (next-single-property-change
+                                   pos 'pdf-text-emph out)
+                                  (length out))))
+                    (when-let* ((value (get-text-property pos 'pdf-text-emph
+                                                          out)))
+                      (push (list (substring-no-properties out pos next) value)
+                            result))
+                    (setq pos next)))
+                (nreverse result))))
+
+    (it "carries a bold run's span as bold"
+      ;; empirical p2: the run-in bold lead, roman continuing in-line
+      (expect (spans "What developers value? Whereas"
+                     (list (pdf-text-tests--run 0 23 :x0 0.10 :x1 0.30
+                                                :bold t :font "Medi")
+                           (pdf-text-tests--run 23 7 :x0 0.301 :x1 0.35
+                                                :font "Regu")))
+              :to-equal '(("What developers value? " bold))))
+
+    (it "carries an italic phrase and a bold-italic one by value"
+      (expect (spans "were not so"
+                     (list (pdf-text-tests--run 0 5 :x0 0.10 :x1 0.15)
+                           (pdf-text-tests--run 5 3 :x0 0.151 :x1 0.18
+                                                :italic t :font "Ital")
+                           (pdf-text-tests--run 8 3 :x0 0.181 :x1 0.21)))
+              :to-equal '(("not" italic)))
+      (expect (spans "was SourceForge"
+                     (list (pdf-text-tests--run 0 4 :x0 0.10 :x1 0.14)
+                           (pdf-text-tests--run 4 11 :x0 0.141 :x1 0.25
+                                                :bold t :italic t
+                                                :font "MediItal")))
+              :to-equal '(("SourceForge" bold-italic))))
+
+    (it "styles the whole line when its one run is styled"
+      (expect (spans "MOOC" (list (pdf-text-tests--run 0 4 :italic t
+                                                       :font "Ital")))
+              :to-equal '(("MOOC" italic))))
+
+    (it "leaves script markup content unpropertied"
+      ;; the italic exponent wraps as ^{2}; emphasis markers inside
+      ;; script braces would hand org a parse the page never set
+      (expect (spans "word2"
+                     (list (pdf-text-tests--run 0 4 :x0 0.10 :x1 0.20)
+                           (pdf-text-tests--run 4 1 :x0 0.20 :x1 0.21
+                                                :oy 0.3352 :qh 0.0089
+                                                :italic t :font "Ital")))
+              :to-equal nil))
+
+    (it "keeps the span aligned through the space-run collapse"
+      (expect (spans "all.  Tune"
+                     (list (pdf-text-tests--run 0 6 :x0 0.10 :x1 0.16)
+                           (pdf-text-tests--run 6 4 :x0 0.161 :x1 0.20
+                                                :italic t :font "Ital")))
+              :to-equal '(("Tune" italic))))))
+
+(describe "pdf-text--emphasize"
+  (cl-flet ((emph (text style &rest args)
+              (apply #'propertize text 'pdf-text-emph style args)))
+
+    (it "writes a bold phrase as org bold"
+      (expect (pdf-text--emphasize
+               (concat (emph "What developers value? " 'bold)
+                       "Whereas prior work"))
+              :to-equal "*What developers value?* Whereas prior work"))
+
+    (it "writes italic and bold-italic phrases by value"
+      (expect (pdf-text--emphasize
+               (concat "were " (emph "not" 'italic) " so"))
+              :to-equal "were /not/ so")
+      (expect (pdf-text--emphasize
+               (concat "poll: " (emph "Hammer" 'bold-italic) "."))
+              :to-equal "poll: /*Hammer*/."))
+
+    (it "bridges same-style spans across a join space"
+      ;; an italic phrase wrapped over a line break arrives as two
+      ;; spans around the join's own space
+      (expect (pdf-text--emphasize
+               (concat "respondent (" (emph "MOOC" 'italic) " "
+                       (emph "all" 'italic) ") while"))
+              :to-equal "respondent (/MOOC all/) while"))
+
+    (it "keeps differently-styled neighbours apart"
+      (expect (pdf-text--emphasize
+               (concat (emph "Metadata: " 'bold)
+                       (emph "SourceForge" 'bold-italic) "."))
+              :to-equal "*Metadata:* /*SourceForge*/."))
+
+    (it "starts past a list marker, org's own syntax"
+      ;; the page sets the enumerator bold with its lead; a marker
+      ;; inside emphasis is no longer a list item to org
+      (expect (pdf-text--emphasize
+               (concat (emph "1. Open Source: " 'bold) "metadata"))
+              :to-equal "1. *Open Source:* metadata")
+      (expect (pdf-text--emphasize
+               (concat "- " (emph "lead words" 'bold) " continue"))
+              :to-equal "- *lead words* continue"))
+
+    (it "leaves a wholly-styled line plain"
+      ;; block-level styling - an epigraph, a false-flag body font -
+      ;; is not emphasis; only contrast within a line is
+      (expect (pdf-text--emphasize (emph "An italic epigraph line." 'italic))
+              :to-equal "An italic epigraph line.")
+      (expect (pdf-text--emphasize
+               (concat "- " (emph "a wholly bold item" 'bold)))
+              :to-equal "- a wholly bold item"))
+
+    (it "leaves heading and keyword lines alone"
+      (expect (pdf-text--emphasize
+               (concat "* " (emph "Chapter Name" 'bold)))
+              :to-equal (concat "* " "Chapter Name"))
+      (expect (pdf-text--emphasize
+               (concat "#+TITLE: " (emph "The Book" 'bold)))
+              :to-equal "#+TITLE: The Book"))
+
+    (it "leaves mono and math records alone"
+      (let ((rec (pdf-text-line-create :text "x" :kind 'mono)))
+        (expect (pdf-text--emphasize
+                 (concat "  " (propertize "let x = 5" 'pdf-text-emph 'italic
+                                          'pdf-text-line rec)))
+                :to-equal "  let x = 5")))
+
+    (it "skips a span org could not parse at its borders"
+      ;; a face switch inside a word - a ligature run, a swash kern -
+      ;; must not break the word with markers
+      (expect (pdf-text--emphasize
+               (concat "in" (emph "formation" 'italic) " age"))
+              :to-equal "information age")
+      (expect (pdf-text--emphasize
+               (concat (emph "informa" 'italic) "tion age"))
+              :to-equal "information age"))
+
+    (it "keeps a single styled word between spaces"
+      (expect (pdf-text--emphasize
+               (concat "value " (emph "x" 'italic) " holds"))
+              :to-equal "value /x/ holds"))))
+
+(describe "pdf-text-render-lines emphasis"
+  (it "renders the run-in bold lead as org bold through the pipeline"
+    ;; empirical p2: bold question opens the paragraph, roman
+    ;; continues on the same line, the wrap joins the block
+    (let ((page (pdf-text-tests--page
+                 (list (list (concat
+                              (propertize
+                               "What language features do developers value? "
+                               'pdf-text-emph 'bold)
+                              "Whereas")
+                             :x1 0.90)
+                       '("prior work has continued the story here.")))))
+      (expect (car (pdf-text-render-lines (list page)))
+              :to-match
+              "\\*What language features do developers value\\?\\* Whereas")))
+
+  (it "bridges an italic phrase the wrap split over two lines"
+    (let ((page (pdf-text-tests--page
+                 (list (list (concat "Some questions were asked to every respondent ("
+                                     (propertize "MOOC" 'pdf-text-emph 'italic))
+                             :x1 0.90)
+                       (list (concat (propertize "all" 'pdf-text-emph 'italic)
+                                     ") while others were asked to one part."))))))
+      (expect (car (pdf-text-render-lines (list page)))
+              :to-match "(/MOOC all/) while"))))
 
 (describe "pdf-text--mupdf-parse"
   (it "assembles pages in order, nil where a page emitted nothing"

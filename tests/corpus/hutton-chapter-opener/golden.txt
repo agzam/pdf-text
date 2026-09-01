@@ -4,12 +4,12 @@ In this chapter we take our first proper steps with Haskell. We start by introdu
 
 ** 2.1 The Hugs system
 
-As we saw in the previous chapter, small Haskell examples can be executed by hand. In practice, however, we usually require an implementation of Haskell that can execute programs automatically. In this book we use an interactive system called Hugs, which is the most widely used implementation of Haskell 98, the recently defined stable version of the language.
+As we saw in the previous chapter, small Haskell examples can be executed by hand. In practice, however, we usually require an implementation of Haskell that can execute programs automatically. In this book we use an interactive system called /Hugs/, which is the most widely used implementation of Haskell 98, the recently defined stable version of the language.
 
 The interactive nature of Hugs makes it well suited for teaching and prototyping purposes, and its performance is sufficient for most applications. However, if greater performance or a stand-alone executable version of a Haskell program is required, a number of compilers for Haskell 98 are also available, of which the most widely used is the Glasgow Haskell Compiler.
 
 ** 2.2 The standard prelude
 
-When the Hugs system is started it first loads a library file called Prelude.hs, and then displays a > prompt to indicate that the system is waiting for the user to enter an expression to be evaluated. For example, the library file defines many familiar functions that operate on integers, including the five main arithmetic operations of addition, subtraction, multiplication, division, and exponentiation, as illustrated below:
+When the Hugs system is started it first loads a library file called /Prelude/.hs, and then displays a />/ prompt to indicate that the system is waiting for the user to enter an expression to be evaluated. For example, the library file defines many familiar functions that operate on integers, including the five main arithmetic operations of addition, subtraction, multiplication, division, and exponentiation, as illustrated below:
 
   > 2 + 3

@@ -1,0 +1,31 @@
+riculum design.
+*What language features do developers value?* Whereas
+
+Section 4 looks at how developers pick languages for specific projects, Section 6 examines their feelings about intrinsic features of languages, such as type systems. The results can help designers craft better languages and advocate them, and even influence curriculum design due by exposing knowledge gaps.
+
+We found that developers generally value expressiveness and speed of development over language-enforced correctness. They see more value in unit tests than types, both for debugging and overall. Furthermore, how features are presented strongly influences developer feelings about them: developers rank class interfaces more highly than static types.
+
+Our paper is organized around the above research questions. Before addressing them, we first overview our data sets and methodology. We finish the paper by discussing threats to the validity of our results (Section 7), related work (Section 8), and our conclusions (Section 9).
+
+* 2. Methodology and Data
+
+We now describe our data sets, methodology, and a key factor in many of our results: demographics.
+
+This paper is based on several different surveys and data sources: we used software repositories, surveys conducted by others, and a survey conducted by us. These were used in a sequence; the results of one analysis informed the design of the next. We began with pre-existing data from the SourceForge repository and The Hammer Principle, a longrunning online survey about programming languages. These led us to preliminary hypotheses, which we investigated with surveys. Finally, we cross-validated with the Ohloh project database.
+
+** 2.1 Data
+
+We now discuss these data sets in more detail. In chronological order, we used:
+1. *Open Source Repository Metadata:* /*SourceForge*/. We wrote a crawler to download descriptions of 213,471 projects from SourceForge [2], an online repository for open source software. Of most relevance to our analysis, downloaded project metadata labels the set of languages used (out of 100), primary project category (e.g., accounting) from a set of 223, date of creation, and the project’s owners.
+
+The years examined are 2000-2010. This data set is a reasonable proxy for open source behavior because, for most of the analyzed period, SourceForge was the dominant software repository. For example, its modern competitor GitHub was not even created until mid 2008. Open source community behavior is important in its own right, and as our results will show, commercial developers prioritize open source when making their own adoption decisions.
+2. *Online Poll:* /*Hammer*/. “The Hammer Principle” is a website that invites readers to compare various items, such as programming languages, based on a multidimensional series of metrics [13]. Respondents pick a set of languages that they are comfortable with out of a pool of 51 languages. They picked 7 languages on average. Respondents are then shown a randomly sorted series of statements, such as “When I write code in this language I can be very sure it is correct.” For each statement, the respondent orders the languages that they selected based on how well they match the statement. The survey includes 111 statements, and respondents sorted languages for an average of 10 statements each before tiring. The survey period was 2010-2012.
+
+The raw and anonymized data was provided by the site’s maintainer, David MacIver. For each statement, we used a variant of the Glicko-2 ranking algorithm [8] to convert the sparse data of inconsistent pair-wise comparisons into a total ranking of languages. A prior publication [14] describes this analysis in further detail.
+
+The intuition is that we treat each statement as a tournament between languages. Glicko converts the sparse pair-wise comparison into a total order. The Glicko family of algorithms is used in chess tournaments and online game rankings for producing a complete ranking of players without every pairwise comparison: beating a highly ranked language contributes more than beating a low-ranked language. Each player (i.e., language) has an absolute rank and a statistical confidence for it.
+3. *Course Surveys:* /*MOOC*/. We gained access to a survey of 1,185 students in a massive online open course (MOOC) on software-as-a-service (SaaS). The survey was administered at the beginning of the course, so student beliefs were not be altered by the instructors, though the results do reflect sample bias towards programmers with an interest in SaaS development. Most respondents were /not/ traditional undergraduate students. Their median age was 30 and a majority (62%) described themselves as professional programmers.
+
+The survey was primarily conducted for pedagogical purposes, not research. However, we advised the instructors on question wording, and were given access to the raw collected data. Respondents were asked if they consented to research use of their responses; 1,142 said yes (96.5% of all responses). We only analyze responses from adults who agreed to research use.
+
+Respondents were randomly divided into four subsamples. Some questions were asked to every respondent (/MOOC all/) while others were only asked to one subsample. We divided the questions to avoid fatigue in respondents from overly long surveys while still achieving enough responses for statistically significant analysis of many questions. Only two of the subsamples (/MOOC b/ and /MOOC d/) are relevant to the the questions addressed in this paper.

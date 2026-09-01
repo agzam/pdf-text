@@ -16,18 +16,18 @@ The rest is straightforward again because the purpose statement itself dictates 
 
 As above, we could have mentioned that make-posn creates instances of Posn, but you know this and we don’t need to remind you constantly.
 
-Exercise 74. Copy all relevant constant and function definitions to Dr-Racket’s definitions area. Add the tests and make sure they pass. Then run the program and use the mouse to place the red dot.
+*Exercise* 74. Copy all relevant constant and function definitions to Dr-Racket’s definitions area. Add the tests and make sure they pass. Then run the program and use the mouse to place the red dot.
 
 Many programs deal with nested structures. We illustrate this point with another small excerpt from a world program:
 
-  Sample Problem Your team is designing a game program that keeps track of an object that moves across the canvas at changing speed. The chosen data representation requires two data definitions:
+  *Sample Problem* Your team is designing a game program that keeps track of an object that moves across the canvas at changing speed. The chosen data representation requires two data definitions:
 
   (define-struct ufo [loc vel])
 
-  ; A UFO is a structure: ;
+  ; A /UFO/ is a structure: ;
 
 (make-ufo Posn Vel)
-; interpretation (make-ufo p v) is at location
+; *interpretation* (make-ufo p v) is at location
 
   ; p moving at velocity v
 

@@ -207,6 +207,36 @@ bar-ruled page footer - stay plain text."
     "\\[fn:" "[\u200Bfn:"
     (replace-regexp-in-string "\\([_^]\\){" "\\1\u200B{" text))))
 
+(defconst pdf-text--emph-pair-re
+  (concat "\\(?:\\`\\|[-[:space:]('\"{]\\)"       ; org's pre set
+          "\\([*/_=~+]\\)"                        ; the opening marker
+          "[^[:space:]]\\(?:.*?[^[:space:]]\\)?"  ; body, non-space borders
+          "\\1"                                   ; the closing marker
+          "\\(?:[-[:space:].,:!?;'\")}[]\\|\\'\\)") ; org's post set
+  "A literal marker pair org would parse as emphasis.
+The pre, post and border sets are org's own defaults, spelled out
+because the reflow must not depend on a loaded org to build records.")
+
+(defun pdf-text--escape-emphasis (text)
+  "TEXT with every org-parseable emphasis pair broken by a zero-width space.
+The render writes its own emphasis markers from the page's font runs,
+and org must parse only those: a starred word or a slash-fenced path
+segment extracted from the page stays the plain text it was.  The
+break sits BEFORE the opening marker - evicting it from org's pre
+set - because a break after it would still parse: org's borders admit
+any non-space character, the zero-width space included.  A pair's
+closing post character can open the next pair, so the scan resumes at
+the body, not past the match."
+  (if (string-match-p "[*/_=~+]" text)
+      (let ((start 0))
+        (while (string-match pdf-text--emph-pair-re text start)
+          (let ((open (match-beginning 1)))
+            (setq text (concat (substring text 0 open) "\u200B"
+                               (substring text open))
+                  start (+ open 2))))
+        text)
+    text))
+
 (defvar pdf-text-script-symbol-offset 0.25
   "Baseline offset, in body heights, a run of pure symbols needs to be a script.
 A footnote asterisk sits half a body height up; an operator font whose
@@ -238,8 +268,9 @@ The fallback for a page the walker finds no text on: no geometry, so
 every rule that reads some falls back to character heuristics."
   (mapcar (lambda (line)
             (pdf-text-line-create
-             :text (pdf-text--strip-unprinted
-                    (pdf-text--escape-literals line))))
+             :text (pdf-text--escape-emphasis
+                    (pdf-text--strip-unprinted
+                     (pdf-text--escape-literals line)))))
           (split-string text "\n")))
 
 ;;; Line records off MuPDF's structured text
@@ -984,6 +1015,18 @@ hundredfold larger, zeroing every em-multiplied threshold.  Bound by
 of magnitude under its modal height; the glyph height then stands in
 for the em wherever a threshold multiplies it.")
 
+(defun pdf-text--emph-propertize (text run)
+  "TEXT carrying RUN's weight and slant as the `pdf-text-emph' property.
+The property is how a face survives to the render: an index-kept span
+would die at the first substring, while a text property rides every
+trim, join and de-hyphenation between here and the rendered line,
+where `pdf-text--emphasize' turns it into org emphasis markers.
+Plain TEXT passes through untouched."
+  (let ((style (cond ((and (nth 7 run) (nth 8 run)) 'bold-italic)
+                     ((nth 7 run) 'bold)
+                     ((nth 8 run) 'italic))))
+    (if style (propertize text 'pdf-text-emph style) text)))
+
 (defun pdf-text--run-markup (text runs base height space)
   "TEXT with script runs wrapped as org ^{...}/_{...} markup.
 RUNS are the walker's font runs over TEXT, BASE and HEIGHT the line's
@@ -1029,7 +1072,9 @@ glyph height stands in for the em the FontMatrix scale zeroed."
                                     em)))
                              (- (nth 2 run) last-ink)))
                 (push " " out))
-              (push (pdf-text--escape-literals seg) out)
+              (push (pdf-text--emph-propertize (pdf-text--escape-literals seg)
+                                               run)
+                    out)
               (setq last-plain-size (nth 6 run)))
           (let* ((trimmed (string-trim seg))
                  (symbols (not (string-match-p "[[:alnum:]]" trimmed)))
@@ -1068,7 +1113,8 @@ text-only fallback records."
                (ink (seq-filter (lambda (r) (nth 4 r)) runs)))
     (if (null ink)
         (pdf-text-line-create
-         :text (pdf-text--strip-unprinted (pdf-text--escape-literals text)))
+         :text (pdf-text--escape-emphasis
+                (pdf-text--strip-unprinted (pdf-text--escape-literals text))))
       (let* ((ref (pdf-text--run-baseline runs))
              (dominant (cl-reduce (lambda (a b)
                                     (if (< (pdf-text--run-ink a)
@@ -1084,17 +1130,23 @@ text-only fallback records."
          ;; into them.  The record's geometry carries the indent as x0.
          ;; The right-trim precedes the strip so a line-final soft
          ;; hyphen stays line-final for the wrap join to read.
-         :text (pdf-text--strip-unprinted
-                (string-trim-right
-                 (replace-regexp-in-string
-                  "\\([^ ]\\)  +" "\\1 "
-                  (string-trim-left
+         :text (pdf-text--escape-emphasis
+                (pdf-text--strip-unprinted
+                 (string-trim-right
+                  (replace-regexp-in-string
+                   "\\([^ ]\\)  +" "\\1 "
+                   (string-trim-left
                    (if (and ref (cdr runs))
                        (pdf-text--run-markup text runs (car ref) (cdr ref)
                                              space)
-                     (pdf-text--escape-literals text))
-                   " +"))
-                 "[ \t]+"))
+                     ;; one run styles the whole line; several without a
+                     ;; baseline vote style nothing, since no single run
+                     ;; can speak for the text
+                     (let ((plain (pdf-text--escape-literals text)))
+                       (if (cdr runs) plain
+                         (pdf-text--emph-propertize plain (car runs)))))
+                    " +"))
+                  "[ \t]+")))
          :x0 x0 :x1 x1 :top top :bot bot
          :base (car ref)
          :height height :space space :cv cv :first-width fw
@@ -1425,15 +1477,19 @@ with a space, as a plain split line."
            (not (string-match-p "[{}]" line-text))
            (or (< (* pdf-text-script-drop height) offset)
                (< offset (* (- pdf-text-script-raise) height))))
+      ;; property-stripped: emphasis markers inside script braces would
+      ;; hand org a parse the page never set
       (concat (string-trim-right prev-text)
-              (if (< offset 0) "^{" "_{") line-text "}"))
+              (if (< offset 0) "^{" "_{")
+              (substring-no-properties line-text) "}"))
      ((and (eq host line) prev-offset height
            (pdf-text-line-height prev)
            (< (pdf-text-line-height prev) (* pdf-text-script-size height))
            (string-match-p "\\`\\(?:[*†‡§¶]\\|[0-9]\\{1,2\\}\\)\\'"
                            (string-trim prev-text))
            (< prev-offset (* (- pdf-text-script-raise) height)))
-      (concat "^{" (string-trim prev-text) "}" line-text))
+      (concat "^{" (substring-no-properties (string-trim prev-text)) "}"
+              line-text))
      (t (concat prev-text " " line-text)))))
 
 (defun pdf-text--merge-script-fragments (lines profile)
@@ -4507,6 +4563,100 @@ heading a merged pair makes carries both halves' text already."
 
 ;;; Org structure
 
+(defun pdf-text--emph-markers (style)
+  "The org emphasis marker pair STYLE writes, as (OPEN . CLOSE)."
+  (pcase style
+    ('bold '("*" . "*"))
+    ('italic '("/" . "/"))
+    ('bold-italic '("/*" . "*/"))))
+
+(defun pdf-text--emphasize-line (line)
+  "LINE with its `pdf-text-emph' spans written as org emphasis, or LINE.
+Only contrast within the line is emphasis: a wholly-styled line is
+block-level styling - an epigraph, a false-flag body font - and stays
+plain, which is also what keeps a book whose every record reads
+italic from wrapping its whole text.  Same-style spans bridge across
+plain whitespace, the shape a wrap join leaves an italic phrase in.
+A span starts past org's own list marker, never inside a heading,
+keyword, mono or math line, and only where org's emphasis borders
+would parse the result - a face switch inside a word stays a word."
+  (let ((len (length line)))
+    (if (string-match-p "\\`\\(?:\\*+ \\|[ \t]*#\\+\\)" line)
+        line
+      (let* ((prefix (if (string-match "\\`[ \t]*\\(?:- \\|[0-9]+[.)] \\)"
+                                       line)
+                         (match-end 0)
+                       0))
+             (content-start (or (string-match-p "[^ \t]" line prefix) len))
+             (content-end (let ((end len))
+                            (while (and (< 0 end)
+                                        (memq (aref line (1- end)) '(?\s ?\t)))
+                              (setq end (1- end)))
+                            end))
+             (spans nil)
+             (pos 0))
+        (while (< pos len)
+          (let ((next (or (next-single-property-change pos 'pdf-text-emph line)
+                          len))
+                (value (get-text-property pos 'pdf-text-emph line)))
+            (when value
+              (let ((prev (car spans)))
+                (if (and prev (eq (nth 2 prev) value)
+                         (string-match-p "\\`[ \t\u200B]*\\'"
+                                         (substring line (nth 1 prev) pos)))
+                    (setf (nth 1 prev) next)
+                  (push (list pos next value) spans))))
+            (setq pos next)))
+        (let (edits)
+          (dolist (span (nreverse spans))
+            (let ((start (max (nth 0 span) prefix))
+                  (end (nth 1 span))
+                  (style (nth 2 span)))
+              (while (and (< start end)
+                          (memq (aref line start) '(?\s ?\t ?\u200B)))
+                (setq start (1+ start)))
+              (while (and (< start end)
+                          (memq (aref line (1- end)) '(?\s ?\t ?\u200B)))
+                (setq end (1- end)))
+              (when (and (< start end)
+                         (not (and (<= start content-start)
+                                   (<= content-end end)))
+                         (not (when-let* ((rec (get-text-property
+                                                start 'pdf-text-line line)))
+                                (memq (pdf-text-line-kind rec) '(mono math))))
+                         (or (= start 0)
+                             (memq (aref line (1- start))
+                                   '(?\s ?\t ?- ?\( ?' ?\" ?{)))
+                         (or (= end len)
+                             (memq (aref line end)
+                                   '(?\s ?\t ?- ?. ?, ?: ?! ?? ?\; ?' ?\"
+                                     ?\) ?} ?\[)))
+                         (not (memq (aref line start) '(?* ?/)))
+                         (not (memq (aref line (1- end)) '(?* ?/))))
+                (let ((markers (pdf-text--emph-markers style)))
+                  (push (cons end (cdr markers)) edits)
+                  (push (cons start (car markers)) edits)))))
+          (let ((result line))
+            (dolist (edit (sort edits (lambda (a b) (< (car b) (car a))))
+                          result)
+              (setq result (concat (substring result 0 (car edit))
+                                   (cdr edit)
+                                   (substring result (car edit)))))))))))
+
+(defun pdf-text--emphasize (text)
+  "TEXT with `pdf-text-emph' property spans written as org emphasis.
+The last render pass before the escape: the spans were set at record
+birth from the walker's font runs and rode every join since, so the
+markers land where the page set a face.  The markers are inserted
+bare - render-invented characters carry no record property, so the
+follow highlight skips them like a list dash."
+  (if (and (not (and (< 0 (length text))
+                     (get-text-property 0 'pdf-text-emph text)))
+           (not (next-single-property-change 0 'pdf-text-emph text)))
+      text
+    (string-join (mapcar #'pdf-text--emphasize-line (split-string text "\n"))
+                 "\n")))
+
 (defvar pdf-text-org-escape-re
   (rx bos (or (seq (+ "*") " ")
               (seq (* (in " \t")) "#+")
@@ -4586,10 +4736,11 @@ geometry at all fall back to the text-only
                                     (pdf-text--assign-headings
                                      blocks page-profile vocabulary (car heads)))
                    collect (pdf-text--escape-org-lines
-                            (pdf-text--render-blocks blocks page-profile
-                                                     vocabulary (car heads)
-                                                     number placed
-                                                     (cdar assigned))
+                            (pdf-text--emphasize
+                             (pdf-text--render-blocks blocks page-profile
+                                                      vocabulary (car heads)
+                                                      number placed
+                                                      (cdar assigned)))
                             (append (mapcar #'cadr placed) (car heads))))))
     (if (and synthesize (not geometry))
         (pdf-text--synthesize-headings rendered)
@@ -5235,7 +5386,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 22
+(defconst pdf-text-render-version 23
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")
