@@ -131,9 +131,23 @@ note merged into its paragraph).  `%S' prints a float exactly and
                        (pdf-corpus--exact (plist-get profile :text-bottom)))
              ""))
           (pdf-corpus--exact (plist-get profile :space))
-          (if (plist-get profile :em)
-              (format " :em %s" (pdf-corpus--exact (plist-get profile :em)))
-            "")))
+          (concat
+           (if (plist-get profile :em)
+               (format " :em %s" (pdf-corpus--exact (plist-get profile :em)))
+             "")
+           ;; the body face and its ink tally arrived with the
+           ;; non-body-face rules; earlier cases carry neither and
+           ;; those rules fail open
+           (if (plist-get profile :font)
+               (format " :font %S" (plist-get profile :font))
+             "")
+           (if (plist-get profile :font-inks)
+               (format " :font-inks (%s)"
+                       (mapconcat (lambda (entry)
+                                    (format "(%S . %s)" (car entry)
+                                            (pdf-corpus--exact (cdr entry))))
+                                  (plist-get profile :font-inks) " "))
+             ""))))
 
 (defun pdf-corpus--print-clusters (clusters)
   "CLUSTERS of heading styles, stored exact like the profile.
@@ -398,6 +412,18 @@ A folio that reaches the reader is a running head the geometry missed."
   (seq-filter #'pdf-text--page-marker-p
               (seq-remove #'string-blank-p (split-string text "\n"))))
 
+(defun pdf-corpus-bare-enum-lines (text)
+  "Rendered lines of TEXT that are nothing but an enumerator.
+A section head's number served apart from its title reaches the
+reader as a line saying \"1.\" and nothing else - no heading, no
+text, every distinction of the head it opens lost.  Verbatim and
+table lines stay out: a listing numbers its own lines and a table
+row's cells are the page's."
+  (seq-filter (lambda (line)
+                (string-match-p "\\`[0-9]+[.)]\\'" (string-trim line)))
+              (seq-remove #'pdf-corpus--glued-excluded-p
+                          (split-string text "\n"))))
+
 (defun pdf-corpus--glued-excluded-p (line)
   "Whether LINE's tokens stay out of the glued count.
 A generated table row or keyword line is markup, not page text, and a
@@ -509,6 +535,8 @@ hyphenated compounds, which the glued count excuses."
         (push (cons 'glued glued) violations)))
     (when-let* ((markers (pdf-corpus-page-marker-lines reflowed)))
       (push (cons 'page-marker markers) violations))
+    (when-let* ((bare (pdf-corpus-bare-enum-lines reflowed)))
+      (push (cons 'bare-enum bare) violations))
     (when-let* ((misplaced (pdf-corpus-outline-placements titles (or headed reflowed))))
       (push (cons 'outline misplaced) violations))
     (when-let* ((empty (pdf-corpus-empty-headings (or headed ""))))
@@ -556,6 +584,7 @@ RENDERED is `pdf-corpus-render' output, computed when not supplied."
                       (length detail)
                       (string-join (seq-take detail 5) " ")))
       ('page-marker (format "page marker survived: %s" (string-join detail " ")))
+      ('bare-enum (format "bare enumerator line(s): %s" (string-join detail " ")))
       ;; rendered heading lines carry the pdf-text-line property,
       ;; which %S would print
       ('outline (format "outline title placed wrong: %s"

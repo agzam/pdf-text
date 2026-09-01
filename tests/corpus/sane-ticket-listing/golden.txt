@@ -1,0 +1,27 @@
+The context: Klarna was a Swedish start-up offering invoicing services to web shops[fn:12-1]. They built their product in Erlang, and stored their data in Mnesia, the database packaged with the Erlang distribution. Mnesia provides transactions, distribution, replication, and so on, but needs a back end to actually store the data. The back end for storage on disk is /dets/, which stores tuples in files. This problem piqued my interest—it was quite notorious in the Erlang community, and sounded as though it might involve a race condition.
+
+To explain how QuickCheck tests for race conditions, let us consider a much simpler example: a ticket dispenser such as one finds at delicatessen counters, which issues each customer with a ticket indicating their place in the queue. We might model such a dispenser in Erlang by two functions, take ticket() and—because the roll of tickets needs to be replaced sometimes—reset(). A simple unit test for these functions might look as follows:
+
+  ticket_test () ->
+    ok = reset (),
+    1  = take_ticket (),
+    2  = take_ticket (),
+    3  = take_ticket (),
+    ok = reset (),
+    1  = take_ticket ().
+
+Here we use Erlang pattern matching to compare the result of each call with its /expected value/ (ok being an atom, a constant, in Erlang—conventionally used as the result of a function with no interesting result). This test case is typical of test cases written in industry: we make a sequence of calls, and compare the results to expected values.
+
+It is easy to create a QuickCheck state machine for testing the dispenser also. We can model its state as a single integer, which is set to 0 by reset(), incremented by take ticket(), and used in the postcondition of take ticket to check the result.
+
+However, running /sequential/ tests of the ticket dispenser is not enough: the whole point of the system is to regulate the flow of many concurrent customers to one delicatessen counter. If we do not also run parallel tests of the API, then we are failing to test an essential part of its behaviour.
+
+Now, consider one simple parallel test:
+
+               reset()
+  take ticket() take ticket()
+  take ticket()
+
+which represents first resetting the dispenser, then /two/ customers taking tickets in parallel—the left customer taking two tickets, the right customer taking one. /What are the expected results?/ Well, the left customer might get tickets #1 and #2, and the right customer ticket #3. Or, the left customer might get tickets #1 and #3, while the right customer gets ticket #2! But if /both/ customers get ticket number #1, then the test has failed.
+
+[fn:12-1] They have since grown to well over 1,000 people, serving 8 countries and counting.

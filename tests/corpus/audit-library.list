@@ -3,6 +3,9 @@
 ;; is audit-books.list; this list is the on-demand full proof - hours, not
 ;; minutes.  Excluded as damaged (kills epdfinfo, the recovery class):
 ;;   ~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Simon_Marlow-Haskell_Language_Report_2010(2010).pdf
+;;   ~/SyncMobile/Books/Haskell/other downloaded books/Haskell/William_Jones-Warp_Speed_Haskell(2009).pdf
+;;     (found by the first full run: it took the server down and the
+;;      311 books after it went unmeasured - the same cascade)
 ~/SyncMobile/Books/A Mind for Numbers - How to Excel at Math and Science.pdf
 ~/SyncMobile/Books/A Short History of Nearly Everything by Bill Bryson.pdf
 ~/SyncMobile/Books/ANAYA_Gramatica_B1.pdf
@@ -85,7 +88,6 @@
 ~/SyncMobile/Books/Haskell/other downloaded books/Haskell/The Haskell Road to Logic, Maths and Programming.pdf
 ~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Wehr_S.-ML_modules_and_Haskell_type_classes.A_constructive_comparison.pdf
 ~/SyncMobile/Books/Haskell/other downloaded books/Haskell/Why Functional Programming matters.pdf
-~/SyncMobile/Books/Haskell/other downloaded books/Haskell/William_Jones-Warp_Speed_Haskell(2009).pdf
 ~/SyncMobile/Books/Haskell/other downloaded books/Haskell/YAHT - Yet Another Haskell Tutorial.pdf
 ~/SyncMobile/Books/How to Fly a Horse. The Secret History of Creation, Invention, and Discovery.2.pdf
 ~/SyncMobile/Books/How to Take Smart Notes.pdf

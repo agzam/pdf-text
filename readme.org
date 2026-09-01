@@ -16,7 +16,7 @@ The buffer is an ~org-mode~ derivative, so folding, sparse trees (~C-c /~), subt
 
 The companion is reused as long as the file on disk has not changed, so re-opening a 600-page book costs a millisecond rather than seconds.
 
-The companion and the PDF are one document to you, so closing either closes the other and no half is left behind. ~pdf-text-kill-together~ decides that: ~both~ (the default), ~from-pdf~ or ~from-text~ to carry the kill one way only, or nil to keep the two buffers independent.
+The companion and the PDF are one document to you, so closing either closes the other and no half is left behind - the partner's window closes with it rather than lingering on a substitute buffer. ~pdf-text-kill-together~ decides that: ~both~ (the default), ~from-pdf~ or ~from-text~ to carry the kill one way only, or nil to keep the two buffers independent.
 
 * Why
 

@@ -1,0 +1,34 @@
+Of course it passes, as we would expect.
+Now, notice what we did. We found a subtle bug in our implementation. We
+
+created a test case that provoked the bug. We fixed the code, and our test now passes. All our tests are green! So. . . we’re done, right?
+
+In practice, many developers would be satisfied at this point. But let us just run a few more random tests. . . we find they fail immediately!
+
+  q:new (2) -> {ptr , "Queue", 6774864}
+  q:put({ptr , "Queue", 6774864} , 0) -> ok
+  q:put({ptr , "Queue", 6774864} , 0) -> ok
+  q:get({ptr , "Queue", 6774864}) -> 0
+  q:put({ptr , "Queue", 6774864} , 0) -> ok
+  q:size ({ptr , "Queue", 6774864}) -> 1
+  Reason: Post -condition failed: 1 /= 2
+
+What’s going on here? First, we create a queue of size two. Progress! The code now works—for queues of size one. We put /three/ items into the queue, and remove one. Now there should be two items in the queue, but size returns 1.
+
+This is actually very similar to the example we just fixed. The queue is size two (really three!), so calling put three times makes the input index wrap around back to zero. We called get once, so the output index is one. The correct answer for size is thus (−1) mod 3, which is 2, but we computed abs(-1) % 2, which is 1. Taking the absolute value was the wrong thing to do; it worked for the first test case we considered, but not in general.
+
+A correct implementation must ensure that the operand of % is non-negative, /without/ changing its value modulo q->size. We can do this by /adding/ q->size to it, instead of taking the absolute value:
+
+  int size(Queue *q)
+  { return (q->inp - q->outp + q->size) % q -> size;
+  }
+
+When we make this change, then this last failing test—and all the others we can generate—pass. The code is correct at last.
+
+** Lessons from the queue example
+
+What can we learn from this? Three lessons that apply in general:
+
+*–* The /same/ property can find many /different/ bugs. This is the whole point of test case generation: one model can provoke a wide variety of bugs.
+*–* Errors are often in the model, rather than the code. Calling something a specification does not make it right! QuickCheck finds /discrepancies/ between the model and the code; it is up to the developer to decide which is correct.
+*–* /Minimal failing test cases/ make debugging easy. They are often much smaller than the first failing one found. We think of shrinking as “extracting the signal from the noise”. Random tests contain a great deal of junk—that is their purpose! Junk provokes unexpected behaviour and tests scenarios that the developer would never think of. But tests usually /fail/ because of just a few features of the test case. Debugging a test that is 90% irrelevant is a

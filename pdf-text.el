@@ -1265,15 +1265,69 @@ or a page with no anchored line at all does not move it."
     (cons (pdf-text--mode-value tops 0.005)
           (pdf-text--mode-value bottoms 0.005))))
 
+(defun pdf-text--base-font-name (font)
+  "FONT without its six-letter subset prefix, nil for a nil FONT.
+Two embeddings of one font are one face."
+  (when font
+    (replace-regexp-in-string "\\`[A-Z]\\{6\\}\\+" "" font)))
+
+(defun pdf-text--font-inks (fonts height)
+  "Ink width per face among FONTS, each (NAME LINE-HEIGHT INK-WIDTH).
+Only lines set within 15% of body HEIGHT have a say, subset prefixes
+stripped so two embeddings of one font tally as one.  An alist of
+\(NAME . INK), most-inked first - the head is the body face itself.
+Nil when no line names a font - the charlayout era's records - and
+every rule keyed to the body's faces fails open."
+  (let ((tally (make-hash-table :test 'equal))
+        out)
+    (pcase-dolist (`(,name ,line-height ,width) fonts)
+      (when (and name
+                 (or (null height) (null line-height)
+                     (< (abs (- line-height height)) (* 0.15 height))))
+        (let ((base (pdf-text--base-font-name name)))
+          (puthash base (+ (gethash base tally 0.0) (or width 0.0)) tally))))
+    (maphash (lambda (name ink) (push (cons name ink) out)) tally)
+    (sort out (lambda (a b) (< (cdr b) (cdr a))))))
+
+(defun pdf-text--non-body-font-p (font profile)
+  "Whether FONT differs from the body face PROFILE names.
+Nil when either side is unknown: with no font to compare, every rule
+keyed to the body face falls back to its geometry."
+  (let ((body (plist-get profile :font)))
+    (and font body
+         (not (equal (pdf-text--base-font-name font) body)))))
+
+(defvar pdf-text-stray-face-share 0.1
+  "Body-height ink share below which a face is one the body never uses.
+A paper's sub-head face carries a few short lines against a whole
+document of prose; a workbook that bolds its vocabulary throughout
+carries real body ink in its bold face, which stays the body's own.")
+
+(defun pdf-text--stray-face-p (font profile)
+  "Whether FONT is a face the document's body never uses.
+Measured as its share of PROFILE's body-height ink staying under
+`pdf-text-stray-face-share'.  Nil when the profile carries no ink
+tally - an older capture - so the rules keyed to it fail open."
+  (when-let* ((font)
+              (inks (plist-get profile :font-inks))
+              (total (apply #'+ 0.0 (mapcar #'cdr inks))))
+    (and (< 0 total)
+         (< (/ (or (alist-get (pdf-text--base-font-name font) inks
+                              nil nil #'equal)
+                   0.0)
+               total)
+            pdf-text-stray-face-share))))
+
 (defun pdf-text--profile (pages)
   "Modal body geometry of PAGES, each a list of `pdf-text-line'.
 A plist: :height glyph height, :leading baseline step, :left and
-:right column edges, :space word gap, :em the em size the records
-report - degenerate em against height marks the Type 3 class for the
-repairs, the way `pdf-text--degenerate-ems' marks it for the parse.
+:right column edges, :space word gap, :font the body face's name,
+:em the em size the records report - degenerate em against height
+marks the Type 3 class for the repairs, the way
+`pdf-text--degenerate-ems' marks it for the parse.
 Document-wide, because a page of listings or a page of table rows
 has no representative body geometry of its own."
-  (let (heights lefts rights widths spaces leadings ems)
+  (let (heights lefts rights widths spaces leadings ems fonts)
     (dolist (lines pages)
       (let (prev)
         (dolist (line lines)
@@ -1281,6 +1335,11 @@ has no representative body geometry of its own."
             (push (pdf-text-line-height line) heights)
             (when (pdf-text-line-size line)
               (push (pdf-text-line-size line) ems))
+            (when (pdf-text-line-font line)
+              (push (list (pdf-text-line-font line)
+                          (pdf-text-line-height line)
+                          (- (pdf-text-line-x1 line) (pdf-text-line-x0 line)))
+                    fonts))
             (push (pdf-text-line-x0 line) lefts)
             (push (pdf-text-line-x1 line) rights)
             (push (- (pdf-text-line-x1 line) (pdf-text-line-x0 line)) widths)
@@ -1303,7 +1362,8 @@ has no representative body geometry of its own."
                           (median)
                           (height (/ height 3.0)))))
            (area (pdf-text--text-span pages left right text-left space
-                                      leading)))
+                                      leading))
+           (inks (pdf-text--font-inks fonts height)))
       (list :height height
             :leading leading
             :left left
@@ -1319,7 +1379,12 @@ has no representative body geometry of its own."
             :text-top (car area)
             :text-bottom (cdr area)
             :space space
-            :em (pdf-text--quantile ems 0.5)))))
+            :em (pdf-text--quantile ems 0.5)
+            ;; the face the body is set in, and each face's share of
+            ;; the body's ink: what tells a head's own face from the
+            ;; page's
+            :font (caar inks)
+            :font-inks inks))))
 
 (defvar pdf-text-extra-profile nil
   "Document profile carried into a render of a window of the document.
@@ -1915,21 +1980,34 @@ cells cannot hide behind its numbers."
     (and (< 0 (+ mathy wordy))
          (<= pdf-text-lane-math-density (/ (float mathy) (+ mathy wordy))))))
 
+(defvar pdf-text-monospace-font-re)
+
 (defun pdf-text--lane-mono-p (region)
   "Whether REGION's cells are mostly monospaced - a listing, not a table.
-Only cells long enough to judge get a vote: a listing whose every code
-line pairs with a bare comment dash would otherwise split its vote
-down the middle and reflow as a table."
-  (let* ((cells (cl-remove-if
+The font name decides where it speaks: cells served in a
+monospace-named font are code outright, single digits included - the
+advance variation needs length to judge, and a listing whose left
+lane is bare digits hides from it.  Otherwise only cells long enough
+to judge get a vote: a listing whose every code line pairs with a
+bare comment dash would otherwise split its vote down the middle and
+reflow as a table."
+  (let* ((all (pdf-text--lane-region-cells region))
+         (named (cl-count-if
+                 (lambda (line)
+                   (pdf-text--font-matches-p (pdf-text-line-font line)
+                                             pdf-text-monospace-font-re))
+                 all))
+         (cells (cl-remove-if
                  (lambda (line)
                    (< (length (string-trim (pdf-text-line-text line)))
                       pdf-text-monospace-min-glyphs))
-                 (pdf-text--lane-region-cells region)))
+                 all))
          (mono (cl-count-if (lambda (line)
                               (let ((cv (pdf-text-line-cv line)))
                                 (and cv (< cv pdf-text-monospace-variation))))
                             cells)))
-    (and cells (< (/ (length cells) 2) mono))))
+    (or (and all (< (/ (length all) 2) named))
+        (and cells (< (/ (length cells) 2) mono)))))
 
 (defun pdf-text--lane-column-served-p (region spans)
   "Whether poppler served REGION lane by lane rather than row by row.
@@ -2790,6 +2868,12 @@ the glyph height to a stretched justification's four fifths; a
 table lane or a margin note stands further off and stays its own
 record.")
 
+(defvar pdf-text-split-number-gap 2.0
+  "Gap, in line heights, under which a bare section number joins its title.
+A display head sets the number a wide em from its title - wider than
+the body's modal spaces can measure - so the pair's own size is the
+yardstick.")
+
 (defun pdf-text--join-split-lines (lines profile)
   "LINES with a typeset line the extractor served as two rejoined.
 Two neighbours on one baseline, set in the same face and size, closer
@@ -2849,11 +2933,28 @@ too, with the space the page set, whatever case they open on."
                          (string-match-p "[^ \t]"
                                          (pdf-text-line-text line)))
                     " ")
+                   ;; two cells of one code line, served apart at an
+                   ;; alignment gap: rejoined with the page's own
+                   ;; spacing, before the lane pass can read the
+                   ;; gutter as a table's
+                   ((and (pdf-text--font-matches-p
+                          (pdf-text-line-font prev)
+                          pdf-text-monospace-font-re)
+                         (pdf-text--font-matches-p
+                          (pdf-text-line-font line)
+                          pdf-text-monospace-font-re)
+                         (< 0 gap)
+                         (< gap (* pdf-text-split-line-gap space)))
+                    (make-string
+                     (max 1 (round (/ gap (or (pdf-text-line-space prev)
+                                              (pdf-text-line-space line)
+                                              space))))
+                     ?\s))
                    ((and (< 0 gap)
-                         (< gap (* pdf-text-split-line-gap space))
                          (or
                           ;; one clause split at a wide kern
-                          (and same-font
+                          (and (< gap (* pdf-text-split-line-gap space))
+                               same-font
                                (string-match-p "[[:alnum:]]\\'"
                                                (string-trim
                                                 (pdf-text-line-text prev)))
@@ -2863,7 +2964,8 @@ too, with the space the page set, whatever case they open on."
                           ;; a dotted section number served apart from its
                           ;; title, often in another face; a bare enumerator
                           ;; carries no dot chain and stays a list marker
-                          (and (string-match-p
+                          (and (< gap (* pdf-text-split-line-gap space))
+                               (string-match-p
                                 "\\`[0-9]+\\(?:\\.[0-9]+\\)+\\.?\\'"
                                 (string-trim (pdf-text-line-text prev)))
                                (string-match-p "\\`[[:upper:]]"
@@ -2876,7 +2978,12 @@ too, with the space the page set, whatever case they open on."
                           ;; item machinery
                           (let ((body (plist-get profile :height)))
                             (and body
-                                 (string-match-p "\\`[0-9]+\\.\\'"
+                                 ;; the number sits a display em from
+                                 ;; its title: the pair's own size is
+                                 ;; the gap's yardstick
+                                 (< gap (* pdf-text-split-number-gap
+                                           height))
+                                 (string-match-p "\\`[0-9]+\\.?\\'"
                                                  (string-trim
                                                   (pdf-text-line-text prev)))
                                  (string-match-p "\\`[[:upper:]]"
@@ -2885,10 +2992,29 @@ too, with the space the page set, whatever case they open on."
                                  same-font
                                  (eq (pdf-text-line-bold prev)
                                      (pdf-text-line-bold line))
-                                 (< (* pdf-text-heading-height body)
-                                    (min (or (pdf-text-line-height prev) 0)
-                                         (or (pdf-text-line-height line)
-                                             0)))))))
+                                 (or (and (string-match-p
+                                           "\\`[0-9]+\\.\\'"
+                                           (string-trim
+                                            (pdf-text-line-text prev)))
+                                          (< (* pdf-text-heading-height body)
+                                             (min (or (pdf-text-line-height prev) 0)
+                                                  (or (pdf-text-line-height line)
+                                                      0))))
+                                     ;; a bold pair in a face the body
+                                     ;; never uses is a section head at
+                                     ;; any height, dot or no dot - the
+                                     ;; same publisher shape set a hair
+                                     ;; under the gate, and the lambda
+                                     ;; tutorial's dotless "1" beside
+                                     ;; "Definition".  The height path
+                                     ;; keeps demanding the dot: a
+                                     ;; dotless number in the body face
+                                     ;; is a folio or the page's own
+                                     ;; text
+                                     (and (pdf-text-line-bold prev)
+                                          (pdf-text--non-body-font-p
+                                           (pdf-text-line-font prev)
+                                           profile)))))))
                     " "))))))
         (if joiner
             (setcar out (pdf-text--merge-records
@@ -4235,8 +4361,7 @@ subset prefix goes: two embeddings of one font are one face."
         (bold (if (pdf-text-line-lead-font line)
                   (pdf-text-line-lead-bold line)
                 (pdf-text-line-bold line))))
-    (cons (and font (replace-regexp-in-string "\\`[A-Z]\\{6\\}\\+" "" font))
-          (and bold t))))
+    (cons (pdf-text--base-font-name font) (and bold t))))
 
 (defun pdf-text--block-face (block)
   "The face BLOCK opens in: `pdf-text--line-face' of its first line."
@@ -4870,10 +4995,15 @@ A style the book uses - chapter titles, section heads - recurs across
 it: thirteen chapters, twenty sections.  The display type of a cover
 spread or one paper's private subsection style reaches three or four
 pages, and a junk cluster costs more than it earns - every real
-heading below it drops a level.")
+heading below it drops a level.  A short document scales the demand
+down: `pdf-text--heading-clusters' asks for half the document's
+pages, floored at two, capped here.")
 
-(defvar pdf-text-synth-levels 4
-  "Org levels the size clusters of an outline-less book may occupy.")
+(defvar pdf-text-synth-levels 6
+  "Org levels the size clusters of an outline-less book may occupy.
+Deep enough for a reference grammar's six recurring styles: capping
+two real levels into one folds every parent section empty, since its
+heading sits directly over its first child's.")
 
 (defvar pdf-text-synth-number-min 0.98
   "Glyph height, in body heights, under which a numbered line is not a heading.
@@ -5014,15 +5144,33 @@ each half's text."
                                               (pdf-text-block-lines next)))))
        profile))))
 
-(defun pdf-text--synth-single (block profile vocabulary &optional prev)
+(defun pdf-text--same-style-p (block other body)
+  "Whether BLOCK and OTHER open in one face at one cluster height.
+BODY scales the height tolerance the way `pdf-text--heading-clusters'
+groups styles.  A run of same-style bold lines is a grid's labels -
+column heads, box titles - not a heading over prose; a parent head
+directly over its differently sized child is two levels, not a run."
+  (and other
+       (equal (pdf-text--block-face block) (pdf-text--block-face other))
+       (let ((a (pdf-text--block-height block))
+             (b (pdf-text--block-height other)))
+         (and a b (< (abs (- a b)) (* 0.1 (or body 0.01)))))))
+
+(defun pdf-text--synth-single (block profile vocabulary &optional prev next)
   "BLOCK alone as a heading candidate against PROFILE, or nil.
 A multi-line block can still be a sized heading - a long title wraps -
 but never a numbered one: a numbered line that wraps is prose.
-VOCABULARY joins the text.  PREV, the block above, decides whether
-BLOCK stands like a heading: the bold rules only admit a paragraph
-block clear of the text above it by a paragraph gap - a bold
-vocabulary label inside a workbook's tight flow, or a bold list
-item, is the page's own text however its face reads."
+VOCABULARY joins the text.  PREV and NEXT, the blocks around it,
+decide whether BLOCK stands like a heading: the bold rules only
+admit a paragraph block clear of the text above it by a paragraph
+gap - a bold vocabulary label inside a workbook's tight flow, or a
+bold list item, is the page's own text however its face reads.  Two
+exceptions, both keyed to a face the body never uses.  A single bold
+line in such a face, prose above and below, stands at any positive
+air - LNCS sets its sub-heads a whisker over the flow, and the full
+demand would read them as the page's own text.  And a single-line
+item opening \"N. Title\" bold in such a face is a display section
+number rejoined to its title, a head wearing an item's marker."
   (when (and (memq (pdf-text-block-kind block) '(para item))
              (not (pdf-text--synth-banded-p block)))
     (let* ((lines (pdf-text-block-lines block))
@@ -5030,13 +5178,37 @@ item, is the page's own text however its face reads."
            (body (plist-get profile :height))
            (leading (plist-get profile :leading))
            (bold-ok
-            (and (eq (pdf-text-block-kind block) 'para)
+            (and (or (eq (pdf-text-block-kind block) 'para)
+                     ;; a display section number joined to its title
+                     ;; reads as an enumerated item; bold in a face
+                     ;; the body never uses, it is a head wearing an
+                     ;; item's marker
+                     (and (eq (pdf-text-block-kind block) 'item)
+                          (null (cdr lines))
+                          (let ((case-fold-search nil))
+                            (string-match-p
+                             "\\`[0-9]+\\. +[[:upper:]]"
+                             (string-trim (pdf-text-line-text (car lines)))))
+                          (cdr (pdf-text--block-face block))
+                          (pdf-text--stray-face-p
+                           (car (pdf-text--block-face block)) profile)))
                  (or (null prev)
                      (when-let* ((leading)
                                  (top (pdf-text-line-top (car lines)))
                                  (last (car (last (pdf-text-block-lines prev))))
                                  (base (pdf-text-line-base last)))
-                       (<= (* pdf-text-gap-factor leading) (- top base)))))))
+                       (or (<= (* pdf-text-gap-factor leading) (- top base))
+                           (and (< 0 (- top base))
+                                (null (cdr lines))
+                                (eq 'para (pdf-text-block-kind prev))
+                                (not (pdf-text--same-style-p block prev body))
+                                (or (null next)
+                                    (and (eq 'para (pdf-text-block-kind next))
+                                         (not (pdf-text--same-style-p
+                                               block next body))))
+                                (pdf-text--stray-face-p
+                                 (car (pdf-text--block-face block))
+                                 profile))))))))
       ;; joining a block's text walks the vocabulary; a multi-line block
       ;; of body type - most paragraphs - can never be a heading, so it
       ;; never pays for the join
@@ -5056,21 +5228,27 @@ item, is the page's own text however its face reads."
                                profile
                                bold-ok)))))
 
-(defun pdf-text--contents-page-p (blocks)
+(defun pdf-text--contents-page-p (blocks &optional profile)
   "Whether BLOCKS carry a contents run: entry lines paired to folios.
 `pdf-text-entry-run-min' entry-kind lines closing on a folio - the
 shape `pdf-text--strip-leaders' and `pdf-text--mark-entry-runs'
 leave behind - name the page a table of contents.  There a dotted
 number opens an entry, not a section: the entries whose own folio
-went astray must not come back as headings."
+went astray must not come back as headings.  Only lines in PROFILE's
+body face have a say: a code listing's trace lines end in digits and
+pair like entries, but a table of contents is set in the body's own
+type, and a page of digit-closed code must not silence its section
+head."
   (let ((case-fold-search nil)
         (folio (format "[^0-9 ] +\\(?:%s\\)\\'" pdf-text-folio-re))
         (count 0))
     (dolist (block blocks)
       (when (eq 'entry (pdf-text-block-kind block))
         (dolist (line (pdf-text-block-lines block))
-          (when (string-match-p folio
-                                (string-trim (pdf-text-line-text line)))
+          (when (and (string-match-p folio
+                                     (string-trim (pdf-text-line-text line)))
+                     (not (pdf-text--non-body-font-p
+                           (pdf-text-line-font line) profile)))
             (setq count (1+ count))))))
     (<= pdf-text-entry-run-min count)))
 
@@ -5083,7 +5261,7 @@ is set over the body like any other."
   (let* ((vec (vconcat (cl-remove-if (lambda (b)
                                        (eq 'blank (pdf-text-block-kind b)))
                                      blocks)))
-         (contents (pdf-text--contents-page-p blocks))
+         (contents (pdf-text--contents-page-p blocks profile))
          (i 0)
          tuples)
     (while (< i (length vec))
@@ -5092,24 +5270,32 @@ is set over the body like any other."
                                                    profile vocabulary)))
              (tuple (or pair (pdf-text--synth-single
                               (aref vec i) profile vocabulary
-                              (and (< 0 i) (aref vec (1- i)))))))
+                              (and (< 0 i) (aref vec (1- i)))
+                              next))))
         (when (and tuple
                    (not (and contents (plist-get tuple :dotted))))
           (push tuple tuples))
         (setq i (+ i (if pair 2 1)))))
     (nreverse tuples)))
 
-(defun pdf-text--heading-clusters (pairs body)
+(defun pdf-text--heading-clusters (pairs body &optional pages)
   "PAIRS of (HEIGHT FACE PAGE) as supported style clusters, tallest first.
 Candidate heights within a tenth of BODY of each other, opening in
 one FACE, are one style; a style must head `pdf-text-synth-support'
 distinct pages before it earns an org level, which is what keeps a
 cover page's display type and a one-off diagram out of the outline.
-The face splits what height alone cannot: a paper's author names
-share their height with its section heads, roman against bold, and
-only the heads recur across enough pages to earn the level.  Each
-cluster is (MIN MAX FONT BOLD)."
-  (let ((gap (* 0.1 (or body 0.01)))
+Over a document of PAGES the support scales down to half its length,
+floored at two: a 3-page paper's section style can never reach five
+pages, however faithfully it heads all three.  The face splits what
+height alone cannot: a paper's author names share their height with
+its section heads, roman against bold, and only the heads recur
+across enough pages to earn the level.  Each cluster is
+\(MIN MAX FONT BOLD)."
+  (let ((support (if pages
+                     (min pdf-text-synth-support
+                          (max 2 (ceiling pages 2)))
+                   pdf-text-synth-support))
+        (gap (* 0.1 (or body 0.01)))
         groups)
     (dolist (face-group (seq-group-by #'cadr pairs))
       (let ((sorted (sort (mapcar (lambda (p) (cons (car p) (caddr p)))
@@ -5125,7 +5311,7 @@ cluster is (MIN MAX FONT BOLD)."
         (when current
           (push (cons (car face-group) (nreverse current)) groups))))
     (sort (cl-loop for (face . group) in groups
-                   when (<= pdf-text-synth-support
+                   when (<= support
                             (length (cl-remove-duplicates
                                      (mapcar #'cdr group))))
                    collect (list (caar group) (car (car (last group)))
@@ -5171,7 +5357,8 @@ VOCABULARY as the render reads them."
                                                 collect (list (plist-get tuple :height)
                                                               (plist-get tuple :face)
                                                               page)))
-                        body))))
+                        body
+                        (length pages-blocks)))))
     (cl-loop for page-tuples in tuples
              collect (let (placed drops)
                        (dolist (tuple page-tuples)
@@ -5219,7 +5406,8 @@ and a profile taken after them could not reproduce them when seeded."
                                                    collect (list (plist-get tuple :height)
                                                                  (plist-get tuple :face)
                                                                  page)))
-                           (plist-get profile :height)))))
+                           (plist-get profile :height)
+                           (length page-lines)))))
 
 (defvar pdf-text-synth-heading-max-fraction 0.6
   "Widest fraction of the page's wrap column a synthesized heading fills.")
@@ -5386,7 +5574,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 23
+(defconst pdf-text-render-version 25
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")
@@ -5468,15 +5656,24 @@ already exist.")
 (defun pdf-text--kill-partner ()
   "Kill the other half of the pair, as far as `pdf-text-kill-together' allows.
 Runs from `kill-buffer-hook' on both sides, so the partner this kills
-runs the same hook on the way out - which is what the guard stops."
+runs the same hook on the way out - which is what the guard stops.
+The partner's windows go with it: they would otherwise survive
+showing a substitute buffer, an orphan the reader has to close by
+hand.  A window that cannot be deleted - the sole one on its frame -
+stays."
   (unless pdf-text--killing
     (let* ((text (derived-mode-p 'pdf-text-mode))
            (partner (if text pdf-text--pdf-buffer pdf-text--companion)))
       (when (and (buffer-live-p partner)
                  (memq pdf-text-kill-together
                        (if text '(both from-text) '(both from-pdf))))
-        (let ((pdf-text--killing t))
-          (kill-buffer partner))))))
+        (let ((pdf-text--killing t)
+              (windows (get-buffer-window-list partner nil t)))
+          (kill-buffer partner)
+          (dolist (window windows)
+            (when (and (window-live-p window)
+                       (eq t (window-deletable-p window)))
+              (delete-window window))))))))
 
 (defun pdf-text--pair (companion pdf)
   "Point COMPANION and PDF at each other, and arm the paired kill.

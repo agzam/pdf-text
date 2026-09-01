@@ -1,0 +1,25 @@
+2. Students as Language Designers
+
+Computer science enables creation without respect for institutions, and scripting languages are one of its best and worst manifestations of this power. I tell students that many of them will go on to design programming languages: not large, industrial languages like Java, but small, scripting or domain-specific languages that will enhance their productivity. A good example is XACML, a language for separating the access-control logic from the rest of the program, using rules with domain-specific combinators. These students must therefore learn: (a) to recognize a scope for a domain-specific language, (b) the buildingblocks that go into most languages, and (c) to avoid the mistakes of past language designers. This vision guides the book and my course.
+
+* 3. Teaching the Other 90%
+
+The textbook realm seems to be split between those that are rich in mathematical rigor but low on accessibility, and those high on accessibility but lacking rigor (and, often, even wrong). This puts professors in an unfortunate bind. I believe programming language design should be viewed as a /popular/ activity, in the sense of one that every student must study. This is not because I believe every student /should/ design languages, but because any student /might/. The student driven away by excessive mathematical rigor is, sadly, not necessarily going to refrain from creating his own language and inflicting it on the world. The tone, content, and style of PLAI is therefore designed with “the other 90%” in mind: the 90% of students who will never take an advanced languages class, and yet a few of whom may go on to create languages.
+
+This also has implications for content. For instance, the majority of students have their heads filled with half-truths and falsehoods about garbage collection. In many departments, the PL course is the only place to correct these. That means the course should confront these misconceptions by comparing garbage collection to manual memory management. I also find that having students implement a collector or two makes an enormous difference, once they see that a mysterious procedure is actually just a relatively simple algorithm (conceptually).
+
+* 4. Languages as Aggregations of Features
+
+If languages are not defined by taxonomies, how are they constructed? They are aggregations of features. Rather than study extant languages as a whole, which conflates the essential with the accidental, it is more instructive to decompose them into constituent features, which in turn can be studied individually. The student then has a toolkit of features that they can re-compose per their needs.
+
+This vision of systems as compositions of features is widespread in software engineering, especially in domains like telecoms. It is a natural vision to apply to languages, especially in constrained domains, where designers must wed the demands of the domain to general-purpose notions (abstraction, iteration, etc.).
+
+As a design guideline, throughout the semester students re-examine the implications of the Scheme report’s dictum, “Programming languages should be designed not by piling feature on top of feature, but by removing the weaknesses and restrictions that make additional features appear necessary.” By the end, I like to think, they have a much better sense of the mistakes common scripting languages have made, and why understanding and composing principled building blocks makes much more sense.
+
+Of course, combining features demands also reasoning about their interactions. PLAI has some exercises about this, and my course’s final project forces students to combine several features and understand the consequences. There is, however, still much to do in this regard.
+
+* 5. Language Surveys or Interpreters?
+
+Now for the continental divide of PL texts: a survey-of-languages or definitional interpreters? PLAI takes the position that this question represents a conflict without a cause[fn:2-1] and interleaves the two approaches.
+
+[fn:2-1] With apologies to Beppe Castagna.

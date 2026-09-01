@@ -51,7 +51,10 @@ that moved; this reports the line and its number."
                      '(4 . 4) '((1 4 "Chapter")) '("well-known")
                      '(:recurring-forms ("intro 1") :folio-merged 5
                        :profile (:height 0.014 :leading 0.017
-                                 :left 0.14 :right 0.86 :space 0.0047)
+                                 :left 0.14 :right 0.86 :space 0.0047
+                                 :font "NimbusRomNo9L-Regu"
+                                 :font-inks (("NimbusRomNo9L-Regu" . 214.4)
+                                             ("NimbusRomNo9L-Medi" . 3.1)))
                        :heading-levels ((0.0265 . 0.0266) (0.0221 . 0.0222)))
                      (list (cons 4 (list line)))))
            (read-back (with-temp-buffer
@@ -66,6 +69,11 @@ that moved; this reports the line and its number."
       (expect (plist-get read-back :folio-merged) :to-equal 5)
       (expect (plist-get (plist-get read-back :profile) :leading)
               :to-be-close-to 0.017 4)
+      (expect (plist-get (plist-get read-back :profile) :font)
+              :to-equal "NimbusRomNo9L-Regu")
+      (expect (plist-get (plist-get read-back :profile) :font-inks)
+              :to-equal '(("NimbusRomNo9L-Regu" . 214.4)
+                          ("NimbusRomNo9L-Medi" . 3.1)))
       (expect (plist-get read-back :heading-levels)
               :to-equal '((0.0265 . 0.0266) (0.0221 . 0.0222)))
       (expect (pdf-text-line-text (pdf-corpus-line record))
@@ -412,9 +420,36 @@ that moved; this reports the line and its number."
                            :headed (concat "** Sections and Notation\n\n"
                                            "Sections and Notation\n\nThe body follows.")
                            :titles '("Sections and Notation")))
-            :to-equal '(outline))))
+            :to-equal '(outline)))
+
+  (it "names a bare enumerator the render leaves stranded"
+    ;; the Linnaean shape: a split section head's number reaches the
+    ;; reader as a line saying "1." and nothing else, and no older
+    ;; invariant has a name for it - the marker rule refuses the dot
+    (expect (mapcar #'car (pdf-corpus-violations
+                           :source '("1." "The Paradigm Shift is a Shift")
+                           :reflowed "1.\nThe Paradigm Shift is a Shift"))
+            :to-equal '(bare-enum))))
+
+(describe "pdf-corpus-bare-enum-lines"
+  (it "names a rendered line that is nothing but an enumerator"
+    (expect (pdf-corpus-bare-enum-lines
+             "1.\nThe Paradigm Shift\n\nprose here\n2)\nmore prose")
+            :to-equal '("1." "2)")))
+
+  (it "leaves verbatim and table lines alone, whose numbers are the page's"
+    (expect (pdf-corpus-bare-enum-lines "  1.\n  2.\n| 1 | take_ticket |")
+            :to-be nil))
+
+  (it "leaves an enumerator carrying its text alone"
+    (expect (pdf-corpus-bare-enum-lines "1. A real item\n2) another one")
+            :to-be nil)))
 
 (describe "pdf-corpus-describe-violation"
+  (it "prints a stranded enumerator with its kind"
+    (expect (pdf-corpus-describe-violation '(bare-enum "1." "2."))
+            :to-equal "bare enumerator line(s): 1. 2."))
+
   (it "prints a note-propertized pair as plain text"
     ;; rendered note lines carry the pdf-text-note property, and %S
     ;; would print it as #("..." 0 n (pdf-text-note t)) in every report
