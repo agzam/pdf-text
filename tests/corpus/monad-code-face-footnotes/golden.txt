@@ -1,0 +1,40 @@
+This document has been converted from a literate Haskell script using Andres L¨oh’s lhs2TeX[fn:2-1] preprocessor. The script is executable by GHC. The literate Haskell source file Transformers.lhs is available from my homepage[fn:2-2].
+
+It is probably best to read this paper near a computer so that you can look up the types and descriptions of the various functions used from the monad transformer library or the Haskell standard library. The best setup is a printed copy of this paper, a web browser showing the online library documentation and a running incarnation of ghci with a loaded /Transformers/ module (to be introduced below) for checking out types interactively using the :type (or :t) command.
+
+** 1.1 Example Program
+
+As a running example, an interpreter for a simple programming language will be used throughout the paper. All the code will be located in a module called /Transformers/, which has the following header:
+
+  *module* /Transformers/ *where import* /Control.Monad.Identity/ *import* /Control.Monad.Error/ *import* /Control.Monad.Reader/ *import* /Control.Monad.State/ *import* /Control.Monad.Writer/ *import* /Data.Maybe/
+*import* /qualified Data.Map as Map/
+
+Several of the imported modules beginning with /Control.Monad/ are only needed when you use the monad transformers defined there. The /Data.Maybe/ module defines useful functions for dealing with optional values of type /Maybe a/, and the module /Data.Map/ defines finite maps. These will be used to define environments (variable-value mappings) in our little interpreter.
+
+The following data types for modelling programs in that language will be used:
+
+*type* /Name/ = /String/
+-- variable names
+
+*data* /Exp/
+= /Lit Integer/
+
+-- expressions
+
+  ​| Var Name
+  ​| Plus Exp Exp
+  ​| Abs Name Exp
+  ​| App Exp Exp
+
+  *deriving* (/Show/) *data* /Value/ = /IntVal Integer/
+
+-- values
+
+  ​| FunVal Env Name Exp
+
+  *deriving* (/Show/) *type* /Env/ = /Map.Map Name Value/ -- mapping from names to values
+
+The /Name/ type is simply a shorthand for the standard /String/ type. It is used to make clear when we are talking about variable names and not about general strings. The /Exp/ data type has variants for literal integers (constants), variables, addition, /λ/ expressions (abstractions) and function application. The programs which are to be evaluated will be made up of the /Exp/ data type, whereas the results are from the /Value/ type. Values are either integers or functions (closures). The /Env/ component of a /FunVal/ is the environment in which the corresponding /λ/-abstraction was evaluated.
+
+[fn:2-1] http://www.iai.uni-bonn.de/~loeh/
+[fn:2-2] http://www.grabmueller.de/martin/www/pub/Transformers.lhs

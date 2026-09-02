@@ -114,6 +114,25 @@ to match line for line."
                   (when (< best n) (setq best n mode key))))
     (and mode (* mode bucket))))
 
+(defun pdf-text--same-column-right (lines left right)
+  "RIGHT, or the right edge of the LINES standing at LEFT where RIGHT crosses it.
+The modal left and right edges are two independent votes, and on a
+page whose two columns split them - one column carrying the more
+lines, the other the more justified line ends - the column comes out
+inverted, a right edge left of its left.  A column is one column:
+read its right edge off the lines that open at its left."
+  (if (not (and left right (<= right left)))
+      right
+    (let ((own (seq-filter (lambda (line)
+                             (< (abs (- (pdf-text-line-x0 line) left)) 0.01))
+                           lines)))
+      (or (pdf-text--mode-value (mapcar #'pdf-text-line-x1 own) 0.005
+                                (mapcar (lambda (line)
+                                          (- (pdf-text-line-x1 line)
+                                             (pdf-text-line-x0 line)))
+                                        own))
+          right))))
+
 (defvar pdf-text-column-strength 0.25
   "Ink weight, as a fraction of the strongest edge mode's, a column needs.
 The facing column of a two-column document carries about as much ink
@@ -1376,7 +1395,9 @@ has no representative body geometry of its own."
     (let* ((height (pdf-text--mode-value heights 0.001))
            (leading (pdf-text--mode-value leadings 0.002))
            (left (pdf-text--mode-value lefts 0.005 widths))
-           (right (pdf-text--mode-value rights 0.005 widths))
+           (right (pdf-text--same-column-right
+                   (apply #'append pages) left
+                   (pdf-text--mode-value rights 0.005 widths)))
            (text-left (car (pdf-text--strong-edges lefts 0.005 widths)))
            (space (let ((median (pdf-text--quantile spaces 0.5)))
                     (cond ((and median height) (max median (/ height 3.0)))
@@ -1443,8 +1464,10 @@ for itself keeps the document's edges."
                    (pdf-text--mode-value (mapcar #'pdf-text-line-x0 body)
                                          0.005 widths))
         (plist-put page :right
-                   (pdf-text--mode-value (mapcar #'pdf-text-line-x1 body)
-                                         0.005 widths))
+                   (pdf-text--same-column-right
+                    body (plist-get page :left)
+                    (pdf-text--mode-value (mapcar #'pdf-text-line-x1 body)
+                                          0.005 widths)))
         page))))
 
 (defun pdf-text--outside-text-area-p (base profile)
@@ -1769,6 +1792,16 @@ Word gaps in justified prose stretch to a space or two; the white
 channel between the columns of a table runs wider on every row that
 has one.")
 
+(defvar pdf-text-lane-overrun 1
+  "Space widths a cell's ink may reach into a gutter and still sit in its lane.
+A justified line ends where its last glyph does, and the column's
+lines agree on that edge to a hundred-thousandth of the page - except
+the one that overruns by a hair, or by the few points an overfull
+line is allowed.  A cell crosses a gutter when its ink spans the
+channel, not when it grazes the near bank; the gutter itself keeps
+`pdf-text-lane-gutter' widths clear, so a grazing cell stays well
+short of the far lane.")
+
 (defvar pdf-text-lane-min-rows 3
   "Rows of side-by-side cells a lane region must show.
 A running head shares its baseline with a folio, and two aligned rows
@@ -1843,12 +1876,15 @@ stay out; the caller routes them past the regions untouched."
           (when (< (+ start min-width) end)
             (push (cons start end) out)))))))
 
-(defun pdf-text--lane-crosses-p (line gutters)
-  "Whether LINE's ink reaches inside one of GUTTERS."
-  (cl-some (lambda (g)
-             (and (< (pdf-text-line-x0 line) (cdr g))
-                  (< (car g) (pdf-text-line-x1 line))))
-           gutters))
+(defun pdf-text--lane-crosses-p (line gutters &optional slack)
+  "Whether LINE's ink reaches inside one of GUTTERS past SLACK.
+SLACK is the width `pdf-text-lane-overrun' allows a cell to graze
+into the channel from either bank; nil reads the banks exactly."
+  (let ((slack (or slack 0)))
+    (cl-some (lambda (g)
+               (and (< (pdf-text-line-x0 line) (- (cdr g) slack))
+                    (< (+ (car g) slack) (pdf-text-line-x1 line))))
+             gutters)))
 
 (defun pdf-text--lane-inside-p (line profile)
   "Whether LINE's ink sits inside PROFILE's text area, margin slack allowed.
@@ -1890,22 +1926,39 @@ MIN-WIDTH is the gutter the cells must leave open."
 Each region comes back as (:rows ROWS :gutters GUTTERS :clean N):
 the run's rows, the white channels its side-by-side rows agree on,
 and how many rows brought such cells.  A run opens at a clean
-multi-cell row, takes tab-joined rows and single cells nested in a
-lane as it goes, and closes on a row that crosses the gutters, walks
-outside the column, or steps more than a paragraph gap down the
-page.  The step is the air between the run's lowest cell and the
-row's highest: row bases carry the intra-row jitter of facing
-baselines, and a jittered row must not read as a gap.  PROFILE gives
-the measures."
+multi-cell row, takes tab-joined rows and unclean rows whose cells
+all nest inside its lanes as it goes, and closes on a row that
+crosses the gutters, walks outside the column, steps more than a
+paragraph gap down the page, or keeps clean channels of its own
+that the run's gutters do not share - a table set inside one
+column is structure, not a continuation.  A nested row extends
+without a vote: a single continuation, a facing pair whose gap fell
+under the gutter's measure because one line runs half a space
+overfull - the run's channels are the clean rows' to keep, and a
+cell crosses one only past `pdf-text-lane-overrun'.  A clean row
+that keeps every channel open but whose gap meets the run's gutter
+a hair under the measure counts as clean and leaves the gutters as
+they are: narrowed to it, the channel would fall under the measure
+and the run would lose its gutter to jitter.  The step is
+the air between the run's lowest cell and the row's highest: row
+bases carry the intra-row jitter of facing baselines, and a
+jittered row must not read as a gap.  PROFILE gives the measures."
   (let* ((space (or (plist-get profile :space) 0.005))
          (leading (or (plist-get profile :leading) 0.02))
          (min-width (* pdf-text-lane-gutter space))
+         (slack (* pdf-text-lane-overrun space))
          regions run gutters clean last-base)
     (cl-flet ((close-run ()
                 (when (and run (<= pdf-text-lane-min-rows clean) gutters)
                   (push (list :rows (nreverse run) :gutters gutters :clean clean)
                         regions))
-                (setq run nil gutters nil clean 0 last-base nil)))
+                (setq run nil gutters nil clean 0 last-base nil))
+              (nested-p (cells)
+                (cl-every (lambda (cell)
+                            (and (pdf-text--lane-inside-p (cdr cell) profile)
+                                 (not (pdf-text--lane-crosses-p (cdr cell) gutters
+                                                                slack))))
+                          cells)))
       (dolist (row rows)
         (let* ((cells (cdr row))
                (near (cl-loop for cell in cells
@@ -1929,28 +1982,44 @@ the measures."
                       clean 1)
                 (sink)))
              ((pdf-text--lane-clean-row-p row profile min-width)
-              (let ((cut (pdf-text--lane-intersect
-                          gutters (pdf-text--lane-row-gaps cells) min-width)))
-                (if cut
-                    (progn (push row run)
-                           (setq gutters cut
-                                 clean (1+ clean))
-                           (sink))
+              (let* ((gaps (pdf-text--lane-row-gaps cells))
+                     (cut (pdf-text--lane-intersect gutters gaps min-width)))
+                (cond
+                 (cut
+                  (push row run)
+                  (setq gutters cut
+                        clean (1+ clean))
+                  (sink))
+                 ;; every channel still open, none crossed: a facing
+                 ;; row whose gap jittered under the measure - the
+                 ;; run's narrowest channel is one space less a hair -
+                 ;; is a clean row that keeps the gutters as they are
+                 ((and (nested-p cells)
+                       (cl-every (lambda (g)
+                                   (cl-some (lambda (gap)
+                                              (and (< (car g) (cdr gap))
+                                                   (< (car gap) (cdr g))))
+                                            gaps))
+                                 gutters))
+                  (push row run)
+                  (setq clean (1+ clean))
+                  (sink))
+                 ;; a clean row keeping channels of its own - a table
+                 ;; set inside one column, cells spanning the run's
+                 ;; gutters - is structure, not a continuation: it
+                 ;; closes the run and opens the next on its gutters
+                 (t
                   (close-run)
-                  (when (pdf-text--lane-clean-row-p row profile min-width)
-                    (setq run (list row)
-                          gutters (cl-remove-if
-                                   (lambda (gap)
-                                     (<= (cdr gap) (+ (car gap) min-width)))
-                                   (pdf-text--lane-row-gaps cells))
-                          clean 1)
-                    (sink)))))
-             ((cl-some (lambda (cell) (pdf-text--lane-tabbed-p (cdr cell))) cells)
-              (push row run)
-              (sink))
-             ((and (null (cdr cells))
-                   (pdf-text--lane-inside-p (cdr (car cells)) profile)
-                   (not (pdf-text--lane-crosses-p (cdr (car cells)) gutters)))
+                  (setq run (list row)
+                        gutters (cl-remove-if
+                                 (lambda (gap)
+                                   (<= (cdr gap) (+ (car gap) min-width)))
+                                 gaps)
+                        clean 1)
+                  (sink)))))
+             ((or (cl-some (lambda (cell) (pdf-text--lane-tabbed-p (cdr cell)))
+                           cells)
+                  (nested-p cells))
               (push row run)
               (sink))
              (t (close-run))))))
@@ -1977,11 +2046,19 @@ PROFILE's text-area edges close the two open ends."
 (defun pdf-text--lane-of (line spans &optional by-end)
   "Index of the lane of SPANS holding LINE, or nil.
 The ink's left edge decides; BY-END reads the right edge instead, for
-a tab-prefixed record whose leading tab glyphs lie about its start."
+a tab-prefixed record whose leading tab glyphs lie about its start.
+An edge standing inside a gutter - a line set a hair past the bank
+the clean rows drew - takes the nearer lane; an edge past the outer
+spans belongs to none."
   (let ((x (if by-end (pdf-text-line-x1 line) (pdf-text-line-x0 line))))
-    (and x (cl-position-if (lambda (span)
-                             (and (<= (car span) x) (< x (cdr span))))
-                           spans))))
+    (when x
+      (or (cl-position-if (lambda (span)
+                            (and (<= (car span) x) (< x (cdr span))))
+                          spans)
+          (cl-loop for (before after) on spans
+                   for i from 0
+                   when (and after (<= (cdr before) x) (< x (car after)))
+                   return (if (< (- x (cdr before)) (- (car after) x)) i (1+ i)))))))
 
 (defun pdf-text--lane-region-cells (region)
   "Every record of REGION, cells and continuations alike."
@@ -2433,14 +2510,23 @@ table set whole in a face under the body size - the NIST checklist in
 Arial on a Times page - is small type from end to end, and measured
 against the body every cell of it reads as a foot block.  Its
 step-number lane resumes after every wrapped row, so the numbers
-evict one by one and render as bare lines under the table."
+evict one by one and render as bare lines under the table.  And
+exact, where the region is set in the body's type: PROFILE's height
+is a bucket mode, a thousandth of the page wide, and a note two
+percent under the size gate clears it against the bucket's floor
+while it fails against the lines it sits among."
   (let* ((height (let ((body (plist-get profile :height))
                        (own (pdf-text--quantile
                              (delq nil (mapcar #'pdf-text-line-height
                                                (pdf-text--lane-region-cells
                                                 region)))
                              0.5)))
-                   (if (and body own) (min body own) (or body own))))
+                   (cond ((not (and body own)) (or body own))
+                         ;; the region's own median is the exact
+                         ;; reading of the body the profile rounded,
+                         ;; up to one bucket over it
+                         ((< own (+ body 0.001)) own)
+                         (t body))))
          (leading (or (plist-get profile :leading) 0.02))
          (gap (* pdf-text-gap-factor leading))
          (spans (pdf-text--lane-spans region profile))
@@ -2646,12 +2732,13 @@ PROFILE gives the column and the measures."
 (defun pdf-text-reading-order (pages)
   "PAGES of `pdf-text-line' records, cleaned and in repaired reading order.
 Script fragments rejoin the typeset line poppler split them from, by
-`pdf-text--merge-script-fragments'; contents leader fills strip and
-their entries pair with their folios, by `pdf-text--strip-leaders';
-multicolumn regions come back as table rows or stay lane-ordered
-flows, by `pdf-text--mark-lanes'; and the aligned arrays reading
-order scattered come back row by row, by
-`pdf-text--reassemble-zones'.  These are the lines the reflow reads,
+`pdf-text--merge-script-fragments'; a foot block the content stream
+drew first moves under the page, by `pdf-text--defer-early-foot';
+contents leader fills strip and their entries pair with their
+folios, by `pdf-text--strip-leaders'; multicolumn regions come back
+as table rows or stay lane-ordered flows, by `pdf-text--mark-lanes';
+and the aligned arrays reading order scattered come back row by row,
+by `pdf-text--reassemble-zones'.  These are the lines the reflow reads,
 and the lines the corpus measures survival against: the repairs
 merge and reorder records, and the only records they drop are the
 fills, which carry no letter the survival stream could miss."
@@ -2671,9 +2758,11 @@ fills, which carry no letter the survival stream could miss."
                   (pdf-text--reassemble-zones
                    (pdf-text--mark-lanes
                     (pdf-text--strip-leaders
-                     (pdf-text--merge-script-fragments
-                      (pdf-text--join-split-lines
-                       (pdf-text--float-drop-caps lines profile)
+                     (pdf-text--defer-early-foot
+                      (pdf-text--merge-script-fragments
+                       (pdf-text--join-split-lines
+                        (pdf-text--float-drop-caps lines profile)
+                        profile)
                        profile)
                       profile))
                     profile)
@@ -2969,6 +3058,52 @@ set it - and is derived from LINES when the caller has none."
               (push line notes)
             (push line body)))
         (nconc (nreverse body) (nreverse notes))))))
+
+(defun pdf-text--defer-early-foot (lines profile)
+  "LINES with a foot block served ahead of the page moved under it.
+MuPDF serves blocks in the order the page's content stream draws
+them, and a producer that draws the footnote before the body hands
+the note over first: the reader meets it at the page's top, and the
+footnote walk, which reads the page's trailing blocks, never opens.
+A leading run of records standing below every later record of the
+text span is such a block, and it moves down the stream to the
+record its baselines fall before.  Records outside PROFILE's text
+span - a running head served first, the folio served last - neither
+join the run nor break it, and stay where they are; a facing column
+that runs as deep as the note leaves nothing standing below it, so
+a two-column page keeps its served order."
+  (let ((top (plist-get profile :text-top))
+        (bottom (plist-get profile :text-bottom))
+        (slack (* pdf-text-fragment-step (or (plist-get profile :leading) 0.02))))
+    (if (not (and top bottom))
+        lines
+      (let* ((spanned (seq-filter (lambda (line)
+                                    (when-let* ((base (pdf-text-line-base line)))
+                                      (and (<= (- top slack) base)
+                                           (<= base (+ bottom slack)))))
+                                  lines))
+             (early (cl-loop for (line . rest) on spanned
+                             for deepest = (cl-loop for later in rest
+                                                    maximize (pdf-text-line-base later))
+                             while (and deepest
+                                        (< (+ deepest slack) (pdf-text-line-base line)))
+                             collect line)))
+        (if (null early)
+            lines
+          (let ((deepest (cl-loop for line in early
+                                  maximize (pdf-text-line-base line)))
+                (rest (seq-remove (lambda (line) (memq line early)) lines))
+                out placed)
+            (dolist (line rest)
+              (when (and (not placed)
+                         (when-let* ((base (pdf-text-line-base line)))
+                           (< deepest base)))
+                (setq out (nconc (reverse early) out)
+                      placed t))
+              (push line out))
+            (unless placed
+              (setq out (nconc (reverse early) out)))
+            (nreverse out)))))))
 
 (defvar pdf-text-split-line-gap 6
   "Modal spaces of gap under which a split typeset line may rejoin.
@@ -4673,26 +4808,60 @@ joins a title split across lines."
                     (push (list block (cdr (pop pending))) assigned)))
       assigned)))
 
+(defun pdf-text--footnote-stack (block)
+  "The footnotes BLOCK stacks, as ((TOKEN . TEXT)...), or nil.
+Two short notes at a column's foot - a URL each, in the body face or
+in a code face - share one block, a typeset line apiece, and joined
+as one definition the second rides inside the first with its marker
+still on.  The block reads as a stack only when its first line
+opens with a marker; every later line either opens the next note or
+wraps the one before it."
+  (let (notes)
+    (catch 'prose
+      (dolist (line (pdf-text-block-lines block))
+        (let* ((text (string-trim (pdf-text--line-tagged line)))
+               (open (pdf-text--footnote-open text)))
+          (cond
+           (open (push (cons (car open) (substring text (cdr open))) notes))
+           (notes (setcdr (car notes) (concat (cdar notes) " " text)))
+           (t (throw 'prose nil)))))
+      (nreverse notes))))
+
+(defun pdf-text--footnote-citations (token texts)
+  "The regexps citing footnote TOKEN in TEXTS, or nil where none does.
+A marker cites as the superscript the body renders or as the flat
+symbol the text layer wrote."
+  (let ((res (delq nil (list (pdf-text--footnote-marker-re token)
+                             (pdf-text--footnote-flat-re token)))))
+    (and (cl-some (lambda (re)
+                    (cl-some (lambda (above) (string-match-p re above)) texts))
+                  res)
+         res)))
+
 (defun pdf-text--assign-footnotes (blocks profile vocabulary page)
   "The footnotes among BLOCKS, as (DEFS REFS NOTES), or nil.
-DEFS is an alist of (BLOCK LABEL . TEXT): the trailing blocks of the
-page that define a footnote, with the label PAGE gives them and their
-text cut past the marker.  REFS pairs each marker's regexps with its
+DEFS is an alist of (BLOCK (LABEL . TEXT)...): the trailing blocks of
+the page that define footnotes, each with the labels PAGE gives them
+and their texts cut past the markers - one definition per block, or
+one per marker-opened line where a block stacks several notes the
+body cites every one of.  REFS pairs each marker's regexps with its
 label, for the body blocks that cite it.  NOTES is the rest of the
 page's foot: trailing smaller-type blocks with no marker or no
-citation - an author note, an imprint line - that render as the plain
-text they are but carry the note face, when they sit past
+citation - an author note, an imprint line - that render as the
+plain text they are but carry the note face, when they sit past
 `pdf-text-footnote-foot' on a page that has body text above them.  A
 footnote takes both halves: a block at the page's foot, set under
 `pdf-text-footnote-size' of PROFILE's body height - or under
 `pdf-text-footnote-size-slack' when it opens with a marker, the
-stronger signal buying the gate its slack - opening with a marker the
-body above it cites, as a superscript or as the flat symbol the text
-layer wrote.  A block missing either half renders as the ordinary
-text it may well be.  VOCABULARY joins the texts.  Two footnotes
-sharing one marker on one page would share a label, and org would
-read them as one; books rotate their symbols, so the collision stays
-theoretical."
+stronger signal buying the gate its slack - opening with a marker
+the body above it cites, as a superscript or as the flat symbol the
+text layer wrote.  A block missing either half renders as the
+ordinary text it may well be.  A mono block joins the foot only as a
+stack of marker-opened notes, and never as an unmarked note: a
+listing at the page's foot is code, not an author note.  VOCABULARY
+joins the texts.  Two footnotes sharing one marker on one page would
+share a label, and org would read them as one; books rotate their
+symbols, so the collision stays theoretical."
   (when-let* ((body (plist-get profile :height)))
     (let* ((vec (vconcat blocks))
            (i (1- (length vec)))
@@ -4708,7 +4877,11 @@ theoretical."
                                                      body))
                                         (pdf-text--footnote-open
                                          (pdf-text--join-block block
-                                                               vocabulary)))))))))
+                                                               vocabulary))))))
+                        (and (eq 'mono (pdf-text-block-kind block))
+                             (when-let* ((height (pdf-text--block-height block)))
+                               (< height (* pdf-text-footnote-size-slack body)))
+                             (pdf-text--footnote-stack block)))))
         (unless (eq 'blank (pdf-text-block-kind (aref vec i)))
           (push (aref vec i) run))
         (cl-decf i))
@@ -4719,25 +4892,38 @@ theoretical."
                               collect (pdf-text--join-block block vocabulary)))
               defs refs notes)
           (dolist (block run)
-            (let* ((text (pdf-text--join-block block vocabulary))
-                   (open (and text (pdf-text--footnote-open text)))
-                   (res (and open
-                             (delq nil
-                                   (list (pdf-text--footnote-marker-re (car open))
-                                         (pdf-text--footnote-flat-re (car open))))))
-                   (cited (and res
-                               (cl-some (lambda (re)
-                                          (cl-some (lambda (above)
-                                                     (string-match-p re above))
-                                                   texts))
-                                        res))))
+            (let* ((mono (eq 'mono (pdf-text-block-kind block)))
+                   (stack (pdf-text--footnote-stack block))
+                   (cited (mapcar (lambda (note)
+                                    (pdf-text--footnote-citations (car note)
+                                                                  texts))
+                                  stack)))
               (cond
-               (cited
-                (let ((label (pdf-text--footnote-label page (car open))))
-                  (push (cons block (cons label (substring text (cdr open))))
+               ;; several notes in one block, every one cited: a
+               ;; definition per marker line.  a code-face block has
+               ;; only this way in, one note or many
+               ((and stack (or mono (cdr stack)) (cl-every #'identity cited))
+                (push (cons block
+                            (cl-loop for note in stack
+                                     for res in cited
+                                     for label = (pdf-text--footnote-label
+                                                  page (car note))
+                                     do (dolist (re res)
+                                          (push (cons re label) refs))
+                                     collect (cons label (cdr note))))
+                      defs))
+               ;; one note, or a stack the body does not cite whole:
+               ;; the block is the definition its first marker opens
+               ((and (not mono) (car cited))
+                (let* ((text (pdf-text--join-block block vocabulary))
+                       (open (pdf-text--footnote-open text))
+                       (label (pdf-text--footnote-label page (car open))))
+                  (push (cons block (list (cons label
+                                                (substring text (cdr open)))))
                         defs)
-                  (dolist (re res) (push (cons re label) refs))))
-               ((and texts
+                  (dolist (re (car cited)) (push (cons re label) refs))))
+               ((and (not mono)
+                     texts
                      (when-let* ((top (pdf-text-line-top
                                        (car (pdf-text-block-lines block)))))
                        (<= pdf-text-footnote-foot top)))
@@ -4802,7 +4988,11 @@ heading a merged pair makes carries both halves' text already."
                           ;; org reads [fn:LABEL] as a definition only there -
                           ;; with the page's own marker cut, the label now
                           ;; carrying what it carried
-                          (and note (concat "[fn:" (car note) "] " (cdr note)))
+                          (and note
+                               (mapconcat (lambda (def)
+                                            (concat "[fn:" (car def) "] "
+                                                    (cdr def)))
+                                          note "\n"))
                           (pcase kind
                             ((or 'mono 'math)
                              (pdf-text--render-mono block profile listing-left))
@@ -5746,7 +5936,7 @@ text it always was."
   (aset buffer-display-table ?\f
         (vconcat (make-list 64 (make-glyph-code ?─ 'shadow)))))
 
-(defconst pdf-text-render-version 26
+(defconst pdf-text-render-version 27
   "Version of the rendering pipeline, part of the freshness stamp.
 Bumping it stales every companion rendered by older code, so reuse
 cannot serve output the current transforms would no longer produce.")

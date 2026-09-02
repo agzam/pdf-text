@@ -20,5 +20,11 @@ it.  Captured red for the surviving furniture from daaab05 to the
 Round 12 unit 4 fix.
 
 The mid-sentence budget is the law paragraph broken by its own
-display maths."
- :budget (:mid-sentence 1 :glued 0))
+display maths.  The orphans it tolerates are the law labels -
+`identity', `interchange' - lowercase lines the page sets beside
+their displays: the first follows the colon that introduces the
+laws, the second a display the render did not indent, and neither
+is a continuation of anything.  A labelled-display rendering would
+retire them."
+ :budget (:mid-sentence 1 :glued 0)
+ :tolerates (orphan))

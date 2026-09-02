@@ -121,9 +121,11 @@ what the reader pays."
                                      (pdf-text--reassemble-zones
                                       (pdf-text--mark-lanes
                                        (pdf-text--strip-leaders
-                                        (pdf-text--merge-script-fragments
-                                         (pdf-text--join-split-lines
-                                          (pdf-text--float-drop-caps lines pre)
+                                        (pdf-text--defer-early-foot
+                                         (pdf-text--merge-script-fragments
+                                          (pdf-text--join-split-lines
+                                           (pdf-text--float-drop-caps lines pre)
+                                           pre)
                                           pre)
                                          pre))
                                        pre)

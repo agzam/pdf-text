@@ -1,0 +1,50 @@
+framework towards its share of the cluster for the purpose of allocation. This is a strong incentive for frameworks to respond to offers quickly and to filter out resources that they cannot use, so that they can get offers for more suitable resources faster.
+
+Third, if a framework has not responded to an offer for a sufficiently long time, Mesos /rescinds/ the offer and re-offers the resources to other frameworks.
+
+We also note that even without the use of filters, Mesos can make tens of thousands of resource offers per second, because the scheduling algorithm it must perform (fair sharing) is highly efficient.
+
+** 3.6 Fault Tolerance
+
+Since all the frameworks depends on the master, it is critical to make the master fault-tolerant. To achieve this we use two techniques. First, we have designed the master to be /soft state/, /i.e.,/ the master can reconstruct completely its internal state from the periodic messages it gets from the slaves, and from the framework schedulers. Second, we have implemented a hot-standby design, where the master is shadowed by several backups that are ready to take over when the master fails. Upon master failure, we use ZooKeeper [4] to select a new master from the existing backups, and direct all slaves and framework schedulers to this master. Subsequently, the new master will reconstruct the internal state from the messages it receives from slaves and framework schedulers.
+
+Aside from handling master failures, Mesos reports task, slave and executor failures to frameworks’ schedulers. Frameworks can then react to failures using the policies of their choice.
+
+Finally, to deal with scheduler failures, Mesos allows a framework to register multiple schedulers such that when one fails, another one is notified by the Mesos master to take over. Frameworks must use their own mechanisms to share state between their schedulers.
+
+* 4 Mesos Behavior
+
+In this section, we study Mesos’s behavior for different workloads. Our main goal here is not to develop a detailed and exact model of the system, but to provide a coarse understanding of its behavior.
+
+In short, we find that Mesos performs very well when frameworks can scale up and down elastically, tasks durations are homogeneous, and frameworks prefer all nodes equally (Section 4.2). When different frameworks prefer different nodes, we show that Mesos can emulate a centralized scheduler that uses fair sharing across frameworks (Section 4.2.1). In addition, we show that Mesos can handle heterogeneous task durations without impacting the performance of frameworks with short tasks (§4.3). We also discuss how frameworks are incentivized to improve their performance under Mesos, and argue that these incentives also improve overall cluster utilization (§4.4). We conclude this section with some limitations of Mesos’s distributed scheduling model (§4.5).
+
+** 4.1 Definitions, Metrics and Assumptions
+
+In our discussion, we consider three metrics:
+
+  • Framework ramp-up time:
+
+  time it takes a new framework to achieve its allocation (/e.g.,/ fair share);
+
+- /Job completion time:/ time it takes a job to complete, assuming one job per framework;
+
+  • System utilization: total cluster utilization.
+
+We characterize workloads along four attributes:
+- /Scale up:/ Frameworks can elastically increase their allocation to take advantage of free resources.
+
+- /Scale down:/ Frameworks can relinquish resources without significantly impacting their performance.
+
+- /Minimum allocation:/ Frameworks require a certain minimum number of slots before they can start using their slots.
+
+- /Task distribution:/ The distribution of the task durations. We consider both homogeneous and heterogeneous distributions.
+
+We differentiate between two types of resources: /mandatory/ and /preferred/. A resource is /mandatory/ if a framework must acquire it in order to run. For example, a graphical processor unit (GPU) is mandatory if a framework cannot run without access to GPU. In contrast, a resource is /preferred/ if a framework performs “better” using it, but can also run using another equivalent resource. For example, a framework may prefer using a node that locally stores its data, but it can remotely access the data from other nodes if it must.
+
+We assume the amount of /mandatory/ resources requested by a framework never exceeds its guaranteed share. This ensures that frameworks will not deadlock waiting for the mandatory resources to become available. For simplicity, we also assume that all tasks run on identical slices of machines, called /slots/, and that each framework runs a single job.
+
+We consider two types of frameworks: /elastic/ and /rigid/. An elastic framework (/e.g.,/ Hadoop, Dryad) can scale its resources up and down, /i.e.,/ it can start using slots as soon as it acquires them and release slots as soon its task finish. In contrast, a rigid framework (/e.g.,/ MPI) can start running its jobs only after it has allocated all its slots, /i.e.,/ the minimum allocation of a rigid framework is equal to its full allocation.
+
+** 4.2 Homogeneous Tasks
+
+We consider a cluster with /n/ slots and a framework, /f/, that is entitled to /k/ slots. For the purpose of this analysis, we consider two distributions of the task durations:

@@ -1553,6 +1553,23 @@ HEADINGS are the org heading lines the outline puts on that page."
            (lines (pdf-text-tests--page '(("lonely" :x0 0.20 :x1 0.90)))))
       (expect (pdf-text--page-profile lines doc) :to-equal doc)))
 
+  (it "reads both edges off one column when the two columns split the votes"
+    ;; denotational p6: the right column wins the left edge (it has the
+    ;; more lines, the left column's proof block indents its own) and
+    ;; the left column wins the right edge (its justified lines all end
+    ;; at one x, the right column's end ragged), so the page's column
+    ;; came out as 0.52 to 0.48 - a column no rule can measure against
+    (let* ((doc '(:height 0.015 :leading 0.02 :left 0.09 :right 0.48 :space 0.005))
+           (lines (pdf-text-tests--page
+                   (append (make-list 8 '("left column body line" :x0 0.09 :x1 0.48))
+                           (make-list 4 '("indented proof step" :x0 0.15 :x1 0.40))
+                           (make-list 4 '("right column body line" :x0 0.52 :x1 0.89))
+                           (make-list 4 '("right column body line" :x0 0.52 :x1 0.86))
+                           (make-list 4 '("right column body line" :x0 0.52 :x1 0.83)))))
+           (page (pdf-text--page-profile lines doc)))
+      (expect (plist-get page :left) :to-be-close-to 0.52 2)
+      (expect (plist-get page :right) :to-be-close-to 0.89 2)))
+
   (it "ignores lines set at another size, which have margins of their own"
     (let* ((doc '(:height 0.015 :leading 0.02 :left 0.10 :right 0.80 :space 0.005))
            (lines (pdf-text-tests--page
@@ -1777,6 +1794,61 @@ HEADINGS are the org heading lines the outline puts on that page."
                                '("plain first line" "plain second line")))))
       (expect (mapcar #'pdf-text-line-text (car (pdf-text-reading-order pages)))
               :to-equal '("plain first line" "plain second line")))))
+
+(describe "pdf-text--defer-early-foot"
+  (it "moves a foot block served ahead of the page down to where it sits"
+    ;; DSB p19 since the MuPDF swap: the content stream draws the
+    ;; footnote before the body, so the note arrives first, the reader
+    ;; meets it at the page's top, and the footnote walk over the
+    ;; trailing blocks never opens.  The running head served first and
+    ;; the folio served last stand outside the text span and stay put
+    (let* ((profile '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
+                      :space 0.005 :text-top 0.10 :text-bottom 0.90))
+           (lines (pdf-text-tests--page
+                   '(("1. Of course, each author did the work." :x0 0.16 :x1 0.80 :base 0.887 :height 0.012)
+                     ("PREFACE" :x0 0.10 :x1 0.20 :base 0.05 :height 0.012)
+                     ("buried in algorithm details or in" :base 0.12)
+                     ("mathematical propositions, and" :base 0.14)
+                     ("the last body line on the page." :base 0.16)
+                     ("xiii" :x0 0.85 :x1 0.90 :base 0.94 :height 0.012))))
+           (out (pdf-text--defer-early-foot lines profile)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("PREFACE"
+                          "buried in algorithm details or in"
+                          "mathematical propositions, and"
+                          "the last body line on the page."
+                          "1. Of course, each author did the work."
+                          "xiii"))))
+
+  (it "leaves a page served in order alone, its last block included"
+    (let* ((profile '(:height 0.015 :leading 0.02 :left 0.10 :right 0.90
+                      :space 0.005 :text-top 0.10 :text-bottom 0.90))
+           (lines (pdf-text-tests--page
+                   '(("the first body line" :base 0.12)
+                     ("the second body line" :base 0.14)
+                     ("1. a footnote at the foot." :x0 0.16 :x1 0.80 :base 0.887 :height 0.012))))
+           (out (pdf-text--defer-early-foot lines profile)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("the first body line"
+                          "the second body line"
+                          "1. a footnote at the foot."))))
+
+  (it "leaves a facing column's foot in place, which later records stand beside"
+    ;; the right column of a two-column page runs as deep as the left
+    ;; column's note: nothing stands below everything after it
+    (let* ((profile '(:height 0.015 :leading 0.02 :left 0.10 :right 0.48
+                      :space 0.005 :text-top 0.10 :text-bottom 0.90))
+           (lines (pdf-text-tests--page
+                   '(("a note at the left foot" :x0 0.10 :x1 0.40 :base 0.88 :height 0.012)
+                     ("left column line one" :x0 0.10 :x1 0.48 :base 0.12)
+                     ("right column line one" :x0 0.52 :x1 0.90 :base 0.12)
+                     ("right column runs deep" :x0 0.52 :x1 0.90 :base 0.88))))
+           (out (pdf-text--defer-early-foot lines profile)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("a note at the left foot"
+                          "left column line one"
+                          "right column line one"
+                          "right column runs deep")))))
 
 ;;; Multicolumn lanes
 
@@ -2179,6 +2251,113 @@ HEADINGS are the org heading lines the outline puts on that page."
       (expect (pdf-text-line-base (nth 4 out))
               :to-be-greater-than (pdf-text-line-base (nth 3 out)))))
 
+  (it "keeps one region across a line whose ink overruns the gutter by a hair"
+    ;; mesos p5: a justified line ends at x1 0.48530 where every other
+    ;; line of its column ends at 0.48529, on a baseline the facing
+    ;; column leaves empty.  Read as crossing the gutter it closed the
+    ;; run, each half unfolded on its own, and the reader got a
+    ;; paragraph's tail after the facing column's next section
+    (let* ((specs '(("second column comes first in" :x0 0.52 :x1 0.90 :base 0.12)
+                    ("the stream and runs justified" :x0 0.52 :x1 0.90)
+                    ("to the shared page bottom by" :x0 0.52 :x1 0.90)
+                    ("lines that face their twins" :x0 0.52 :x1 0.90)
+                    ("then after a paragraph gap it" :x0 0.52 :x1 0.90 :gap 2)
+                    ("carries on to the bottom of" :x0 0.52 :x1 0.90)
+                    ("the page beside the first one" :x0 0.52 :x1 0.90)
+                    ("first column arrives after but" :x0 0.10 :x1 0.48 :base 0.12)
+                    ("reads before its facing twin" :x0 0.10 :x1 0.48)
+                    ("every line justified flush to" :x0 0.10 :x1 0.48)
+                    ("the middle of the page here" :x0 0.10 :x1 0.48)
+                    ("one line overruns by a hair on" :x0 0.10 :x1 0.48001)
+                    ("a baseline the twin leaves bare" :x0 0.10 :x1 0.48)
+                    ("and the column runs on to its" :x0 0.10 :x1 0.48)
+                    ("own last line at the bottom" :x0 0.10 :x1 0.48)))
+           (out (pdf-text-tests--lanes specs)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("first column arrives after but"
+                          "reads before its facing twin"
+                          "every line justified flush to"
+                          "the middle of the page here"
+                          "one line overruns by a hair on"
+                          "a baseline the twin leaves bare"
+                          "and the column runs on to its"
+                          "own last line at the bottom"
+                          "second column comes first in"
+                          "the stream and runs justified"
+                          "to the shared page bottom by"
+                          "lines that face their twins"
+                          "then after a paragraph gap it"
+                          "carries on to the bottom of"
+                          "the page beside the first one"))))
+
+  (it "keeps one region across a facing pair whose gap falls under the gutter measure"
+    ;; 2017saner p9: a half-space overfull left line faces its right
+    ;; twin, the gap between them reads 2.9 spaces against a 3-space
+    ;; gutter, and the row is neither clean nor a single cell - so the
+    ;; run closed there, six times down one page.  Both cells nest in
+    ;; their lanes and neither crosses the channel: the row extends the
+    ;; run without a vote, exactly as a single nested cell does
+    ;; the gutter is 3.5 spaces wide, as a paper's is; the overfull line
+    ;; reaches 0.7 of a space into it and the pair's gap reads 2.8
+    (let* ((specs '(("second column comes first in" :x0 0.4975 :x1 0.90 :base 0.12)
+                    ("the stream and runs justified" :x0 0.4975 :x1 0.90)
+                    ("to the shared page bottom by" :x0 0.4975 :x1 0.90)
+                    ("lines that face their twins" :x0 0.4975 :x1 0.90)
+                    ("and go on down beside the" :x0 0.4975 :x1 0.90)
+                    ("overfull line to the bottom" :x0 0.4975 :x1 0.90)
+                    ("of the page where both end" :x0 0.4975 :x1 0.90)
+                    ("first column arrives after but" :x0 0.10 :x1 0.48 :base 0.12)
+                    ("reads before its facing twin" :x0 0.10 :x1 0.48)
+                    ("every line justified flush to" :x0 0.10 :x1 0.48)
+                    ("the middle of the page here" :x0 0.10 :x1 0.48)
+                    ("one line overfull by half a" :x0 0.10 :x1 0.4835)
+                    ("space and the column runs on" :x0 0.10 :x1 0.48)
+                    ("to its own last line at the" :x0 0.10 :x1 0.48)))
+           (out (pdf-text-tests--lanes specs)))
+      (expect (mapcar #'pdf-text-line-text out)
+              :to-equal '("first column arrives after but"
+                          "reads before its facing twin"
+                          "every line justified flush to"
+                          "the middle of the page here"
+                          "one line overfull by half a"
+                          "space and the column runs on"
+                          "to its own last line at the"
+                          "second column comes first in"
+                          "the stream and runs justified"
+                          "to the shared page bottom by"
+                          "lines that face their twins"
+                          "and go on down beside the"
+                          "overfull line to the bottom"
+                          "of the page where both end"))))
+
+  (it "evicts a foot block measured against the region's exact body height"
+    ;; bornstein p1 since the MuPDF swap: the profile's height is a
+    ;; 0.001 bucket mode, 0.016 for body lines of 0.01629, and the
+    ;; author note's 0.01457 reads as 0.91 of the bucket where it is
+    ;; 0.89 of the lines around it - so the note stayed in its lane and
+    ;; the seam sentence's tail read after it
+    (let* ((specs '(("the right column runs beside" :x0 0.52 :x1 0.90 :base 0.12 :height 0.01629)
+                    ("the body and keeps running" :x0 0.52 :x1 0.90 :height 0.01629)
+                    ("past the point where the left" :x0 0.52 :x1 0.90 :height 0.01629)
+                    ("column body already stopped" :x0 0.52 :x1 0.90 :height 0.01629)
+                    ("and on down the shared page" :x0 0.52 :x1 0.90 :height 0.01629)
+                    ("to its own last justified line" :x0 0.52 :x1 0.90 :height 0.01629)
+                    ("closing at the bottom margin" :x0 0.52 :x1 0.90 :height 0.01629)
+                    ("the left column body is set" :x0 0.10 :x1 0.48 :base 0.12 :height 0.01629)
+                    ("in four justified lines that" :x0 0.10 :x1 0.48 :height 0.01629)
+                    ("stop well short of the page" :x0 0.10 :x1 0.48 :height 0.01629)
+                    ("bottom leaving room below" :x0 0.10 :x1 0.48 :height 0.01629)
+                    ("thanks go to a colleague for" :x0 0.10 :x1 0.44 :base 0.22 :height 0.01457)
+                    ("reading drafts of this kindly" :x0 0.10 :x1 0.42 :height 0.01457)))
+           (out (pdf-text-tests--lanes specs))
+           (note (cl-find "thanks go to a colleague for" out
+                          :key #'pdf-text-line-text :test #'equal)))
+      (expect (mapcar #'pdf-text-line-text (last out 3))
+              :to-equal '("closing at the bottom margin"
+                          "thanks go to a colleague for"
+                          "reading drafts of this kindly"))
+      (expect (pdf-text-line-claimed note) :to-be nil)))
+
   (it "reads a smaller foot block after the columns, not inside a lane"
     ;; an author note resumes the left lane after a paragraph gap, set
     ;; under footnote size; swallowed into the lane it would read
@@ -2214,6 +2393,23 @@ HEADINGS are the org heading lines the outline puts on that page."
                           "thanks go to a colleague for"
                           "reading drafts of this kindly"))
       (expect (pdf-text-line-claimed note) :to-be nil))))
+
+(describe "pdf-text--lane-of"
+  (it "gives a record grazing into a gutter to the nearest lane"
+    ;; 2017saner p1: the gutter's far bank is the least right-cell x0
+    ;; over the clean rows, and a right-column line set a hair left
+    ;; of it - inside the channel - belongs to no span; read as lane 0
+    ;; by default it braided into the left column
+    (let ((spans '((0.069 . 0.492) (0.50937 . 0.931))))
+      (expect (pdf-text--lane-of (pdf-text-tests--line "right" :x0 0.5093 :x1 0.92)
+                                 spans)
+              :to-equal 1)
+      (expect (pdf-text--lane-of (pdf-text-tests--line "left" :x0 0.4925 :x1 0.50)
+                                 spans)
+              :to-equal 0)
+      (expect (pdf-text--lane-of (pdf-text-tests--line "off" :x0 0.95 :x1 0.99)
+                                 spans)
+              :to-be nil))))
 
 (describe "pdf-text--lane-clean-row-p"
   (it "refuses a row outside the body span, which is page furniture"
@@ -3562,6 +3758,66 @@ HEADINGS are the org heading lines the outline puts on that page."
                     " body line three ends here"
                     "\n\n"
                     "[fn:1-1] Of course, each author did most of the work.")))
+
+  (it "pairs footnote definitions set in a code face, one per line"
+    ;; MonadTransformers p2: two URL notes in CMTT10 arrive as one mono
+    ;; block at the foot.  The walk over para and item blocks never
+    ;; opened on it, and had it opened, the two notes would have shared
+    ;; one block's definition
+    (expect (pdf-text-tests--render
+             '(("converted using the lhs2TeX^{1} preprocessor and more"
+                :height 0.015)
+               ("body line two filling the column right along here")
+               ("the source lives on the homepage^{2} of the author" :x1 0.60)
+               ("^{1}http://www.example.org/loeh/" :gap 3 :height 0.010
+                :x1 0.40 :font "CMTT10")
+               ("^{2}http://www.example.org/transformers.lhs" :height 0.010
+                :x1 0.60 :font "CMTT10")))
+            :to-equal
+            (concat "converted using the lhs2TeX[fn:1-1] preprocessor and more"
+                    " body line two filling the column right along here"
+                    " the source lives on the homepage[fn:1-2] of the author"
+                    "\n\n"
+                    "[fn:1-1] http://www.example.org/loeh/\n"
+                    "[fn:1-2] http://www.example.org/transformers.lhs")))
+
+  (it "pairs two notes stacked in one prose block, one definition each"
+    ;; 2017saner p9: two URL notes in the body face at a column's foot,
+    ;; a typeset line each, arrive as one block; joined as one
+    ;; definition the second note rode inside the first's text with its
+    ;; marker still on
+    (expect (pdf-text-tests--render
+             '(("the Axon framework^{1} and the NCQRS library^{2} were used"
+                :height 0.015)
+               ("body line two filling the column right along here")
+               ("body line three ends here" :x1 0.40)
+               ;; the first note fills the measure, so nothing ends the
+               ;; block before the second note's line
+               ("^{1}http://www.example.org/axon/framework/reference/manual/index"
+                :gap 3 :height 0.010)
+               ("^{2}https://www.example.org/ncqrs" :height 0.010 :x1 0.40)))
+            :to-equal
+            (concat "the Axon framework[fn:1-1] and the NCQRS library[fn:1-2]"
+                    " were used body line two filling the column right along"
+                    " here body line three ends here"
+                    "\n\n"
+                    "[fn:1-1] http://www.example.org/axon/framework/reference/manual/index\n"
+                    "[fn:1-2] https://www.example.org/ncqrs")))
+
+  (it "leaves a code-face foot block alone unless every note it stacks is cited"
+    ;; a listing at the page's foot numbers its own lines; one line
+    ;; matching a marker the body happens to superscript is no footnote
+    (let ((render (pdf-text-tests--render
+                   '(("the powers of ten run up to x^{1} and beyond it"
+                      :height 0.015)
+                     ("body line two filling the column right along here")
+                     ("body line three ends here" :x1 0.40)
+                     ("1. first_line = take ()" :gap 3 :height 0.010
+                      :x1 0.40 :font "CMTT10")
+                     ("2. second_line = put ()" :height 0.010
+                      :x1 0.40 :font "CMTT10")))))
+      (expect render :not :to-match (rx "[fn:"))
+      (expect render :to-match "  1\\. first_line")))
 
   (it "does not pair an exponent with a look-alike block"
     (let ((render (pdf-text-tests--render

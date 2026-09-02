@@ -446,7 +446,50 @@ that moved; this reports the line and its number."
     (expect (mapcar #'car (pdf-corpus-violations
                            :source '("1." "The Paradigm Shift is a Shift")
                            :reflowed "1.\nThe Paradigm Shift is a Shift"))
-            :to-equal '(bare-enum))))
+            :to-equal '(bare-enum)))
+
+  (it "names a continuation whose sentence is not the line before it"
+    ;; the mesos shape: a two-column region split in two unfolds each
+    ;; half on its own, and a paragraph's tail resumes pages of text
+    ;; after its head - the mid-sentence pair never sees the two
+    ;; halves side by side
+    (expect (mapcar #'car (pdf-corpus-violations
+                           :source '("the master to" "4 Behavior" "Done." "be soft state.")
+                           :reflowed "the master to\n\n* 4 Behavior\n\nDone.\n\nbe soft state."))
+            :to-equal '(orphan))))
+
+(describe "pdf-corpus-orphan-lines"
+  (it "names a lowercase opener after a closed line, a heading, or a colon"
+    (expect (pdf-corpus-orphan-lines
+             "The sentence closed.\nbe soft state, the master\n\n* 4 Behavior\n\nin this section we\n\nwe consider:\nmandatory ones")
+            :to-equal '("be soft state, the master" "in this section we"
+                        "mandatory ones")))
+
+  (it "leaves the mid-sentence pair to its own measure"
+    ;; a lowercase opener after a line hanging on a lowercase word or a
+    ;; comma is the pair `pdf-corpus-mid-sentence-breaks' counts; the
+    ;; two measures partition the lowercase openers between them
+    (expect (pdf-corpus-orphan-lines "the master to\nbe soft state,\nand more")
+            :to-be nil))
+
+  (it "leaves a page's first line alone, which continues the page before"
+    (expect (pdf-corpus-orphan-lines "be soft state.\nThe next one.")
+            :to-be nil))
+
+  (it "leaves verbatim, table and keyword lines alone, on either side"
+    ;; code opens lowercase by design, and prose resuming after a
+    ;; listing or a display opens on `where' as the page set it
+    (expect (pdf-corpus-orphan-lines
+             "The code:\n  let x = 1\n  let y = 2\nwhere x is bound\n| a | b |\nand a row")
+            :to-be nil))
+
+  (it "leaves a display's neighbours alone, its bare equation number included"
+    (expect (pdf-corpus-orphan-lines "We have.\nx = y + z\nwhere z is")
+            :to-be nil)
+    ;; the alignment paper: a display renders verbatim, its number
+    ;; "(1)" on a line of its own, and the prose resumes on `where'
+    (expect (pdf-corpus-orphan-lines "We have.\n  x = y + z,\n\n(1)\n\nwhere z is")
+            :to-be nil)))
 
 (describe "pdf-corpus-bare-enum-lines"
   (it "names a rendered line that is nothing but an enumerator"
@@ -466,6 +509,11 @@ that moved; this reports the line and its number."
   (it "prints a stranded enumerator with its kind"
     (expect (pdf-corpus-describe-violation '(bare-enum "1." "2."))
             :to-equal "bare enumerator line(s): 1. 2."))
+
+  (it "prints an orphan line with its kind, plain"
+    (expect (pdf-corpus-describe-violation
+             (list 'orphan (propertize "be soft state, the master" 'pdf-text-note t)))
+            :to-equal "1 orphan line(s): \"be soft state, the master\""))
 
   (it "prints a note-propertized pair as plain text"
     ;; rendered note lines carry the pdf-text-note property, and %S

@@ -419,6 +419,42 @@ in rows that are exactly what the page set."
                   (push (cons this next) breaks)))
     (nreverse breaks)))
 
+(defun pdf-corpus-orphan-lines (text)
+  "Rendered lines of TEXT that continue a sentence the line before did not open.
+A line opening lowercase continues something; when the line before it
+is closed - a full stop, a colon, a heading - the sentence it belongs
+to is elsewhere on the page.  That is what a paragraph reads like
+once a reading-order repair has moved its tail past other text: the
+head hangs before a heading, the tail resumes after a full stop, and
+the mid-sentence pair, which wants the two halves side by side, sees
+neither.  The two measures partition the lowercase openers between
+them - a lowercase opener after a hanging line is the pair's.
+
+A page's first line continues the page before and stays out.  So do
+verbatim, table and keyword lines on either side, and mathematics on
+either side, an equation's bare number included: code opens
+lowercase by design, and prose resumes after a listing or a display
+on `where' as the page set it.  A heading before is closed whatever
+its glyphs say - a numbered one reads as mathematics."
+  (let ((case-fold-search nil)          ; batch defaults to t, where
+        (lines (seq-remove #'string-blank-p (split-string text "\n")))
+        orphans)                        ; [[:lower:]] matches capitals
+    (cl-loop for (previous this) on lines while this
+             do (let* ((before (string-trim previous))
+                       (line (string-trim this))
+                       (heading (string-match-p "\\`\\*+ " before)))
+                  (when (and (string-match-p "\\`[[:lower:]]" line)
+                             (not (pdf-corpus--glued-excluded-p this))
+                             (not (pdf-text-mathish-text-p line))
+                             (or heading
+                                 (and (not (string-match-p "[[:lower:],;]\\'" before))
+                                      (not (pdf-corpus--glued-excluded-p previous))
+                                      (not (pdf-text-mathish-text-p before))
+                                      (not (string-match-p "\\`([[:alnum:].]+)\\'"
+                                                           before)))))
+                    (push line orphans))))
+    (nreverse orphans)))
+
 (defun pdf-corpus-page-marker-lines (text)
   "Rendered lines of TEXT that are nothing but a page number.
 A folio that reaches the reader is a running head the geometry missed."
@@ -557,6 +593,8 @@ hyphenated compounds, which the glued count excuses."
       (push (cons 'page-marker markers) violations))
     (when-let* ((bare (pdf-corpus-bare-enum-lines reflowed)))
       (push (cons 'bare-enum bare) violations))
+    (when-let* ((orphans (pdf-corpus-orphan-lines reflowed)))
+      (push (cons 'orphan orphans) violations))
     (when-let* ((misplaced (pdf-corpus-outline-placements titles (or headed reflowed))))
       (push (cons 'outline misplaced) violations))
     (when-let* ((empty (pdf-corpus-empty-headings (or headed ""))))
@@ -605,6 +643,13 @@ RENDERED is `pdf-corpus-render' output, computed when not supplied."
                       (string-join (seq-take detail 5) " ")))
       ('page-marker (format "page marker survived: %s" (string-join detail " ")))
       ('bare-enum (format "bare enumerator line(s): %s" (string-join detail " ")))
+      ;; rendered lines can carry the note or line property, which
+      ;; %S would print
+      ('orphan (format "%d orphan line(s): %s"
+                       (length detail)
+                       (mapconcat (lambda (line)
+                                    (format "%S" (substring-no-properties line)))
+                                  (seq-take detail 3) "; ")))
       ;; rendered heading lines carry the pdf-text-line property,
       ;; which %S would print
       ('outline (format "outline title placed wrong: %s"

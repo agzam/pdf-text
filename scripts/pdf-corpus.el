@@ -424,7 +424,7 @@ own cannot show that."
          (scanned (pdf-text--scanned-p (mapcar (lambda (lines)
                                                  (string-join lines "\n"))
                                                sources)))
-         (lost 0) (added 0) (mid 0) (markers 0) (glued 0) (bare 0))
+         (lost 0) (added 0) (mid 0) (markers 0) (glued 0) (bare 0) (orphans 0))
     (let* ((diffs (cl-loop for source in sources
                            for text in reflowed
                            collect (pdf-corpus-diff source text)))
@@ -442,7 +442,8 @@ own cannot show that."
                     (cl-incf mid (length (pdf-corpus-mid-sentence-breaks text)))
                     (cl-incf glued (length (pdf-corpus-glued-tokens text vocabulary)))
                     (cl-incf markers (length (pdf-corpus-page-marker-lines text)))
-                    (cl-incf bare (length (pdf-corpus-bare-enum-lines text))))))
+                    (cl-incf bare (length (pdf-corpus-bare-enum-lines text)))
+                    (cl-incf orphans (length (pdf-corpus-orphan-lines text))))))
     (list :file file
           :pages total
           :scanned scanned
@@ -455,7 +456,7 @@ own cannot show that."
           :headings (length (pdf-corpus-heading-bodies buffer))
           :empty (length (pdf-corpus-empty-headings buffer))
           :lost lost :added added :mid mid :markers markers :glued glued
-          :bare bare)))
+          :bare bare :orphans orphans)))
 
 (defun pdf-corpus-audit (&optional fragment limit)
   "Render every book under `pdf-corpus-books-directory' and account for it.
@@ -488,15 +489,15 @@ skipped, since a scan has nothing to convert."
                                             limit))
                   files))
          reports)
-    (princ (format "%-44s %5s %7s %6s %6s %5s %5s %5s %5s %5s\n"
+    (princ (format "%-44s %5s %7s %6s %6s %5s %5s %5s %5s %5s %5s\n"
                    "book" "pages" "kept%" "heads" "empty" "lost" "mid" "mark" "glued"
-                   "bare"))
+                   "bare" "orph"))
     (dolist (file files)
       (condition-case error
           (let* ((report (pdf-corpus-book-report file))
                  (source (plist-get report :source-chars)))
             (push report reports)
-            (princ (format "%-44s %5d %6.2f%% %6d %6d %5d %5d %5d %5d %5d%s\n"
+            (princ (format "%-44s %5d %6.2f%% %6d %6d %5d %5d %5d %5d %5d %5d%s\n"
                            (truncate-string-to-width (file-name-base file) 44)
                            (plist-get report :pages)
                            (if (< 0 source)
@@ -510,6 +511,7 @@ skipped, since a scan has nothing to convert."
                            (plist-get report :markers)
                            (plist-get report :glued)
                            (plist-get report :bare)
+                           (plist-get report :orphans)
                            (if (plist-get report :scanned) "  SCAN" ""))))
         ;; a book epdfinfo cannot read must not take the run down with
         ;; it: name it, drop the server, and the next call starts a new one
@@ -521,12 +523,13 @@ skipped, since a scan has nothing to convert."
       ;; every book of the library open at once
       (ignore-errors (pdf-info-close file)))
     (let ((usable (seq-remove (lambda (r) (plist-get r :scanned)) reports)))
-      (princ (format "\n%d books, %d with a text layer, %d headings fold to nothing, %d pages-worth of prose lost, %d glued tokens, %d bare enumerators\n"
+      (princ (format "\n%d books, %d with a text layer, %d headings fold to nothing, %d pages-worth of prose lost, %d glued tokens, %d bare enumerators, %d orphan lines\n"
                      (length reports) (length usable)
                      (apply #'+ 0 (mapcar (lambda (r) (plist-get r :empty)) usable))
                      (apply #'+ 0 (mapcar (lambda (r) (plist-get r :lost)) usable))
                      (apply #'+ 0 (mapcar (lambda (r) (plist-get r :glued)) usable))
-                     (apply #'+ 0 (mapcar (lambda (r) (plist-get r :bare)) usable)))))))
+                     (apply #'+ 0 (mapcar (lambda (r) (plist-get r :bare)) usable))
+                     (apply #'+ 0 (mapcar (lambda (r) (plist-get r :orphans)) usable)))))))
 
 (defun pdf-corpus-sweep (book &optional first last)
   "Render BOOK and rank its pages by the invariants they break.

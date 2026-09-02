@@ -11,5 +11,12 @@ Captured red: all three headings stacked at the page top, the
 children above their parent, both of them folding to nothing while
 the real section lines read as prose.  The display equations and the
 algorithm steps make the page's shape, and none of them may take a
-heading."
- :budget (:mid-sentence 0 :glued 0))
+heading.
+
+The orphan it tolerates is the `where' that resumes the prose after
+the algorithm's numbered steps: the steps render as broken lines -
+the enumerated-list residual - and the last of them closes on a
+digit, so the resumption reads as a continuation stranded from its
+sentence.  It retires with the list rendering."
+ :budget (:mid-sentence 0 :glued 0)
+ :tolerates (orphan))
