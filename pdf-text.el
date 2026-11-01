@@ -59,6 +59,7 @@
 (declare-function pdf-info-number-of-pages "ext:pdf-info")
 (declare-function pdf-info-outline "ext:pdf-info")
 (declare-function pdf-view-goto-page "ext:pdf-view")
+(declare-function pdf-view-buffer-file-name "ext:pdf-view")
 (declare-function image-mode-window-get "image-mode")
 (declare-function pdf-view-image-size "ext:pdf-view")
 (declare-function pdf-view-image-type "ext:pdf-view")
@@ -6053,21 +6054,22 @@ option is read when one of them fires."
   "Read the current PDF as reflowed text in a companion buffer.
 Lands where the `pdf-view-mode' window is: same page, proportionally
 as far into the page's text as the window top sits down the image.
-The companion is reused as long as the PDF file on disk is unchanged;
-a stale or missing one is re-extracted through epdfinfo.  The PDF
-outline becomes org headings; without one, numbered section lines
-found in the text stand in.  A fresh companion starts
-`pdf-text-sync-mode' when `pdf-text-sync-default' is non-nil, and the
-two buffers are killed together as `pdf-text-kill-together' says.  A
-document whose pages carry almost no text - a scan - signals an
-error instead of an empty buffer."
+The companion is reused while the PDF file is unchanged; a buffer that
+visits no local file, like eww's PDF view, reads the copy pdf-tools
+makes of it.  The PDF outline becomes org headings; without one,
+numbered section lines found in the text stand in.  A fresh companion
+starts `pdf-text-sync-mode' when `pdf-text-sync-default' is non-nil,
+and the two buffers are killed together as `pdf-text-kill-together'
+says.  A document whose pages carry almost no text - a scan - signals
+an error instead of an empty buffer."
   (interactive)
   (unless (derived-mode-p 'pdf-view-mode)
     (user-error "Not in a pdf-view buffer"))
   (let* ((pdf-buf (current-buffer))
          (page (pdf-text--pdf-page))
          (fraction (pdf-text--view-fraction))
-         (stamp (pdf-text--file-stamp buffer-file-name))
+         (file (pdf-view-buffer-file-name))
+         (stamp (pdf-text--file-stamp file))
          (name (format "*pdf-text: %s*" (buffer-name)))
          (buf (get-buffer name))
          (fresh (not (and buf stamp
@@ -6081,7 +6083,7 @@ error instead of an empty buffer."
         ;; only runs for a page MuPDF finds no text on
         (let* ((start (float-time))
                (total (pdf-info-number-of-pages))
-               (line-pages (pdf-text--mupdf-pages buffer-file-name 1 total))
+               (line-pages (pdf-text--mupdf-pages file 1 total))
                (raw (cl-loop for p from 1
                              for lines in line-pages
                              collect (if lines

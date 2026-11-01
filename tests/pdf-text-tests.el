@@ -5539,6 +5539,48 @@ property; LINES are those records, so a spec can assert identity."
                     :to-be nil))
         (pdf-text-tests--drop-pair pair)))))
 
+(defun pdf-text-tests--as-text (pdf)
+  "Run `pdf-view-as-text' from PDF, leaving the windows and the sync alone."
+  (with-current-buffer pdf
+    (let ((pdf-text-sync-default nil))
+      (save-window-excursion (pdf-view-as-text)))))
+
+(describe "pdf-view-as-text"
+  ;; eww shows a downloaded PDF in a buffer that visits no file, and
+  ;; pdf-view-mode writes its bytes to a copy for epdfinfo to read; the
+  ;; extraction and the freshness stamp read that same copy
+  :var (copy pdf)
+  (before-each
+    (setq copy (make-temp-file "pdf-text-copy" nil ".pdf")
+          pdf (generate-new-buffer " *eww pdf*"))
+    (with-current-buffer pdf (setq major-mode 'pdf-view-mode))
+    (spy-on 'pdf-view-buffer-file-name :and-return-value copy)
+    (spy-on 'pdf-info-number-of-pages :and-return-value 1)
+    (spy-on 'pdf-info-outline)
+    (spy-on 'pdf-text--pdf-page :and-return-value 1)
+    (spy-on 'pdf-text--mupdf-pages
+            :and-return-value (list (list (pdf-text-tests--line "Read me.")))))
+
+  (after-each
+    (pdf-text-tests--drop-pair
+     (cons (buffer-local-value 'pdf-text--companion pdf) pdf))
+    (delete-file copy))
+
+  (it "extracts a buffer that visits no file from the copy pdf-tools reads"
+    (pdf-text-tests--as-text pdf)
+    (expect 'pdf-text--mupdf-pages :to-have-been-called-with copy 1 1)
+    (expect (with-current-buffer (buffer-local-value 'pdf-text--companion pdf)
+              (buffer-string))
+            :to-match "Read me\\."))
+
+  (it "reuses the companion until that copy changes"
+    (pdf-text-tests--as-text pdf)
+    (pdf-text-tests--as-text pdf)
+    (expect 'pdf-text--mupdf-pages :to-have-been-called-times 1)
+    (set-file-times copy (encode-time '(0 0 0 1 1 2000)))
+    (pdf-text-tests--as-text pdf)
+    (expect 'pdf-text--mupdf-pages :to-have-been-called-times 2)))
+
 (describe "pdf-text--pdf-page"
   (it "reads the page from image-mode window properties"
     (with-temp-buffer
