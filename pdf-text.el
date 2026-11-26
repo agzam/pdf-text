@@ -74,6 +74,8 @@
 (declare-function emureader-current-doc-pagenumber "ext:emureader")
 (declare-function emureader-current-doc-overlay "ext:emureader")
 (declare-function emureader-goto-page "ext:emureader")
+;; only window-system builds have it, and emureader runs in nothing else
+(declare-function image-flush "image.c")
 ;; emureader's module makes these buffer-local in every document buffer
 (defvar emureader-current-doc-pagecount)
 (defvar emureader-current-doc-outline)
