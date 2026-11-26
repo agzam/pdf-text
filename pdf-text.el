@@ -8,7 +8,7 @@
 ;; Version: 0.1.0
 ;; Keywords: files, multimedia
 ;; Homepage: https://github.com/agzam/pdf-text
-;; Package-Requires: ((emacs "29.1") (pdf-tools "1.0"))
+;; Package-Requires: ((emacs "29.1"))
 ;;
 ;; This file is not part of GNU Emacs.
 ;;
@@ -52,9 +52,9 @@
 (require 'subr-x)
 (require 'thingatpt)
 
-;; pdf-tools is a runtime dependency only: every symbol below resolves when a
-;; command runs, so the transforms load and test without it.  org arrives with
-;; the derived mode.
+;; pdf-tools and emureader are runtime dependencies only: every symbol below
+;; resolves when a command runs in one of their buffers, so the transforms
+;; load and test without either.  org arrives with the derived mode.
 (declare-function pdf-info-gettext "ext:pdf-info")
 (declare-function pdf-info-number-of-pages "ext:pdf-info")
 (declare-function pdf-info-outline "ext:pdf-info")
@@ -71,6 +71,12 @@
 ;; dynamic in pdf-info; declared so the let-binding around the async
 ;; render compiles as special without pdf-tools on the load path
 (defvar pdf-info-asynchronous)
+(declare-function emureader-current-doc-pagenumber "ext:emureader")
+(declare-function emureader-current-doc-overlay "ext:emureader")
+(declare-function emureader-goto-page "ext:emureader")
+;; emureader's module makes these buffer-local in every document buffer
+(defvar emureader-current-doc-pagecount)
+(defvar emureader-current-doc-outline)
 ;; evil's visual bounds, read guarded when the follow span consults
 ;; them; declared so the reads compile without evil on the load path
 (defvar evil-visual-beginning)
@@ -895,7 +901,8 @@ never earns back.")
 Signals with mutool's own words when the extraction fails, and names
 the missing program when there is no mutool at all."
   (unless (executable-find pdf-text-mupdf-program)
-    (error "No %s executable; the text extraction needs MuPDF (brew install mupdf-tools)"
+    ;; mupdf ships mutool too, and emureader's module links its library
+    (error "No %s executable; the text extraction needs MuPDF (brew install mupdf)"
            pdf-text-mupdf-program))
   (let ((stderr (make-temp-file "pdf-text-mupdf" nil ".err")))
     (unwind-protect
@@ -5828,10 +5835,10 @@ otherwise image-only book does not make a readable view.")
   "Vector of buffer positions; element N-1 is where page N starts.")
 
 (defvar-local pdf-text--pdf-buffer nil
-  "The `pdf-view-mode' buffer this text view mirrors.")
+  "The viewer buffer this text view mirrors, in pdf-view or emureader.")
 
 (defvar-local pdf-text--companion nil
-  "The companion pdf-text buffer, on the `pdf-view-mode' side.")
+  "The companion pdf-text buffer, on the viewer's side.")
 
 (defvar-local pdf-text--source-stamp nil
   "The rendered PDF's `pdf-text--file-stamp'; freshness key for reuse.")
@@ -5949,26 +5956,98 @@ Nil (never fresh) without a file or with a vanished one."
     (list file (file-attribute-modification-time attrs)
           pdf-text-render-version)))
 
+(defun pdf-text--viewer (&optional buffer)
+  "Which viewer shows BUFFER's document: `pdf-view', `emureader' or nil.
+BUFFER defaults to the current one."
+  (with-current-buffer (or buffer (current-buffer))
+    (cond ((derived-mode-p 'pdf-view-mode) 'pdf-view)
+          ((derived-mode-p 'emureader-mode) 'emureader))))
+
 (defun pdf-text--view-fraction ()
-  "How far down the page the `pdf-view' window's top edge sits, 0..1.
+  "How far down the page the viewer window's top edge sits, 0..1.
 Pixel vscroll over the displayed image's height, the same quantities
-`pdf-util-image-displayed-edges' derives its visible top from.  Zero
-when the whole page fits the window; approximate under
+`pdf-util-image-displayed-edges' derives its visible top from;
+emureader's image is the one its window overlay displays.  Zero when
+the whole page fits the window; approximate under
 `pdf-view-roll-minor-mode', where vscroll spans stacked pages."
   (condition-case nil
-      (let ((height (cdr (pdf-view-image-size t))))
+      (let ((height (if (eq (pdf-text--viewer) 'emureader)
+                        (plist-get (cdr (overlay-get (emureader-current-doc-overlay)
+                                                     'display))
+                                   :height)
+                      (cdr (pdf-view-image-size t)))))
         (if (< 0 height)
             (min 1.0 (/ (window-vscroll nil t) (float height)))
           0.0))
     (error 0.0)))
 
 (defun pdf-text--pdf-page ()
-  "Page the current `pdf-view' buffer shows.
+  "Page the current viewer buffer shows.
 `pdf-view-current-page' is a macro, so compiled without pdf-tools on
 the load path it becomes a function call no session can resolve; its
 expansion - the page from image-mode's window properties - is called
 directly instead."
-  (image-mode-window-get 'page))
+  (if (eq (pdf-text--viewer) 'emureader)
+      (emureader-current-doc-pagenumber)
+    (image-mode-window-get 'page)))
+
+(defun pdf-text--goto-page (page)
+  "Turn the viewer in the selected window to PAGE."
+  (if (eq (pdf-text--viewer) 'emureader)
+      (emureader-goto-page page)
+    (pdf-view-goto-page page)))
+
+(defun pdf-text--document-file ()
+  "The file the current viewer reads its document from.
+pdf-view writes a buffer that visits no file, like eww's PDF view, to
+a copy epdfinfo reads; emureader opens visited files only."
+  (if (eq (pdf-text--viewer) 'emureader)
+      buffer-file-name
+    (pdf-view-buffer-file-name)))
+
+(defun pdf-text--page-count ()
+  "How many pages the current viewer's document has."
+  (if (eq (pdf-text--viewer) 'emureader)
+      emureader-current-doc-pagecount
+    (pdf-info-number-of-pages)))
+
+(defun pdf-text--page-text (page)
+  "PAGE's plain text from the viewer's own engine.
+Asked for a page MuPDF finds no text on.  emureader's engine is MuPDF
+itself, so it has nothing to add."
+  (if (eq (pdf-text--viewer) 'emureader)
+      ""
+    (pdf-info-gettext page '(0 0 1 1))))
+
+(defun pdf-text--emureader-outline (tree &optional depth)
+  "The outline emureader keeps as TREE, in `pdf-info-outline' shape.
+TREE holds plists of :title in raw UTF-8 bytes, a 0-based :page -
+negative for a link off the document - and :children.  DEPTH is the
+level of TREE's own entries, 1 at the top."
+  (let ((depth (or depth 1)))
+    (mapcan (lambda (node)
+              (cons `((depth . ,depth)
+                      (title . ,(decode-coding-string (plist-get node :title)
+                                                      'utf-8))
+                      (page . ,(1+ (plist-get node :page))))
+                    (pdf-text--emureader-outline (plist-get node :children)
+                                                 (1+ depth))))
+            tree)))
+
+(defun pdf-text--outline ()
+  "The current viewer's document outline, in `pdf-info-outline' shape."
+  (if (eq (pdf-text--viewer) 'emureader)
+      (pdf-text--emureader-outline emureader-current-doc-outline)
+    (pdf-info-outline)))
+
+(defun pdf-text--pdf-file-p (file)
+  "Whether FILE carries a PDF header in its first 1024 bytes.
+That is as far as viewers look for one."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file nil 0 1024)
+    (goto-char (point-min))
+    (and (search-forward "%PDF-" nil t) t)))
 
 (defvar pdf-text-gc-cons-threshold (* 256 1024 1024)
   "Consing one render may do before garbage collection runs.
@@ -6052,23 +6131,26 @@ option is read when one of them fires."
 ;;;###autoload
 (defun pdf-view-as-text ()
   "Read the current PDF as reflowed text in a companion buffer.
-Lands where the `pdf-view-mode' window is: same page, proportionally
-as far into the page's text as the window top sits down the image.
-The companion is reused while the PDF file is unchanged; a buffer that
-visits no local file, like eww's PDF view, reads the copy pdf-tools
-makes of it.  The PDF outline becomes org headings; without one,
-numbered section lines found in the text stand in.  A fresh companion
-starts `pdf-text-sync-mode' when `pdf-text-sync-default' is non-nil,
-and the two buffers are killed together as `pdf-text-kill-together'
-says.  A document whose pages carry almost no text - a scan - signals
-an error instead of an empty buffer."
+Runs in `pdf-view-mode' or `emureader-mode' and lands where the window
+is: same page, proportionally as far into the page's text as the
+window top sits down the image.  The companion is reused while the
+PDF file is unchanged; a buffer that visits no local file, like eww's
+PDF view, reads the copy pdf-tools makes of it.  The PDF outline
+becomes org headings; without one, numbered section lines found in
+the text stand in.  A fresh companion starts `pdf-text-sync-mode' when
+`pdf-text-sync-default' is non-nil, and the two buffers are killed
+together as `pdf-text-kill-together' says.  A document whose pages
+carry almost no text - a scan - signals an error instead of an empty
+buffer, and so does one that is no PDF."
   (interactive)
-  (unless (derived-mode-p 'pdf-view-mode)
-    (user-error "Not in a pdf-view buffer"))
+  (pcase (pdf-text--viewer)
+    ('nil (user-error "Not in a pdf-view or emureader buffer"))
+    ('emureader (unless (pdf-text--pdf-file-p buffer-file-name)
+                  (user-error "%s is not a PDF" (buffer-name)))))
   (let* ((pdf-buf (current-buffer))
          (page (pdf-text--pdf-page))
          (fraction (pdf-text--view-fraction))
-         (file (pdf-view-buffer-file-name))
+         (file (pdf-text--document-file))
          (stamp (pdf-text--file-stamp file))
          (name (format "*pdf-text: %s*" (buffer-name)))
          (buf (get-buffer name))
@@ -6079,22 +6161,22 @@ an error instead of an empty buffer."
       ;; the render blocks until it is done; say so up front
       (message "pdf-text: extracting text from %s..." (buffer-name))
       (pdf-text--with-render-gc
-        ;; the walker carries the text as well as its geometry, so gettext
-        ;; only runs for a page MuPDF finds no text on
+        ;; the walker carries the text as well as its geometry, so the
+        ;; viewer's engine is asked only for a page MuPDF finds no text on
         (let* ((start (float-time))
-               (total (pdf-info-number-of-pages))
+               (total (pdf-text--page-count))
                (line-pages (pdf-text--mupdf-pages file 1 total))
                (raw (cl-loop for p from 1
                              for lines in line-pages
                              collect (if lines
                                          (mapconcat #'pdf-text-line-text
                                                     lines "\n")
-                                       (pdf-info-gettext p '(0 0 1 1))))))
+                                       (pdf-text--page-text p)))))
           (when (pdf-text--scanned-p raw)
             (user-error "%s has no text layer (%d of %d pages carry text)"
                         (buffer-name)
                         (cl-count-if-not #'string-blank-p raw) (length raw)))
-          (let* ((outline (pdf-info-outline))
+          (let* ((outline (pdf-text--outline))
                  (rendered (pdf-text-render-lines
                             (cl-loop for text in raw
                                      for lines in line-pages
@@ -6161,7 +6243,7 @@ whose title closes the page opens only as far as its opening text."
     (unless (buffer-live-p buf)
       (user-error "The source PDF buffer is gone"))
     (pop-to-buffer buf)
-    (pdf-view-goto-page page)))
+    (pdf-text--goto-page page)))
 
 ;;; Follow highlight
 
@@ -6176,8 +6258,9 @@ reuse path the way the sync's own state does.")
 (defface pdf-text-follow-face
   '((t :inherit lazy-highlight))
   "Face of the sentence highlight on the PDF page.
-Only its colors reach the page: epdfinfo renders the highlight into
-the page image, so no overlay attributes apply."
+Only its colors reach the page: the highlight is rendered into the
+page image, by epdfinfo under pdf-view and by pdf-text itself under
+emureader, so no overlay attributes apply."
   :group 'pdf-text)
 
 (defvar pdf-text-follow--tick 0
@@ -6257,6 +6340,160 @@ guess."
                        (and x0 top x1 bot (list x0 top x1 bot))))
                    records)))))
 
+(defun pdf-text-follow--merge-spans (spans)
+  "SPANS, (X0 . X1) pixel ranges, merged where they overlap or touch."
+  (seq-reduce (lambda (merged span)
+                (if (and merged (<= (car span) (cdar merged)))
+                    (cons (cons (caar merged) (max (cdar merged) (cdr span)))
+                          (cdr merged))
+                  (cons span merged)))
+              (sort (copy-sequence spans) #'car-less-than-car)
+              nil))
+
+(defun pdf-text-follow--ppm-rows (width height rects)
+  "The pixels RECTS cover on a WIDTH by HEIGHT image, as (Y . SPANS) rows.
+RECTS are (LEFT TOP RIGHT BOT) page fractions.  A pixel two rects
+share - one line's descenders over the next line's ascenders - sits
+in one span, so it is painted once."
+  (when-let* ((boxes
+               (seq-keep (lambda (rect)
+                           (pcase-let ((`(,left ,top ,right ,bot) rect))
+                             (let ((x0 (max 0 (floor (* left width))))
+                                   (y0 (max 0 (floor (* top height))))
+                                   (x1 (min width (ceiling (* right width))))
+                                   (y1 (min height (ceiling (* bot height)))))
+                               (and (< x0 x1) (< y0 y1) (list x0 y0 x1 y1)))))
+                         rects)))
+    (seq-keep (lambda (y)
+                (when-let* ((spans (seq-keep (lambda (box)
+                                               (and (<= (nth 1 box) y)
+                                                    (< y (nth 3 box))
+                                                    (cons (nth 0 box) (nth 2 box))))
+                                             boxes)))
+                  (cons y (pdf-text-follow--merge-spans spans))))
+              (number-sequence (apply #'min (mapcar #'cadr boxes))
+                               (1- (apply #'max (mapcar (lambda (box) (nth 3 box))
+                                                        boxes)))))))
+
+(defmacro pdf-text-follow--dopixels (spec &rest body)
+  "Run BODY with VAR at the red byte of every pixel ROWS cover.
+SPEC is (VAR ROWS WIDTH OFFSET): ROWS from `pdf-text-follow--ppm-rows'
+over an image WIDTH pixels wide whose pixel bytes start at OFFSET."
+  (declare (indent 1) (debug ((symbolp form form form) body)))
+  (pcase-let ((`(,var ,rows ,width ,offset) spec)
+              (row (make-symbol "row"))
+              (span (make-symbol "span"))
+              (base (make-symbol "base")))
+    `(dolist (,row ,rows)
+       (let ((,base (+ ,offset (* 3 ,width (car ,row)))))
+         (dolist (,span (cdr ,row))
+           (cl-loop for ,var from (+ ,base (* 3 (car ,span)))
+                    below (+ ,base (* 3 (cdr ,span))) by 3
+                    do (progn ,@body)))))))
+
+(defsubst pdf-text-follow--luma (data i)
+  "Lightness, 0 to 255, of the pixel whose red byte is at I in DATA."
+  (ash (+ (* 77 (aref data i)) (* 150 (aref data (1+ i)))
+          (* 29 (aref data (+ 2 i))))
+       -8))
+
+(defun pdf-text-follow--ramps (paper ink fg bg)
+  "Per-channel tables taking a pixel's lightness to its painted byte.
+Lightness PAPER maps to BG and INK to FG, both (R G B) bytes; the
+shades between interpolate, so anti-aliased glyph edges stay smooth."
+  (cl-mapcar (lambda (f b)
+               (apply #'vector
+                      (mapcar (lambda (l)
+                                (let ((s (if (= paper ink) 1.0
+                                           (min 1.0 (max 0.0 (/ (float (- l ink))
+                                                                (- paper ink)))))))
+                                  (round (+ f (* s (- b f))))))
+                              (number-sequence 0 255))))
+             fg bg))
+
+(defun pdf-text-follow--paint-ppm (data rects fg bg)
+  "A copy of DATA, a binary PPM, with RECTS painted FG on BG, or nil.
+The lightness most common under RECTS is the paper and turns BG, the
+extreme farthest from it is the ink and turns FG - in any of
+emureader's color modes, the look pdf-view gives a text region."
+  (when (string-match (concat "\\`P6[ \t\r\n]+\\([0-9]+\\)[ \t\r\n]+"
+                              "\\([0-9]+\\)[ \t\r\n]+255[ \t\r\n]")
+                      data)
+    (let* ((width (string-to-number (match-string 1 data)))
+           (offset (match-end 0))
+           (rows (pdf-text-follow--ppm-rows
+                  width (string-to-number (match-string 2 data)) rects)))
+      (when rows
+        (let ((counts (make-vector 256 0))
+              (out (copy-sequence data)))
+          ;; both passes aset in place: a page image runs to megabytes, and
+          ;; rebuilding it as a new string per paint is measurably slower
+          (pdf-text-follow--dopixels (i rows width offset)
+            (cl-incf (aref counts (pdf-text-follow--luma out i))))
+          (let* ((paper (seq-position counts (seq-max counts)))
+                 (darkest (cl-position-if #'cl-plusp counts))
+                 (lightest (cl-position-if #'cl-plusp counts :from-end t))
+                 (ink (if (< (- paper darkest) (- lightest paper))
+                          lightest
+                        darkest)))
+            (pcase-let ((`(,red ,green ,blue)
+                         (pdf-text-follow--ramps paper ink fg bg)))
+              (pdf-text-follow--dopixels (i rows width offset)
+                (let ((l (pdf-text-follow--luma out i)))
+                  (aset out i (aref red l))
+                  (aset out (+ i 1) (aref green l))
+                  (aset out (+ i 2) (aref blue l))))))
+          out)))))
+
+(defun pdf-text-follow--face-rgb (attribute)
+  "The ATTRIBUTE color of `pdf-text-follow-face' as (R G B) bytes."
+  (let ((color (face-attribute 'pdf-text-follow-face attribute nil 'default)))
+    (mapcar (lambda (c) (ash c -8))
+            (or (color-values-from-color-spec color) (color-values color)))))
+
+(defvar-local pdf-text-follow--emureader nil
+  "The emureader highlight in place, as (OVERLAY ORIGINAL PAINTED).
+OVERLAY is the window's page overlay, ORIGINAL the image emureader put
+there and PAINTED the copy carrying the highlight.")
+
+(defun pdf-text-follow--unpaint-emureader ()
+  "Put back the page image the emureader highlight replaced.
+Only while the overlay still shows the painted copy: a page turn or a
+zoom has put up a new image.  An image that no longer shows leaves the
+image cache, so a paint per sentence does not pile up page images."
+  (pcase pdf-text-follow--emureader
+    (`(,overlay ,original ,painted)
+     (setq pdf-text-follow--emureader nil)
+     (when (and (overlay-buffer overlay)
+                (eq (overlay-get overlay 'display) painted))
+       (overlay-put overlay 'display original))
+     (image-flush painted t)
+     (unless (eq (overlay-get overlay 'display) original)
+       (image-flush original t)))))
+
+(defun pdf-text-follow--paint-emureader (pdf win page rects)
+  "Paint RECTS into the image of PAGE that emureader shows in WIN.
+emureader renders no text regions, so the highlight goes into a copy
+of its PPM page image, which stands in WIN's overlay until the next
+paint or clear.  PDF is WIN's buffer."
+  (pdf-text-follow--unpaint-emureader)
+  (setq pdf-text-follow--painted nil)
+  (when-let* (((eql page (with-current-buffer pdf
+                           (emureader-current-doc-pagenumber win))))
+              (overlay (emureader-current-doc-overlay win))
+              (original (overlay-get overlay 'display))
+              (data (plist-get (cdr-safe original) :data))
+              ((stringp data))
+              (painted (pdf-text-follow--paint-ppm
+                        data rects
+                        (pdf-text-follow--face-rgb :foreground)
+                        (pdf-text-follow--face-rgb :background))))
+    (let ((spec (cons 'image (plist-put (copy-sequence (cdr original))
+                                        :data painted))))
+      (overlay-put overlay 'display spec)
+      (setq pdf-text-follow--emureader (list overlay original spec)
+            pdf-text-follow--painted page))))
+
 (defun pdf-text-follow--clear ()
   "Restore the PDF page image the highlight painted over, if any.
 Bumps the tick so a render still in flight drops instead of painting
@@ -6265,8 +6502,10 @@ over the restored page."
   (when pdf-text-follow--painted
     (setq pdf-text-follow--painted nil)
     (cl-incf pdf-text-follow--tick)
+    (pdf-text-follow--unpaint-emureader)
     (when-let* ((pdf pdf-text--pdf-buffer)
                 ((buffer-live-p pdf))
+                ((not (eq (pdf-text--viewer pdf) 'emureader)))
                 (win (get-buffer-window pdf t)))
       (with-selected-window win
         (pdf-view-redisplay win)))))
@@ -6281,37 +6520,39 @@ highlighted page stays as crisp as the clean one."
   (when-let* ((pdf pdf-text--pdf-buffer)
               ((buffer-live-p pdf))
               (win (get-buffer-window pdf t)))
-    (let* ((tick (cl-incf pdf-text-follow--tick))
-           (width (with-selected-window win
-                    (car (pdf-view-image-size nil win page))))
-           (scale (if (buffer-local-value 'pdf-view-use-scaling pdf) 2 1))
-           (colors (pdf-util-face-colors
-                    'pdf-text-follow-face
-                    (buffer-local-value 'pdf-view-dark-minor-mode pdf)))
-           (pdf-info-asynchronous
-            (lambda (status data)
-              (when (and (null status)
-                         (eq tick pdf-text-follow--tick)
-                         (buffer-live-p pdf)
-                         (window-live-p win)
-                         (eq (window-buffer win) pdf))
-                (with-selected-window win
-                  (when (eq page (pdf-text--pdf-page))
-                    (pdf-view-display-image
-                     (apply #'create-image data (pdf-view-image-type) t
-                            :width width
-                            :relief (or (bound-and-true-p pdf-view-image-relief)
-                                        0)
-                            ;; the mac port serves 2x displays from
-                            ;; :data-2x; other ports scale :width down
-                            (when (and (eq (framep-on-display) 'mac)
-                                       (= (pdf-util-frame-scale-factor) 2))
-                              (list :data-2x data)))
-                     page win)))))))
-      (setq pdf-text-follow--painted page)
-      (apply #'pdf-info-renderpage-text-regions
-             page (* scale width) t nil pdf
-             (list (append (list (car colors) (cdr colors)) rects))))))
+    (if (eq (pdf-text--viewer pdf) 'emureader)
+        (pdf-text-follow--paint-emureader pdf win page rects)
+      (let* ((tick (cl-incf pdf-text-follow--tick))
+             (width (with-selected-window win
+                      (car (pdf-view-image-size nil win page))))
+             (scale (if (buffer-local-value 'pdf-view-use-scaling pdf) 2 1))
+             (colors (pdf-util-face-colors
+                      'pdf-text-follow-face
+                      (buffer-local-value 'pdf-view-dark-minor-mode pdf)))
+             (pdf-info-asynchronous
+              (lambda (status data)
+                (when (and (null status)
+                           (eq tick pdf-text-follow--tick)
+                           (buffer-live-p pdf)
+                           (window-live-p win)
+                           (eq (window-buffer win) pdf))
+                  (with-selected-window win
+                    (when (eq page (pdf-text--pdf-page))
+                      (pdf-view-display-image
+                       (apply #'create-image data (pdf-view-image-type) t
+                              :width width
+                              :relief (or (bound-and-true-p pdf-view-image-relief)
+                                          0)
+                              ;; the mac port serves 2x displays from
+                              ;; :data-2x; other ports scale :width down
+                              (when (and (eq (framep-on-display) 'mac)
+                                         (= (pdf-util-frame-scale-factor) 2))
+                                (list :data-2x data)))
+                       page win)))))))
+        (setq pdf-text-follow--painted page)
+        (apply #'pdf-info-renderpage-text-regions
+               page (* scale width) t nil pdf
+               (list (append (list (car colors) (cdr colors)) rects)))))))
 
 (defvar pdf-text-follow-delay 0.15
   "Idle seconds before the highlight moves to the sentence at point.
@@ -6380,7 +6621,7 @@ side, not about flipping pages in a buried buffer."
         (let ((pdf-text-sync--inhibit t))
           (with-selected-window win
             (unless (eql page (pdf-text--pdf-page))
-              (pdf-view-goto-page page))))))))
+              (pdf-text--goto-page page))))))))
 
 (defun pdf-text-sync--follow-pdf ()
   "Page-change hook in the PDF buffer: move the companion's point along.
@@ -6412,6 +6653,32 @@ stays put, so the explicit RET jump keeps its exact position."
             (when pdf-text-follow-mode
               (pdf-text-follow--schedule)))))))))
 
+(defun pdf-text-sync--emureader-moved (pdf)
+  "Move PDF's companion to the page emureader shows.
+This runs after the turn, past the inhibit flag that silences the
+pdf-view hook, so a turn the companion asked for is told apart as
+the page the companion last settled on."
+  (when (buffer-live-p pdf)
+    (with-current-buffer pdf
+      (when-let* ((companion pdf-text--companion)
+                  ((buffer-live-p companion))
+                  ((not (eql (pdf-text--pdf-page)
+                             (buffer-local-value 'pdf-text-sync--last-page
+                                                 companion)))))
+        (pdf-text-sync--follow-pdf)))))
+
+(defun pdf-text-sync--emureader-watch (_symbol _page operation where)
+  "Schedule the companion's move when emureader shows a page in WHERE.
+emureader runs no hook on a page turn, but its module does OPERATION
+`set' on this variable each time it displays a page.  The move waits
+for a timer, since an error inside the module's call would break it."
+  (when-let* (((eq operation 'set))
+              ((buffer-live-p where))
+              (companion (buffer-local-value 'pdf-text--companion where))
+              ((buffer-live-p companion))
+              ((buffer-local-value 'pdf-text-sync-mode companion)))
+    (run-at-time 0 nil #'pdf-text-sync--emureader-moved where)))
+
 (defvar-local pdf-text-sync--armed nil
   "Whether the sync's hooks are armed; tells a real enable from a re-arm.
 The follow rides only a real enable, so the reuse path's re-arm
@@ -6419,9 +6686,9 @@ cannot resurrect a follow the reader toggled off.")
 
 (define-minor-mode pdf-text-sync-mode
   "Keep the companion and its PDF on the same page, both directions.
-Point moving onto another page here scrolls the `pdf-view' window
-there; flipping the PDF's page moves point here.  The explicit jump
-on RET works without the mode."
+Point moving onto another page here turns the viewer's window there;
+flipping the PDF's page moves point here.  The explicit jump on RET
+works without the mode."
   :lighter " pdf-sync"
   (unless (derived-mode-p 'pdf-text-mode)
     (setq pdf-text-sync-mode nil)
@@ -6437,8 +6704,11 @@ on RET works without the mode."
           (add-hook 'post-command-hook #'pdf-text-sync--follow-text nil t)
           (with-current-buffer pdf
             (setq pdf-text--companion companion)
-            (add-hook 'pdf-view-after-change-page-hook
-                      #'pdf-text-sync--follow-pdf nil t))
+            (if (eq (pdf-text--viewer) 'emureader)
+                (add-variable-watcher 'emureader--recent-pagenumber-fallback
+                                      #'pdf-text-sync--emureader-watch)
+              (add-hook 'pdf-view-after-change-page-hook
+                        #'pdf-text-sync--follow-pdf nil t)))
           (setq pdf-text-sync--armed t)
           ;; the sync carries the follow: a real enable brings it up,
           ;; and the follow's own toggle alone turns it off for a

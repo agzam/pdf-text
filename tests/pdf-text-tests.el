@@ -1390,6 +1390,14 @@ HEADINGS are the org heading lines the outline puts on that page."
            (cleaned (car (pdf-text-clean-pages (list (list body stamp))))))
       (expect (mapcar #'pdf-text-line-text cleaned) :to-equal '("prose")))))
 
+(describe "pdf-text--mupdf-call"
+  (it "names the formula that serves both viewers when mutool is missing"
+    ;; mupdf-tools conflicts with mupdf, the library emureader links
+    (let ((pdf-text-mupdf-program "pdf-text-no-such-mutool"))
+      (expect (pdf-text--mupdf-call "book.pdf" 1 1)
+              :to-throw 'error
+              '("No pdf-text-no-such-mutool executable; the text extraction needs MuPDF (brew install mupdf)")))))
+
 (describe "pdf-text--mupdf-output pool"
   (it "fans a large range over workers and reassembles every page"
     (let* ((stub (make-temp-file "pdf-text-stub" nil ".sh"))
@@ -5096,6 +5104,93 @@ HEADINGS are the org heading lines the outline puts on that page."
             (expect pdf-text-sync-mode :to-be nil))
         (kill-buffer companion)))))
 
+;; special, as emureader's module makes it, so a `let' reaches the watcher
+(defvar emureader--recent-pagenumber-fallback)
+
+(describe "pdf-text-sync-mode over emureader"
+  ;; emureader runs no page hook; its module sets the page variable in
+  ;; the document buffer each time it displays a page
+  :var (pdf companion)
+  (before-each
+    (setq pdf (pdf-text-tests--emureader-buffer)
+          companion (generate-new-buffer " *sync-text*"))
+    (with-current-buffer pdf
+      (setq-local emureader--recent-pagenumber-fallback 1))
+    (with-current-buffer companion
+      (pdf-text-mode)
+      (let ((inhibit-read-only t))
+        (pdf-text--insert-pages '("alpha one\nalpha two" "bravo one\nbravo two"
+                                  "charlie one")))
+      (goto-char (point-min))
+      (setq pdf-text--pdf-buffer pdf)
+      (let ((pdf-text-follow-default nil))
+        (pdf-text-sync-mode 1))))
+  (after-each
+    (remove-variable-watcher 'emureader--recent-pagenumber-fallback
+                             #'pdf-text-sync--emureader-watch)
+    (kill-buffer companion)
+    (kill-buffer pdf))
+
+  (it "watches the page variable instead of arming pdf-view's hook"
+    (expect (memq #'pdf-text-sync--emureader-watch
+                  (get-variable-watchers 'emureader--recent-pagenumber-fallback))
+            :to-be-truthy)
+    (expect (buffer-local-value 'pdf-text--companion pdf) :to-be companion)
+    (expect (buffer-local-value 'pdf-view-after-change-page-hook pdf)
+            :to-be nil))
+
+  (it "moves the companion once the timer after a page turn runs"
+    (spy-on 'emureader-current-doc-pagenumber :and-return-value 2)
+    (with-current-buffer pdf
+      (setq emureader--recent-pagenumber-fallback 2))
+    ;; inside the module's call nothing moves yet
+    (expect (with-current-buffer companion (pdf-text-page-at-point))
+            :to-equal 1)
+    (accept-process-output nil 0.01)
+    (with-current-buffer companion
+      (expect (pdf-text-page-at-point) :to-equal 2)
+      (expect (point) :to-equal (pdf-text--page-start 2))
+      (expect pdf-text-sync--last-page :to-equal 2)))
+
+  (it "leaves the companion be on the turn it asked for itself"
+    (with-current-buffer companion
+      (goto-char (pdf-text--page-start 2))
+      (forward-line 1)
+      (setq pdf-text-sync--last-page 2))
+    (let ((pos (with-current-buffer companion (point))))
+      (spy-on 'emureader-current-doc-pagenumber :and-return-value 2)
+      (spy-on 'pdf-text-sync--follow-pdf :and-call-through)
+      (pdf-text-sync--emureader-moved pdf)
+      (expect 'pdf-text-sync--follow-pdf :not :to-have-been-called)
+      (expect (with-current-buffer companion (point)) :to-equal pos)))
+
+  (it "schedules nothing with the sync off, on a let, or for another buffer"
+    (spy-on 'run-at-time)
+    (with-current-buffer pdf
+      (let ((emureader--recent-pagenumber-fallback 3))
+        (ignore emureader--recent-pagenumber-fallback)))
+    (let ((stranger (pdf-text-tests--emureader-buffer)))
+      (unwind-protect
+          (with-current-buffer stranger
+            (setq-local emureader--recent-pagenumber-fallback 1)
+            (setq emureader--recent-pagenumber-fallback 2))
+        (kill-buffer stranger)))
+    (with-current-buffer companion (pdf-text-sync-mode -1))
+    (with-current-buffer pdf
+      (setq emureader--recent-pagenumber-fallback 2))
+    (expect 'run-at-time :not :to-have-been-called))
+
+  (it "turns the emureader window to the page point moves onto"
+    (spy-on 'emureader-current-doc-pagenumber :and-return-value 1)
+    (spy-on 'emureader-goto-page)
+    (save-window-excursion
+      (delete-other-windows)
+      (set-window-buffer (split-window) pdf)
+      (with-current-buffer companion
+        (goto-char (pdf-text--page-start 3))
+        (pdf-text-sync--follow-text)))
+    (expect 'emureader-goto-page :to-have-been-called-with 3)))
+
 (defun pdf-text-tests--tagged-page (specs &optional headings)
   "SPECS rendered as one page, returned as (TEXT . LINES).
 The render carries each line's record in the `pdf-text-line' text
@@ -5251,6 +5346,159 @@ property; LINES are those records, so a spec can assert identity."
                             (pdf-text-line-top (nth 0 lines))
                             (pdf-text-line-x1 (nth 0 lines))
                             (pdf-text-line-bot (nth 0 lines)))))))))
+
+(defun pdf-text-tests--ppm (width height paint)
+  "A binary PPM WIDTH by HEIGHT whose pixel at X, Y is (PAINT X Y), as (R G B)."
+  (apply #'unibyte-string
+         (append (string-to-list (format "P6\n%d %d\n255\n" width height))
+                 (mapcan (lambda (y)
+                           (mapcan (lambda (x) (copy-sequence (funcall paint x y)))
+                                   (number-sequence 0 (1- width))))
+                         (number-sequence 0 (1- height))))))
+
+(defun pdf-text-tests--ppm-pixel (data x y)
+  "The pixel at X, Y of DATA, a binary PPM, as (R G B)."
+  (string-match "\\`P6\n\\([0-9]+\\) [0-9]+\n255\n" data)
+  (let ((i (+ (match-end 0)
+              (* 3 (+ x (* y (string-to-number (match-string 1 data))))))))
+    (list (aref data i) (aref data (1+ i)) (aref data (+ 2 i)))))
+
+(defun pdf-text-tests--page-image (paper ink)
+  "An 8 by 8 page in PAPER with INK at (2, 2) and (3, 2), as a binary PPM."
+  (pdf-text-tests--ppm 8 8 (lambda (x y)
+                             (if (and (= y 2) (memq x '(2 3))) ink paper))))
+
+(describe "pdf-text-follow--ppm-rows"
+  (it "turns page fractions into row spans, merging what two rects share"
+    (expect (pdf-text-follow--ppm-rows
+             8 8 '((0.25 0.25 0.625 0.5) (0.5 0.375 0.875 0.625)))
+            :to-equal '((2 (2 . 5)) (3 (2 . 7)) (4 (4 . 7)))))
+
+  (it "drops what falls off the image"
+    (expect (pdf-text-follow--ppm-rows 8 8 '((1.25 1.25 1.5 1.5))) :to-be nil)))
+
+(describe "pdf-text-follow--paint-ppm"
+  :var (fg bg)
+  (before-each
+    (setq fg '(200 0 0) bg '(0 0 200)))
+
+  ;; the rect spans x 2..6 of row 2: two ink pixels, three of paper
+  (it "paints the ink under a rect FG and its paper BG, nothing else"
+    (let* ((white '(255 255 255))
+           (page (pdf-text-tests--page-image white '(0 0 0)))
+           (painted (pdf-text-follow--paint-ppm
+                     page '((0.25 0.25 0.875 0.375)) fg bg)))
+      (expect (pdf-text-tests--ppm-pixel painted 2 2) :to-equal fg)
+      (expect (pdf-text-tests--ppm-pixel painted 4 2) :to-equal bg)
+      (expect (pdf-text-tests--ppm-pixel painted 7 2) :to-equal white)
+      (expect (pdf-text-tests--ppm-pixel painted 2 3) :to-equal white)
+      ;; a copy: the image emureader displays stays as it was
+      (expect (pdf-text-tests--ppm-pixel page 4 2) :to-equal white)))
+
+  (it "reads paper and ink off the page, so a dark page paints the same way"
+    (let ((painted (pdf-text-follow--paint-ppm
+                    (pdf-text-tests--page-image '(40 44 52) '(192 197 206))
+                    '((0.25 0.25 0.875 0.375)) fg bg)))
+      (expect (pdf-text-tests--ppm-pixel painted 2 2) :to-equal fg)
+      (expect (pdf-text-tests--ppm-pixel painted 4 2) :to-equal bg)))
+
+  (it "paints a pixel two rects share once"
+    (let ((painted (pdf-text-follow--paint-ppm
+                    (pdf-text-tests--page-image '(255 255 255) '(0 0 0))
+                    '((0.25 0.25 0.625 0.5) (0.5 0.375 0.875 0.625)) fg bg)))
+      (expect (pdf-text-tests--ppm-pixel painted 4 3) :to-equal bg)
+      (expect (pdf-text-tests--ppm-pixel painted 2 2) :to-equal fg)))
+
+  (it "is nil for an image that is no binary PPM, or rects off the page"
+    (expect (pdf-text-follow--paint-ppm "GIF89a" '((0 0 1 1)) fg bg) :to-be nil)
+    (expect (pdf-text-follow--paint-ppm "P5\n2 2\n255\nabcd" '((0 0 1 1)) fg bg)
+            :to-be nil)
+    (expect (pdf-text-follow--paint-ppm
+             (pdf-text-tests--page-image '(255 255 255) '(0 0 0))
+             '((1.25 1.25 1.5 1.5)) fg bg)
+            :to-be nil)))
+
+(describe "pdf-text-follow--face-rgb"
+  (it "reads the face's colors as bytes"
+    (let ((fg (face-attribute 'pdf-text-follow-face :foreground))
+          (bg (face-attribute 'pdf-text-follow-face :background)))
+      (unwind-protect
+          (progn
+            (set-face-attribute 'pdf-text-follow-face nil
+                                :foreground "#c80000" :background "#0000c8")
+            (expect (pdf-text-follow--face-rgb :foreground) :to-equal '(200 0 0))
+            (expect (pdf-text-follow--face-rgb :background) :to-equal '(0 0 200)))
+        (set-face-attribute 'pdf-text-follow-face nil
+                            :foreground fg :background bg)))))
+
+(describe "the follow highlight under emureader"
+  :var (pdf companion overlay original)
+  (before-each
+    (setq pdf (pdf-text-tests--emureader-buffer)
+          companion (generate-new-buffer " *follow-text*"))
+    (with-current-buffer pdf
+      (insert " ")
+      (setq overlay (make-overlay (point-min) (point-max))))
+    (setq original (list 'image :type 'pbm
+                         :data (pdf-text-tests--page-image '(255 255 255) '(0 0 0))
+                         :width 8 :height 8 :scale 1))
+    (overlay-put overlay 'display original)
+    (with-current-buffer companion
+      (pdf-text-mode)
+      (setq pdf-text--pdf-buffer pdf))
+    (delete-other-windows)
+    (set-window-buffer (split-window) pdf)
+    (spy-on 'emureader-current-doc-overlay :and-return-value overlay)
+    (spy-on 'emureader-current-doc-pagenumber :and-return-value 1)
+    (spy-on 'image-flush)
+    (spy-on 'pdf-text-follow--face-rgb
+            :and-call-fake (lambda (attribute)
+                             (if (eq attribute :foreground) '(200 0 0) '(0 0 200)))))
+  (after-each
+    (delete-other-windows)
+    (kill-buffer companion)
+    (kill-buffer pdf))
+
+  (it "puts a painted copy in the window's overlay, and the original back"
+    (with-current-buffer companion
+      (pdf-text-follow--paint 1 '((0.25 0.25 0.875 0.375)))
+      (let ((painted (overlay-get overlay 'display)))
+        (expect painted :not :to-be original)
+        (expect (plist-get (cdr painted) :width) :to-equal 8)
+        (expect (pdf-text-tests--ppm-pixel (plist-get (cdr painted) :data) 4 2)
+                :to-equal '(0 0 200))
+        (expect pdf-text-follow--painted :to-equal 1)
+        (pdf-text-follow--clear)
+        (expect (overlay-get overlay 'display) :to-be original)
+        (expect 'image-flush :to-have-been-called-with painted t)
+        (expect 'image-flush :not :to-have-been-called-with original t))))
+
+  (it "repaints from the clean page, not over the last paint"
+    (with-current-buffer companion
+      (pdf-text-follow--paint 1 '((0.25 0.25 0.875 0.375)))
+      (pdf-text-follow--paint 1 '((0.25 0.625 0.625 0.75)))
+      (let ((data (plist-get (cdr (overlay-get overlay 'display)) :data)))
+        (expect (pdf-text-tests--ppm-pixel data 4 2) :to-equal '(255 255 255))
+        (expect (pdf-text-tests--ppm-pixel data 4 5) :to-equal '(0 0 200)))
+      (expect (cadr pdf-text-follow--emureader) :to-be original)))
+
+  (it "lets an image emureader put up since stand, and frees the original"
+    (with-current-buffer companion
+      (pdf-text-follow--paint 1 '((0.25 0.25 0.875 0.375)))
+      (let ((painted (overlay-get overlay 'display))
+            (turned (list 'image :type 'pbm :data "P6\n1 1\n255\nabc")))
+        (overlay-put overlay 'display turned)
+        (pdf-text-follow--clear)
+        (expect (overlay-get overlay 'display) :to-be turned)
+        (expect 'image-flush :to-have-been-called-with painted t)
+        (expect 'image-flush :to-have-been-called-with original t))))
+
+  (it "paints nothing while the window shows another page"
+    (spy-on 'emureader-current-doc-pagenumber :and-return-value 2)
+    (with-current-buffer companion
+      (pdf-text-follow--paint 1 '((0.25 0.25 0.875 0.375)))
+      (expect (overlay-get overlay 'display) :to-be original)
+      (expect pdf-text-follow--painted :to-be nil))))
 
 (describe "pdf-text-follow-mode"
   (it "rides the sync up and down"
@@ -5588,6 +5836,148 @@ property; LINES are those records, so a spec can assert identity."
       (setq-local image-mode-winprops-alist
                   (list (cons t (list (cons 'page 7)))))
       (expect (pdf-text--pdf-page) :to-equal 7))))
+
+(defun pdf-text-tests--emureader-buffer (&optional file)
+  "A buffer posing as emureader's document buffer for FILE."
+  (let ((buf (generate-new-buffer " *emureader*")))
+    (with-current-buffer buf
+      (setq major-mode 'emureader-mode)
+      (setq-local buffer-file-name file))
+    buf))
+
+(defun pdf-text-tests--pdf-file (&optional text)
+  "A temporary file opening with TEXT, a PDF header by default."
+  (make-temp-file "pdf-text-doc" nil ".pdf" (or text "%PDF-1.4\n")))
+
+(describe "pdf-text--viewer"
+  (it "names the viewer by the buffer's mode"
+    (with-temp-buffer
+      (expect (pdf-text--viewer) :to-be nil)
+      (setq major-mode 'pdf-view-mode)
+      (expect (pdf-text--viewer) :to-be 'pdf-view)
+      (setq major-mode 'emureader-mode)
+      (expect (pdf-text--viewer) :to-be 'emureader)))
+
+  (it "reads the mode of the buffer it is given"
+    (let ((buf (pdf-text-tests--emureader-buffer)))
+      (unwind-protect
+          (with-temp-buffer
+            (expect (pdf-text--viewer buf) :to-be 'emureader))
+        (kill-buffer buf)))))
+
+(describe "pdf-text--emureader-outline"
+  (it "flattens the tree into depth-tagged entries on 1-based pages"
+    (expect (pdf-text--emureader-outline
+             '((:title "One" :page 0
+                       :children ((:title "One.1" :page 1)
+                                  (:title "One.2" :page 2
+                                          :children ((:title "Deep" :page 2)))))
+               (:title "Two" :page 4)))
+            :to-equal
+            '(((depth . 1) (title . "One") (page . 1))
+              ((depth . 2) (title . "One.1") (page . 2))
+              ((depth . 2) (title . "One.2") (page . 3))
+              ((depth . 3) (title . "Deep") (page . 3))
+              ((depth . 1) (title . "Two") (page . 5)))))
+
+  (it "decodes the raw UTF-8 bytes emureader hands a title over in"
+    (let ((raw (encode-coding-string "Capítulo 1" 'utf-8)))
+      (expect (multibyte-string-p raw) :to-be nil)
+      (expect (alist-get 'title (car (pdf-text--emureader-outline
+                                      (list (list :title raw :page 0)))))
+              :to-equal "Capítulo 1")))
+
+  (it "gives a link off the document no page the headings take"
+    ;; emureader resolves an external URI to page -1
+    (let ((heads (pdf-text--outline-heads
+                  (pdf-text--emureader-outline
+                   '((:title "Home page" :page -1)
+                     (:title "Intro" :page 0)
+                     (:title "Body" :page 1))))))
+      (expect (hash-table-count heads) :to-equal 2)
+      (expect (gethash 1 heads) :to-equal '("* Intro"))
+      (expect (gethash 2 heads) :to-equal '("* Body")))))
+
+(describe "pdf-text--pdf-file-p"
+  (it "finds the header at the start or within the first 1024 bytes"
+    (let ((files (list (pdf-text-tests--pdf-file)
+                       (pdf-text-tests--pdf-file
+                        (concat (make-string 500 ?x) "%PDF-1.7\n")))))
+      (unwind-protect
+          (dolist (file files)
+            (expect (pdf-text--pdf-file-p file) :to-be t))
+        (mapc #'delete-file files))))
+
+  (it "refuses an EPUB and a header past the first 1024 bytes"
+    (let ((files (list (pdf-text-tests--pdf-file "PK\3\4mimetypeapplication/epub+zip")
+                       (pdf-text-tests--pdf-file
+                        (concat (make-string 2000 ?x) "%PDF-1.7\n")))))
+      (unwind-protect
+          (dolist (file files)
+            (expect (pdf-text--pdf-file-p file) :to-be nil))
+        (mapc #'delete-file files)))))
+
+(describe "the viewer under emureader"
+  :var (buf)
+  (before-each
+    (setq buf (pdf-text-tests--emureader-buffer "/tmp/book.pdf")))
+  (after-each
+    (kill-buffer buf))
+
+  (it "reads the page, page count, outline and file off emureader"
+    (spy-on 'emureader-current-doc-pagenumber :and-return-value 4)
+    (spy-on 'pdf-info-gettext)
+    (with-current-buffer buf
+      (setq-local emureader-current-doc-pagecount 9)
+      (setq-local emureader-current-doc-outline '((:title "Intro" :page 0)))
+      (expect (pdf-text--pdf-page) :to-equal 4)
+      (expect (pdf-text--page-count) :to-equal 9)
+      (expect (pdf-text--outline)
+              :to-equal '(((depth . 1) (title . "Intro") (page . 1))))
+      (expect (pdf-text--document-file) :to-equal "/tmp/book.pdf")
+      ;; MuPDF found nothing, and emureader's engine is MuPDF
+      (expect (pdf-text--page-text 3) :to-equal "")
+      (expect 'pdf-info-gettext :not :to-have-been-called)))
+
+  (it "turns emureader's page, not pdf-view's"
+    (spy-on 'emureader-goto-page)
+    (spy-on 'pdf-view-goto-page)
+    (with-current-buffer buf (pdf-text--goto-page 7))
+    (expect 'emureader-goto-page :to-have-been-called-with 7)
+    (expect 'pdf-view-goto-page :not :to-have-been-called)))
+
+(describe "pdf-view-as-text in emureader"
+  :var (file pdf)
+  (before-each
+    (setq file (pdf-text-tests--pdf-file)
+          pdf (pdf-text-tests--emureader-buffer file))
+    (with-current-buffer pdf
+      (setq-local emureader-current-doc-pagecount 2)
+      (setq-local emureader-current-doc-outline nil))
+    (spy-on 'emureader-current-doc-pagenumber :and-return-value 2)
+    (spy-on 'emureader-current-doc-overlay)
+    (spy-on 'pdf-info-gettext)
+    (spy-on 'pdf-text--mupdf-pages
+            :and-return-value (list nil (list (pdf-text-tests--line "Read me.")))))
+
+  (after-each
+    (pdf-text-tests--drop-pair
+     (cons (buffer-local-value 'pdf-text--companion pdf) pdf))
+    (delete-file file))
+
+  (it "renders the visited PDF and pairs the companion with emureader's buffer"
+    (pdf-text-tests--as-text pdf)
+    (expect 'pdf-text--mupdf-pages :to-have-been-called-with file 1 2)
+    (expect 'pdf-info-gettext :not :to-have-been-called)
+    (let ((companion (buffer-local-value 'pdf-text--companion pdf)))
+      (expect (buffer-local-value 'pdf-text--pdf-buffer companion) :to-be pdf)
+      (expect (with-current-buffer companion (buffer-string))
+              :to-match "Read me\\.")))
+
+  (it "refuses a document that is not a PDF"
+    (with-temp-file file (insert "PK\3\4mimetypeapplication/epub+zip"))
+    (expect (pdf-text-tests--as-text pdf) :to-throw 'user-error)
+    (expect 'pdf-text--mupdf-pages :not :to-have-been-called)))
 
 (describe "pdf-text--with-render-gc"
   (it "raises the thresholds for the body's extent only"

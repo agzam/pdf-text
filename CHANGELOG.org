@@ -1,0 +1,6 @@
+#+title: Changelog
+
+* Unreleased
+- ~pdf-view-as-text~ works in ~emureader-mode~ buffers: RET, ~pdf-text-sync-mode~ and the sentence highlight of ~pdf-text-follow-mode~ work there as in pdf-view.
+- pdf-tools is no longer a required dependency; either viewer will do.
+- A missing ~mutool~ now points to ~brew install mupdf~, the formula emureader needs too.

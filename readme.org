@@ -2,7 +2,7 @@
 
 [[https://github.com/agzam/pdf-text/actions/workflows/run-tests.yml][https://github.com/agzam/pdf-text/actions/workflows/run-tests.yml/badge.svg]]
 
-A reflowed plain-text reading view for PDFs, on top of [[https://github.com/vedang/pdf-tools][pdf-tools]].
+A reflowed plain-text reading view for PDFs open in [[https://github.com/vedang/pdf-tools][pdf-tools]] or [[https://codeberg.org/MonadicSheep/emureader][emureader]].
 
 * What
 
@@ -20,7 +20,7 @@ The companion and the PDF are one document to you, so closing either closes the 
 
 * Why
 
-~pdf-view~ renders pages as images, so nothing a text buffer gives you applies: no soft wrap, no text motions, no isearch, no spell checker, no translate-at-point. The text is right there - epdfinfo serves it - but no one turns it into a buffer that reads like a book and stays in step with the page you are on.
+~pdf-view~ and emureader render pages as images, so nothing a text buffer gives you applies: no soft wrap, no text motions, no isearch, no spell checker, no translate-at-point. The text is right there - epdfinfo serves it - but no one turns it into a buffer that reads like a book and stays in step with the page you are on.
 
 Getting there is more than calling ~pdf-info-gettext~. Extraction engines compute paragraphs, columns and blocks internally and then throw them away before serving text: what arrives is a list of lines with no structure at all. So the reflow rebuilds it from line records read off MuPDF's structured text (~mutool run~ with a walker script the package carries) - where a line ends, how far the next one starts in, how much air sits between their baselines, how big its glyphs are, and which font set them. MuPDF is the extractor because it reads what the page means: it applies ActualText (small caps arrive as words, not letter salad), expands ligatures, reads tracked type without inventing spaces, flags the spaces it does invent, and names the font of every character - none of which poppler's text layer offers. Out of that come paragraphs, list items, quotations, listings kept verbatim - by their advance variation or by their font's own name - headings at the line they name, running heads dropped (by the margin band, and past it by the document's own text area: a paper's head set tight over a low text block goes with the folio on its baseline), hyphens resolved against the book's own vocabulary, the word spaces TeX writes as bare math spacing restored at font switches, display maths recognized by its faces as well as its codepoints, and super- and subscripts rendered as org's ~^{...}~/~_{...}~ - a footnote marker, an exponent, the limits of a big operator - which the buffer displays as real raised and lowered scripts. A footnote marker whose note sits at the foot of its page in smaller type becomes a real org footnote: ~[fn:18-star]~ at the marker, the definition at the page's end, jumpable both ways. Definition lines - and the unmarked small print a page ends on, an author note, an imprint - read dimmed under ~pdf-text-footnote-face~. Bold and italic phrases carry over as org emphasis, read straight off the font runs: a run-in bold lead opens its paragraph as ~*...*~ with the roman text continuing on the same line, an italic phrase the wrap split over two lines comes back as one ~/.../~ span, a bold-italic name nests as ~/*...*/~. Only contrast within a line is emphasis - a wholly-italic epigraph or a false-flagged body font stays plain - and a literal starred or slash-fenced word extracted from the page gets an invisible break so org parses only the markers the render wrote.
 
@@ -30,7 +30,7 @@ Multicolumn regions come back as what the page set. Rows of cells aligned across
 
 ** Install
 
-Needs Emacs 29.1, pdf-tools with a built ~epdfinfo~ (~M-x pdf-tools-install~) for the view side, and MuPDF's ~mutool~ on ~exec-path~ for the text extraction (~brew install mupdf-tools~, or the mupdf-tools package of your distribution).
+Needs Emacs 29.1, a viewer - pdf-tools with a built ~epdfinfo~ (~M-x pdf-tools-install~), or emureader - and MuPDF's ~mutool~ on ~exec-path~ for the text extraction (~brew install mupdf~, or the mupdf-tools package of your distribution).
 
 #+begin_src emacs-lisp
 ;; elpaca
@@ -44,11 +44,14 @@ Needs Emacs 29.1, pdf-tools with a built ~epdfinfo~ (~M-x pdf-tools-install~) fo
 
 ** Use
 
-Bind the entry command in ~pdf-view-mode~, and the sync-back inside the companion:
+Bind the entry command in your viewer, and the sync-back inside the companion:
 
 #+begin_src emacs-lisp
 (with-eval-after-load 'pdf-view
   (define-key pdf-view-mode-map (kbd "C-c x") #'pdf-view-as-text))
+
+(with-eval-after-load 'emureader
+  (define-key emureader-mode-map (kbd "C-c x") #'pdf-view-as-text))
 
 (with-eval-after-load 'pdf-text
   (define-key pdf-text-mode-map (kbd "RET") #'pdf-text-show-in-pdf)
@@ -73,6 +76,7 @@ Everything the rules measure against is a ~defvar~: ~pdf-text-gap-factor~ (parag
 - A subscript set at full size, only lowered, reads the same as a symbol font whose boxes hang below the baseline, and stays plain text.
 - A footnote converts only when both halves are present: a marker opening the note's block - raised as a record of its own, superscripted, or flat - and the body citing it, as a generated superscript or, for a symbol, as the flat character closing a title. A marker whose note sits on another page stays a superscript; a numeric note the body never superscripts stays a paragraph. Several short notes stacked in one block - a URL each, in the body face or in a code face - convert one per line only when the body cites every one of them; a code-face block converts no other way, so a listing numbering its own lines at a page's foot stays code. An unmarked smaller-type block at a page's foot keeps its text and carries only the dimming face. And a note's own exponents can be flat in the text layer even when the body's are real (Bryson writes ~1010~ in the note under a body that superscripts ~10^{-43}~); no geometry can raise them.
 - A scan has no text layer; ~pdf-view-as-text~ names the page counts and refuses rather than opening an empty buffer.
+- emureader also shows EPUBs and other formats; ~pdf-view-as-text~ reads only PDFs. On a page rotated in emureader, the sentence highlight of ~pdf-text-follow-mode~ lands in the wrong place.
 
 * Development
 
